@@ -2529,8 +2529,8 @@ fn nano_banana_without_a_key_says_so_or_uses_lama() {
     let err = remove::AiModel::parse(&json!({"model": "gemini"}), "paint.remove").unwrap_err().to_string();
     assert!(err.contains("nanoBanana"), "{err}");
     use photocraft_ml::gemini::{Area, Mark, Options};
-    assert_eq!(remove::nano_options(&json!({}), "paint.remove").unwrap(), Options { mark: Mark::Paint, area: Area::Near }, "the area near the hole, painted red, by default");
-    assert_eq!(remove::nano_options(&json!({"mark": "mask", "area": "page"}), "paint.remove").unwrap(), Options { mark: Mark::Mask, area: Area::Page });
+    assert_eq!(remove::nano_options(&json!({}), "paint.remove").unwrap(), Options { mark: Mark::Paint, area: Area::Near, ..Options::default() }, "the area near the hole, painted red, by default");
+    assert_eq!(remove::nano_options(&json!({"mark": "mask", "area": "page"}), "paint.remove").unwrap(), Options { mark: Mark::Mask, area: Area::Page, ..Options::default() });
     assert!(remove::nano_options(&json!({"mark": "red"}), "paint.remove").is_err());
     assert!(remove::nano_options(&json!({"area": 3}), "paint.remove").is_err());
     // Only meaningful where no key is set (this machine's credential store or GEMINI_API_KEY).

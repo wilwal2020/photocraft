@@ -83,7 +83,9 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         alpha,
         model,
         high: super::remove::high_quality(p, CMD)?,
-        nano: nano_options(p, CMD)?,
+        // Generative Fill carries the picture on into the selection (past a panel's frame) where
+        // the Remove tool asks for what is behind it.
+        nano: photocraft_ml::gemini::Options { intent: photocraft_ml::gemini::Intent::Extend, ..nano_options(p, CMD)? },
         settings: diffusion_settings(p),
         above: d.active_layer,
         name,

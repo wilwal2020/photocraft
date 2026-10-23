@@ -2,7 +2,7 @@ use super::*;
 use base64::Engine as _;
 
 /// The red marker and the whole page: what the tests below were written for.
-const PAINT: Options = Options { mark: Mark::Paint, area: Area::Page };
+const PAINT: Options = Options { mark: Mark::Paint, area: Area::Page, intent: Intent::Remove };
 
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -95,7 +95,7 @@ fn the_marker_is_red_unless_the_picture_is() {
     assert_eq!(pick_marker(&reds, &hole), 1, "a red picture gets green");
     // The hole's own pixels don't count.
     assert_eq!(pick_marker(&reds, &[true; 10]), 0);
-    assert!(prompt("", MARKERS[1].1).contains("solid pure green"));
+    assert!(prompt("", MARKERS[1].1, Intent::Remove).contains("solid pure green"));
 }
 
 #[test]
@@ -144,8 +144,29 @@ fn the_body_asks_for_an_unstored_png_of_the_frame() {
     assert_eq!(b["input"][0], json!({"type": "text", "text": "remove"}));
     assert_eq!(b["input"][1], json!({"type": "image", "mime_type": "image/png", "data": "QUJD"}));
     assert_eq!(b["response_format"], json!({"type": "image", "aspect_ratio": "4:3", "image_size": "2K"}));
-    assert!(prompt("", MARKERS[0].1).contains("solid pure red"));
-    assert!(prompt("  a window  ", MARKERS[0].1).ends_with("What should be there instead: a window"));
+    assert!(prompt("", MARKERS[0].1, Intent::Remove).contains("solid pure red"));
+    assert!(prompt("  a window  ", MARKERS[0].1, Intent::Remove).ends_with("What should be there instead: a window"));
+}
+
+/// User report: extending a manga panel down over the blank paper below it with Nano Banana
+/// erased the foot standing on the frame, kept the paper blank, or redrew the frame line across
+/// the new ground. The removal wording asks for exactly that; Generative Fill's asks to carry the
+/// picture on past the frame, and both still follow the user's words.
+#[test]
+fn generative_fill_asks_to_extend_the_picture_where_removal_keeps_paper_blank() {
+    for (remove, extend) in [
+        (prompt("", MARKERS[0].1, Intent::Remove), prompt("", MARKERS[0].1, Intent::Extend)),
+        (mask_prompt("", Intent::Remove), mask_prompt("", Intent::Extend)),
+    ] {
+        assert!(remove.contains("keep the matching part of the area blank") && remove.contains("Do not invent scenery, ground"), "{remove}");
+        assert!(!extend.contains("blank") && !extend.contains("Do not invent"), "{extend}");
+        assert!(extend.contains("carry the scene on past it") && extend.contains("draw no border line"), "{extend}");
+        assert!(extend.contains("same framing"), "{extend}");
+    }
+    assert!(prompt("", MARKERS[0].1, Intent::Extend).contains("solid pure red"));
+    assert!(prompt(" more ground ", MARKERS[0].1, Intent::Extend).ends_with("What to draw there: more ground"));
+    assert!(mask_prompt(" more ground ", Intent::Extend).ends_with("What to draw there: more ground"));
+    assert!(mask_prompt(" a window ", Intent::Remove).ends_with("What should be there instead: a window"));
 }
 
 #[test]

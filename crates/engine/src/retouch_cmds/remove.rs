@@ -156,7 +156,7 @@ pub(crate) fn nano_options(p: &Value, cmd: &str) -> Result<photocraft_ml::gemini
         Some(Value::String(v)) if v == "page" => Area::Page,
         Some(v) => return Err(bad(cmd, format!("`area` is \"near\" or \"page\", not {v}"))),
     };
-    Ok(Options { mark, area })
+    Ok(Options { mark, area, ..Options::default() })
 }
 
 /// `quality`: `"standard"` (the default) or `"high"`, LaMa's Quality mode

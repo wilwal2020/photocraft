@@ -120,15 +120,38 @@ hatching, screentones and colours that run into it, in exactly the same style, s
 next to the area is blank paper or a flat tone, keep the matching part of the area blank or flat too. Do not invent \
 scenery, ground, plants, water, objects, people, text or speech bubbles that are not already there.";
 
+/// What a Generative Fill asks of the fill instead of [`RESTRAINT`]: carry the picture on into the
+/// area, past a panel's frame. With the removal wording, extending a manga panel down over the
+/// blank paper below it (the selection over the paper and a foot standing on the frame) erased
+/// the foot, kept the paper blank, or redrew the frame line across the new ground, so the
+/// extension looked like a separate panel (user report, 2026-10-24).
+const EXTEND: &str = "Continue the picture into that area as if it had been drawn larger there: extend the scene, \
+ground, figures and objects that reach the area, and complete anything the area cuts off, in exactly the same style, \
+linework, hatching, screentones, scale, perspective and lighting. Where the area reaches past a panel border or the \
+edge of the drawn picture, carry the scene on past it: draw no border line, frame edge or separate panel inside the \
+area.";
+
+/// The user's words for the fill, at most 500 characters, after `lead`; nothing when there are none.
+fn asked(extra: &str, lead: &str) -> String {
+    let extra: String = extra.trim().chars().take(500).collect();
+    if extra.is_empty() { String::new() } else { format!(" {lead} {extra}") }
+}
+
 /// The prompt for one request with the hole painted in `marker` (its name, [`MARKERS`]); `extra`
 /// is what the user asked to be there instead.
-pub(crate) fn prompt(extra: &str, marker: &str) -> String {
-    let base = format!(
-        "Remove the area painted in {marker} from this image and fill it with what would naturally be behind it. \
-{RESTRAINT} Keep the rest of the image exactly as it is, at the same framing, and leave none of the marker colour."
-    );
-    let extra: String = extra.trim().chars().take(500).collect();
-    if extra.is_empty() { base } else { format!("{base} What should be there instead: {extra}") }
+pub(crate) fn prompt(extra: &str, marker: &str, intent: Intent) -> String {
+    match intent {
+        Intent::Remove => format!(
+            "Remove the area painted in {marker} from this image and fill it with what would naturally be behind it. \
+{RESTRAINT} Keep the rest of the image exactly as it is, at the same framing, and leave none of the marker colour.{}",
+            asked(extra, "What should be there instead:")
+        ),
+        Intent::Extend => format!(
+            "Fill the area painted in {marker} in this image. {EXTEND} Keep the rest of the image exactly as it is, at the \
+same framing, and leave none of the marker colour.{}",
+            asked(extra, "What to draw there:")
+        ),
+    }
 }
 
 /// How much of the page the model is sent.
@@ -147,6 +170,17 @@ pub enum Area {
 pub struct Options {
     pub mark: Mark,
     pub area: Area,
+    pub intent: Intent,
+}
+
+/// What the fill is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Intent {
+    /// The Remove tool: what is behind the hole, continuing only what reaches it ([`RESTRAINT`]).
+    #[default]
+    Remove,
+    /// Generative Fill: the picture carried on into the hole, past a panel's frame ([`EXTEND`]).
+    Extend,
 }
 
 /// How the hole is shown to the model. Painted, it keeps the picture's framing and what is around
@@ -164,14 +198,20 @@ pub enum Mark {
 }
 
 /// The prompt for one request with the hole shown as a mask (the second image).
-pub(crate) fn mask_prompt(extra: &str) -> String {
-    let base = format!(
-        "The second image is a mask for the first: remove whatever is in the white area of the mask from the first image \
+pub(crate) fn mask_prompt(extra: &str, intent: Intent) -> String {
+    match intent {
+        Intent::Remove => format!(
+            "The second image is a mask for the first: remove whatever is in the white area of the mask from the first image \
 and fill that area with what would naturally be behind it. {RESTRAINT} Return only the edited first image, at the same \
-framing, with every pixel outside the white area unchanged."
-    );
-    let extra: String = extra.trim().chars().take(500).collect();
-    if extra.is_empty() { base } else { format!("{base} What should be there instead: {extra}") }
+framing, with every pixel outside the white area unchanged.{}",
+            asked(extra, "What should be there instead:")
+        ),
+        Intent::Extend => format!(
+            "The second image is a mask for the first: fill the white area of the mask in the first image. {EXTEND} Return \
+only the edited first image, at the same framing, with every pixel outside the white area unchanged.{}",
+            asked(extra, "What to draw there:")
+        ),
+    }
 }
 
 /// The marker the context pixels (interleaved sRGB `rgb`, where `hole` is false) have least of:
@@ -944,7 +984,9 @@ pub fn eval_fill(req: &Request, read: &mut dyn FnMut(Rect) -> Vec<f32>, extra: &
     let mark = if std::env::var("PHOTOCRAFT_EVAL_MARK").is_ok_and(|m| m == "mask") { Mark::Mask } else { Mark::Paint };
     // `PHOTOCRAFT_EVAL_AREA=page` sends the whole page instead of the area near the hole.
     let area = if std::env::var("PHOTOCRAFT_EVAL_AREA").is_ok_and(|a| a == "page") { Area::Page } else { Area::Near };
-    pieces_via(req, read, extra, Options { mark, area }, ctl, &mut |body, ctl| {
+    // `PHOTOCRAFT_EVAL_INTENT=extend` asks as Generative Fill does.
+    let intent = if std::env::var("PHOTOCRAFT_EVAL_INTENT").is_ok_and(|i| i == "extend") { Intent::Extend } else { Intent::Remove };
+    pieces_via(req, read, extra, Options { mark, area, intent }, ctl, &mut |body, ctl| {
         let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
         if let Some(Ok(png)) = v.pointer("/input/1/data").and_then(Value::as_str).map(|d| base64::engine::general_purpose::STANDARD.decode(d)) {
             let _ = std::fs::write(sent, png);
@@ -1059,8 +1101,8 @@ pub(crate) fn pieces_via(
         };
         let marker = MARKERS.get(c.marker).map_or("solid pure red (#FF0000)", |m| m.1);
         let (images, text, shown) = match mark {
-            Mark::Paint => (vec![png(&c.image())?], prompt(extra, marker), marker),
-            Mark::Mask => (vec![png(&c.picture())?, png(&c.mask())?], mask_prompt(extra), "a mask"),
+            Mark::Paint => (vec![png(&c.image())?], prompt(extra, marker, opts.intent), marker),
+            Mark::Mask => (vec![png(&c.picture())?, png(&c.mask())?], mask_prompt(extra, opts.intent), "a mask"),
         };
         let progress = move |f: f32| ((g as f32 + f) / count).clamp(0.0, 1.0);
         let report = |f: f32| ctl.progress(progress(f));
