@@ -77,7 +77,8 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
 }
 
 /// The default adapter, or the one wgpu's `WGPU_BACKEND` and `WGPU_DX12_COMPILER` choose: e.g.
-/// `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=fxc` tests D3D12 with FXC, the app's default on Windows,
+/// `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=fxc` tests D3D12 with FXC, the app's default on Windows
+/// (add `WGPU_DEBUG=0` for FXC optimizing, as in release builds: `dx12_release`),
 /// where the default adapter may be Vulkan. A backend asked for that can't run the tests fails
 /// them rather than skipping.
 fn gpu() -> Option<Gpu> {
