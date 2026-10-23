@@ -3758,14 +3758,15 @@ fn layer_row(
         crate::layer_menu_ui::color_choices(app, ui, l, row.multi && selected, actions);
     });
     // Everything but the thumbnails, the indentation and the name, so a narrow panel squeezes
-    // the indentation first, then the thumbnails (a layer with two masks has three).
+    // the indentation first, then the thumbnails. A second mask draws over the name rather than
+    // taking room, so a layer with two masks keeps its indentation and thumbnail size.
     let others = 6.0
         + 28.0
         + if l.is_group() { crate::layer_tree_ui::TRIANGLE_W } else { 0.0 }
         + if l.clipped { 12.0 } else { 0.0 }
         + crate::layer_row_ui::reserved_width(l);
     let ts = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
-    let fixed = others + if ts == 0.0 { 0.0 } else { ts + 6.0 + crate::mask_thumbs_ui::width(l, ts) };
+    let fixed = others + if ts == 0.0 { 0.0 } else { ts + 6.0 + crate::mask_thumbs_ui::room_width(l, ts).0 };
     // A layer inside a group (or an artboard) indents one step more than its depth, past the
     // triangle's column, so it sits right of its parent: with only its depth its thumbnail lined
     // up under the group's, hiding the hierarchy. Top-level rows don't move.

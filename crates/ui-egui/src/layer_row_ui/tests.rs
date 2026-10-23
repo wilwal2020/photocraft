@@ -132,6 +132,34 @@ fn a_groups_layers_indent_past_the_group() {
     assert!(left(child) > left(group), "child {} vs group {}", left(child), left(group));
 }
 
+/// User report: a layer with two masks in a group looked like it wasn't in the group (the second
+/// mask squeezed out its indentation). Its thumbnail stays where its one-mask sibling's is; the
+/// second mask covers part of its name instead, short of the right-hand indicators.
+#[test]
+fn a_second_mask_keeps_the_rows_indentation() {
+    for width in [250.0, 290.0, 400.0] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let one = s.execute("layer.new.layer", json!({"name": "One mask"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.layerMask.revealAll", json!({"layer": one})).unwrap();
+        let two = s.execute("layer.new.layer", json!({"name": "Two masks"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.layerMask.revealAll", json!({"layer": two})).unwrap();
+        s.execute("layer.vectorMask.revealAll", json!({"layer": two})).unwrap();
+        s.execute("layer.select", json!({"layer": one, "mode": "add"})).unwrap();
+        let group = s.execute("layer.groupLayers", json!({"name": "Group"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setExpanded", json!({"layer": group, "expanded": true})).unwrap();
+        let h = harness(s, 1.0, "promedium", width);
+        let rows = recorded(&h.ctx);
+        let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("{width}: layer {id} drawn"));
+        let (a, b) = (row(one).thumbnail.expect("thumbnail"), row(two).thumbnail.expect("thumbnail"));
+        assert!((a.left() - b.left()).abs() < 0.5 && (a.width() - b.width()).abs() < 0.5, "{width}: one mask {a:?}, two masks {b:?}");
+        assert!(b.left() > row(group).thumbnail.map_or(0.0, |g| g.left()) + 1.0, "{width}: indented past the group");
+        for (k, ind) in &row(two).indicators {
+            assert!(row(two).name.is_none_or(|n| !overlaps(n, *ind)), "{width}: name clear of {k:?}");
+        }
+    }
+}
+
 /// A primary click at `at`: hover, press and release a frame apart, then let the panel settle.
 fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.hover_at(at);

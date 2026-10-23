@@ -76,11 +76,21 @@ pub fn width(l: &Layer, ts: f32) -> f32 {
     masks(l).len() as f32 * (CHAIN_W + ts + 6.0)
 }
 
+/// The part of [`width`] the row makes room for: the first mask. A second and third mask draw
+/// over the name's minimum width instead, and take more only past it (user report: a layer with
+/// two masks squeezed out its group indentation and shrank its thumbnails, so it looked outside
+/// its group). Second: how many of its thumbnails scale with `ts`.
+pub fn room_width(l: &Layer, ts: f32) -> (f32, f32) {
+    let (all, first) = (width(l, ts), width(l, ts).min(CHAIN_W + ts + 6.0));
+    let n = masks(l).len();
+    if all - crate::layer_row_ui::MIN_NAME_W > first { (all - crate::layer_row_ui::MIN_NAME_W, n as f32) } else { (first, n.min(1) as f32) }
+}
+
 /// Thumbnail size for `l`'s row: `ts`, shrunk (down to 14 pt) when the layer and mask
 /// thumbnails would leave the name less than its minimum of the `room` they share.
 pub fn thumb_size(l: &Layer, ts: f32, room: f32) -> f32 {
-    let n = masks(l).len() as f32;
-    let need = ts + 6.0 + width(l, ts) + crate::layer_row_ui::MIN_NAME_W;
+    let (masks_w, n) = room_width(l, ts);
+    let need = ts + 6.0 + masks_w + crate::layer_row_ui::MIN_NAME_W;
     let short = need - room;
     if short <= 0.0 { ts } else { (ts - short / (1.0 + n)).clamp(14.0_f32.min(ts), ts) }
 }
