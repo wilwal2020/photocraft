@@ -1790,12 +1790,15 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (16, p, Some(rows))
         }
         Adjustment::Grain { amount, size, roughness } => {
-            // compose::adjust::grain_px with the same parameters (the hash is integer-exact).
+            // compose::adjust::{grain_noise, grain_px} with the same filter (the raw noise is
+            // integer-exact).
             let g = photocraft_compose::adjust::GrainParams::new(*amount, *size, *roughness);
-            if g.strength <= 0.0 {
+            if g.is_identity() {
                 return (0, p, None);
             }
-            p[0] = [g.strength, g.inv_cell, g.inv_clump, g.rough];
+            let k = g.kernel;
+            p[0] = [k[0], k[1], k[2], k[3]];
+            p[1] = [k[4], k[5], 0.0, 0.0];
             (18, p, None)
         }
         // Identity on the CPU too (not evaluated there).

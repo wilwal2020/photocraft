@@ -522,7 +522,7 @@ fn lut3(n: i32, r: i32, g: i32, b: i32) -> vec3<f32> {
     return vec3(lut_at(i), lut_at(i + 1), lut_at(i + 2));
 }
 
-// Grain: compose::adjust::{grain_hash, grain_lattice, grain_value, grain_noise}, integer-exact.
+// Grain: compose::adjust::{grain_hash, grain_white, grain_noise}; the raw noise is integer-exact.
 fn grain_hash(x: i32, y: i32, seed: u32) -> u32 {
     var h = (bitcast<u32>(x) * 0x8da6b343u) ^ (bitcast<u32>(y) * 0xd8163841u) ^ (seed * 0xcb1ab31fu);
     h = h ^ (h >> 16u);
@@ -532,33 +532,21 @@ fn grain_hash(x: i32, y: i32, seed: u32) -> u32 {
     return h ^ (h >> 16u);
 }
 
-fn grain_lattice(x: i32, y: i32, octave: u32) -> f32 {
-    let a = f32(grain_hash(x, y, 2u * octave) >> 8u) / 16777216.0;
-    let b = f32(grain_hash(x, y, 2u * octave + 1u) >> 8u) / 16777216.0;
-    return a + b - 1.0;
+fn grain_white(x: i32, y: i32) -> f32 {
+    let h = grain_hash(x, y, 0u);
+    return f32((h & 255u) + ((h >> 8u) & 255u) + ((h >> 16u) & 255u) + (h >> 24u)) - 510.0;
 }
 
-fn grain_value(p: vec2<i32>, inv: f32, octave: u32) -> f32 {
-    let f = vec2(f32(p.x) * inv, f32(p.y) * inv);
-    let i = floor(f);
-    let t = f - i;
-    let s = t * t * (3.0 - 2.0 * t);
-    let ix = i32(i.x);
-    let iy = i32(i.y);
-    let a = grain_lattice(ix, iy, octave);
-    let b = grain_lattice(ix + 1, iy, octave);
-    let c = grain_lattice(ix, iy + 1, octave);
-    let d = grain_lattice(ix + 1, iy + 1, octave);
-    let top = a + (b - a) * s.x;
-    let bottom = c + (d - c) * s.x;
-    return top + (bottom - top) * s.y;
-}
-
-fn grain_noise(p: vec2<i32>, inv_cell: f32, inv_clump: f32, rough: f32) -> f32 {
-    let fine = grain_value(p, inv_cell, 0u);
-    if (rough <= 0.0) { return fine; }
-    let clump = grain_value(p, inv_clump, 1u);
-    return (fine + rough * clump) / (1.0 + 0.5 * rough);
+fn grain_noise(p: vec2<i32>, k0: vec4<f32>, k1: vec4<f32>) -> f32 {
+    var k = array<f32, 6>(k0.x, k0.y, k0.z, k0.w, k1.x, k1.y);
+    var cls = array<i32, 9>(0, 1, 3, 1, 2, 4, 3, 4, 5);
+    var sum = 0.0;
+    for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+            sum += k[cls[abs(dx) * 3 + abs(dy)]] * grain_white(p.x + dx, p.y + dy);
+        }
+    }
+    return sum;
 }
 
 fn bayer4(p: vec2<i32>) -> f32 {
@@ -809,7 +797,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
         case 18: {                                                             // Grain (compose::adjust::grain_px)
             let l = clamp(0.3 * c.r + 0.59 * c.g + 0.11 * c.b, 0.0, 1.0);
             let weight = 1.0 / 3.0 + 2.0 / 3.0 * 4.0 * l * (1.0 - l);
-            let d = p0.x * weight * grain_noise(adj_px, p0.y, p0.z, p0.w);
+            let d = weight * grain_noise(adj_px, p0, p1);
             if (hdr) { return max(c + d, vec3(0.0)); }
             return clamp(c + d, vec3(0.0), vec3(1.0));
         }

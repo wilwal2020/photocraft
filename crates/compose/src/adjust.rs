@@ -253,17 +253,8 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
         }
         Adjustment::Grain { amount, size, roughness } => {
             let g = GrainParams::new(*amount, *size, *roughness);
-            if g.strength <= 0.0 {
-                return;
-            }
-            let hdr = depth == Some(SampleType::F32);
-            let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
-            for (i, p) in buf.px.iter_mut().enumerate() {
-                if p[3] <= 0.0 {
-                    continue;
-                }
-                let o = grain_px([p[0], p[1], p[2]], &g, x0 + (i % w) as i32, y0 + (i / w) as i32, hdr);
-                p[..3].copy_from_slice(&o);
+            if !g.is_identity() {
+                apply_grain(&g, buf, depth == Some(SampleType::F32));
             }
         }
         // Not evaluated: identity (still round-trips through PSD).
@@ -272,28 +263,55 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
 }
 
 /// Grain's settings as the per-pixel evaluation uses them (shared with the GPU kernel, which
-/// gets the same four numbers).
+/// gets the same six numbers).
+///
+/// Photoshop's grain stays fine at every Size: it is white noise through a small filter, a
+/// slightly sharpening one at Size 0 (neighbours anti-correlated) and a gentler one at Size 100,
+/// with less contrast; Roughness blends in a softening filter, so the grain clumps a little.
+/// The filters and contrasts were measured on Photoshop 2026 renders of a mid-grey layer at
+/// 100% (user comparison, 2026-10-23: Amount 19 and 100 at Size 0, Size 100, and Size 50 with
+/// Roughness 100), and match their contrast, spread and neighbour correlation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GrainParams {
-    /// Peak change at mid-grey, in 0..1 of the tone scale.
-    pub strength: f32,
-    /// One over the grain's cell width in pixels (multiplied, never divided, so the GPU's
-    /// rounding matches).
-    pub inv_cell: f32,
-    /// One over the clumps' cell width (twice the grain's).
-    pub inv_clump: f32,
-    /// How much of the clumps mixes in, 0..1 (Roughness).
-    pub rough: f32,
+    /// The filter's weights by offset class ([`GRAIN_CLASS`]), in tone units per unit of the raw
+    /// noise ([`grain_white`]): Amount, contrast and the noise's own spread folded in.
+    pub kernel: [f32; 6],
 }
+
+/// The 5×5 filter's offset classes, indexed by `|dx| * 3 + |dy|`: (0,0), (1,0), (1,1), (2,0),
+/// (2,1) and (2,2), and their mirror images.
+pub const GRAIN_CLASS: [usize; 9] = [0, 1, 3, 1, 2, 4, 3, 4, 5];
 
 impl GrainParams {
     /// Amount, Size and Roughness as Photoshop's sliders show them (0..=100); out-of-range or
     /// non-finite values are clamped (NaN counts as 0).
     pub fn new(amount: f32, size: f32, roughness: f32) -> Self {
         let pct = |v: f32| if v.is_finite() { v.clamp(0.0, 100.0) / 100.0 } else { 0.0 };
-        // Size 0 is one-pixel grain, 100 four pixels across.
-        let cell = 1.0 + 3.0 * pct(size);
-        Self { strength: 0.5 * pct(amount), inv_cell: 1.0 / cell, inv_clump: 0.5 / cell, rough: pct(roughness) }
+        let (amount, size, rough) = (pct(amount), pct(size), pct(roughness));
+        // How many of each class the 5×5 filter has.
+        const COUNT: [f32; 6] = [1.0, 4.0, 4.0, 4.0, 8.0, 4.0];
+        // Size 0, Size 100 and Roughness 100, each with its contrast at Amount 100 on mid-grey
+        // (the grain's standard deviation, in 0..1 of the tone scale).
+        const SIZE0: ([f32; 6], f32) = ([1.0, -0.15, -0.056, 0.0, 0.0, 0.0], 0.309);
+        const SIZE100: ([f32; 6], f32) = ([1.0, 0.0, -0.103, -0.044, -0.025, 0.0], 0.183);
+        const ROUGH: ([f32; 6], f32) = ([1.0, 0.139, 0.02, 0.0, 0.0, 0.0], 0.142);
+        let unit = |(k, sd): ([f32; 6], f32)| {
+            let norm = k.iter().zip(COUNT).map(|(w, n)| w * w * n).sum::<f32>().sqrt();
+            k.map(|w| w / norm * sd)
+        };
+        let lerp = |a: [f32; 6], b: [f32; 6], t: f32| std::array::from_fn::<f32, 6, _>(|i| a[i] + (b[i] - a[i]) * t);
+        let mut fine = lerp(SIZE0.0, SIZE100.0, size);
+        let fine_sd = SIZE0.1 + (SIZE100.1 - SIZE0.1) * size;
+        fine = unit((fine, fine_sd));
+        let k = lerp(fine, unit(ROUGH), rough);
+        // The raw noise is four bytes summed: a spread of sqrt(4 × (256² − 1) / 12).
+        let spread = 21_845f32.sqrt();
+        Self { kernel: k.map(|w| w * amount / spread) }
+    }
+
+    /// Whether the grain changes anything (Amount 0 doesn't).
+    pub fn is_identity(&self) -> bool {
+        self.kernel.iter().all(|w| *w == 0.0)
     }
 }
 
@@ -309,47 +327,61 @@ pub fn grain_hash(x: i32, y: i32, seed: u32) -> u32 {
     h ^ (h >> 16)
 }
 
-/// A lattice point's noise in -1..1, bell-shaped (two uniform values summed).
-fn grain_lattice(x: i32, y: i32, octave: u32) -> f32 {
-    let u = |seed: u32| (grain_hash(x, y, seed) >> 8) as f32 / 16_777_216.0;
-    u(2 * octave) + u(2 * octave + 1) - 1.0
+/// The raw noise at pixel (x, y): its hash's four bytes summed, centred (-510..=510, about
+/// Gaussian). A whole number, so the CPU and the GPU agree exactly.
+pub fn grain_white(x: i32, y: i32) -> f32 {
+    let h = grain_hash(x, y, 0);
+    let sum = (h & 255) + ((h >> 8) & 255) + ((h >> 16) & 255) + (h >> 24);
+    sum as f32 - 510.0
 }
 
-/// Smooth value noise at pixel (x, y) on a lattice `1 / inv` pixels wide.
-fn grain_value(x: i32, y: i32, inv: f32, octave: u32) -> f32 {
-    let (fx, fy) = (x as f32 * inv, y as f32 * inv);
-    let (ix, iy) = (fx.floor(), fy.floor());
-    let s = |t: f32| t * t * (3.0 - 2.0 * t);
-    let (sx, sy) = (s(fx - ix), s(fy - iy));
-    let (ix, iy) = (ix as i32, iy as i32);
-    let a = grain_lattice(ix, iy, octave);
-    let b = grain_lattice(ix.wrapping_add(1), iy, octave);
-    let c = grain_lattice(ix, iy.wrapping_add(1), octave);
-    let d = grain_lattice(ix.wrapping_add(1), iy.wrapping_add(1), octave);
-    let top = a + (b - a) * sx;
-    let bottom = c + (d - c) * sx;
-    top + (bottom - top) * sy
-}
-
-/// The grain at document pixel (x, y), about -1..1: fine grain, with Roughness mixing in coarser
-/// clumps.
+/// The grain at document pixel (x, y), in tone units: the raw noise of the 5×5 pixels around
+/// it, weighted by the filter (rows top to bottom, each left to right, as the GPU sums them).
 pub fn grain_noise(g: &GrainParams, x: i32, y: i32) -> f32 {
-    let fine = grain_value(x, y, g.inv_cell, 0);
-    if g.rough <= 0.0 {
-        return fine;
-    }
-    let clump = grain_value(x, y, g.inv_clump, 1);
-    (fine + g.rough * clump) / (1.0 + 0.5 * g.rough)
+    grain_filter(g, |dx, dy| grain_white(x.wrapping_add(dx), y.wrapping_add(dy)))
 }
 
-/// Grain on one tone-encoded colour: the same offset on every channel (monochrome grain, like
-/// film's), strongest in the midtones and a third as strong in black and white. 32-bit colours
-/// keep values over 1.
-pub fn grain_px(c: [f32; 3], g: &GrainParams, x: i32, y: i32, hdr: bool) -> [f32; 3] {
+fn grain_filter(g: &GrainParams, white: impl Fn(i32, i32) -> f32) -> f32 {
+    let mut sum = 0.0f32;
+    for dy in -2i32..=2 {
+        for dx in -2i32..=2 {
+            let class = GRAIN_CLASS[(dx.unsigned_abs() * 3 + dy.unsigned_abs()) as usize];
+            sum += g.kernel[class] * white(dx, dy);
+        }
+    }
+    sum
+}
+
+/// Grain on one tone-encoded colour, `noise` from [`grain_noise`]: the same offset on every
+/// channel (monochrome grain, like film's), strongest in the midtones and a third as strong in
+/// black and white. 32-bit colours keep values over 1.
+pub fn grain_px(c: [f32; 3], noise: f32, hdr: bool) -> [f32; 3] {
     let l = (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]).clamp(0.0, 1.0);
     let weight = 1.0 / 3.0 + 2.0 / 3.0 * 4.0 * l * (1.0 - l);
-    let d = g.strength * weight * grain_noise(g, x, y);
+    let d = weight * noise;
     c.map(|v| if hdr { (v + d).max(0.0) } else { (v + d).clamp(0.0, 1.0) })
+}
+
+/// Grain over a buffer: the raw noise is hashed once per pixel (five rows of it kept at a time)
+/// rather than 25 times, with the same sums as [`grain_noise`].
+fn apply_grain(g: &GrainParams, buf: &mut Buffer, hdr: bool) {
+    let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
+    let row = |y: i32| -> Vec<f32> { (0..w + 4).map(|i| grain_white(x0.wrapping_add(i as i32 - 2), y)).collect() };
+    let mut rows: std::collections::VecDeque<Vec<f32>> = (-2..=2).map(|dy| row(y0.wrapping_add(dy))).collect();
+    for (r, line) in buf.px.chunks_mut(w).enumerate() {
+        if r > 0 {
+            rows.pop_front();
+            rows.push_back(row(y0.wrapping_add(r as i32 + 2)));
+        }
+        for (i, p) in line.iter_mut().enumerate() {
+            if p[3] <= 0.0 {
+                continue;
+            }
+            let noise = grain_filter(g, |dx, dy| rows.get((dy + 2) as usize).and_then(|r| r.get((i as i32 + dx + 2) as usize)).copied().unwrap_or(0.0));
+            let o = grain_px([p[0], p[1], p[2]], noise, hdr);
+            p[..3].copy_from_slice(&o);
+        }
+    }
 }
 
 /// Legacy Brightness/Contrast on a 32-bit document's samples: unclipped, with contrast pivoting at
@@ -2598,7 +2630,7 @@ mod grain_tests {
         assert!(mean.abs() < 0.02 && spread > 0.05, "mean {mean}, spread {spread}");
     }
 
-    /// Amount 0 (a new layer's) changes nothing; more Amount, more grain; Size coarsens it.
+    /// Amount 0 (a new layer's) changes nothing; more Amount, more grain.
     #[test]
     fn grain_settings_shape_the_noise() {
         let rect = Rect::new(0, 0, 96, 96);
@@ -2611,18 +2643,66 @@ mod grain_tests {
         apply_depth(&grain(0.0), &mut b, Transfer::Srgb, None);
         assert_eq!(b.px, grey(rect, 0.5).px);
         assert!(spread(&grain(80.0)) > 1.8 * spread(&grain(30.0)));
-        // Neighbouring pixels differ less with large grain.
-        let roughness = |size: f32| {
-            let mut b = grey(rect, 0.5);
-            apply_depth(&Adjustment::Grain { amount: 80.0, size, roughness: 0.0 }, &mut b, Transfer::Srgb, None);
-            b.px.windows(2).map(|w| (w[0][0] - w[1][0]).abs()).sum::<f32>()
-        };
-        assert!(roughness(100.0) < 0.6 * roughness(0.0));
         // Hostile settings never panic or produce NaN.
         for adj in [Adjustment::Grain { amount: f32::NAN, size: f32::INFINITY, roughness: -1e30 }, grain(1e9)] {
             let mut b = grey(Rect::new(i32::MAX - 16, i32::MIN, i32::MAX, i32::MIN + 2), 0.5);
             apply_depth(&adj, &mut b, Transfer::Srgb, None);
             assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))));
+        }
+    }
+
+    /// User report: Photoshop's grain looked different with the same settings (ours grew into
+    /// blotches with Size). Measured on Photoshop renders of mid-grey (134 of 255) at 100%: the
+    /// contrast (standard deviation, of 255) and the correlation with the pixel beside and the
+    /// one diagonally beside. Photoshop's stays fine at Size 100; Roughness softens it.
+    #[test]
+    fn grain_matches_photoshops_contrast_and_fineness() {
+        let rect = Rect::new(0, 0, 256, 256);
+        let stats = |amount: f32, size: f32, roughness: f32| {
+            let mut b = grey(rect, 134.0 / 255.0);
+            apply_depth(&Adjustment::Grain { amount, size, roughness }, &mut b, Transfer::Srgb, None);
+            let v: Vec<f32> = b.px.iter().map(|p| p[0] * 255.0).collect();
+            let mean = v.iter().sum::<f32>() / v.len() as f32;
+            let d: Vec<f32> = v.iter().map(|x| x - mean).collect();
+            let var = d.iter().map(|x| x * x).sum::<f32>() / d.len() as f32;
+            let corr = |dx: usize, dy: usize| {
+                let mut s = 0.0;
+                let mut n = 0.0;
+                for y in 0..256 - dy {
+                    for x in 0..256 - dx {
+                        s += d[y * 256 + x] * d[(y + dy) * 256 + x + dx];
+                        n += 1.0;
+                    }
+                }
+                s / n / var
+            };
+            (var.sqrt(), corr(1, 0), corr(1, 1))
+        };
+        // (Amount, Size, Roughness) → Photoshop's contrast, beside, diagonal.
+        for ((a, s, r), (sd, beside, diagonal)) in [
+            ((19.0, 0.0, 0.0), (15.0, -0.25, -0.07)),
+            ((100.0, 0.0, 0.0), (71.8, -0.25, -0.06)),
+            ((100.0, 100.0, 0.0), (46.1, 0.0, -0.19)),
+            ((100.0, 50.0, 100.0), (36.1, 0.28, 0.08)),
+        ] {
+            let (o_sd, o_beside, o_diagonal) = stats(a, s, r);
+            assert!((o_sd - sd).abs() < 0.06 * sd, "{a} {s} {r}: contrast {o_sd} (Photoshop's {sd})");
+            assert!((o_beside - beside).abs() < 0.06, "{a} {s} {r}: beside {o_beside} (Photoshop's {beside})");
+            assert!((o_diagonal - diagonal).abs() < 0.06, "{a} {s} {r}: diagonal {o_diagonal} (Photoshop's {diagonal})");
+        }
+    }
+
+    /// The buffer path hashes each pixel once; it gives exactly the per-pixel sums the GPU
+    /// evaluates, edges of the buffer included.
+    #[test]
+    fn grain_buffer_matches_the_per_pixel_noise() {
+        let g = GrainParams::new(73.0, 41.0, 37.0);
+        let rect = Rect::new(-7, 5, 30, 19);
+        let mut b = grey(rect, 0.5);
+        apply_grain(&g, &mut b, false);
+        for (i, p) in b.px.iter().enumerate() {
+            let (x, y) = (rect.x0 + (i % 37) as i32, rect.y0 + (i / 37) as i32);
+            assert_eq!(p[0], grain_px([0.5; 3], grain_noise(&g, x, y), false)[0], "({x}, {y})");
         }
     }
 
