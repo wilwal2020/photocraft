@@ -160,11 +160,14 @@ fn selection_target(s: &Session, p: &Value) -> Result<LayerId> {
         .transpose()?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let matches: Vec<_> = st.doc.walk().into_iter().filter(|(_, _, l)| l.name == name).map(|(_, _, l)| l.id).collect();
-    if matches.len() > 1 && occurrence.is_none() {
-        return Err(bad("layer.select", format!("multiple layers named `{name}`; specify `occurrence`")));
-    }
-    let index = occurrence.unwrap_or(0);
-    matches.get(index).copied().ok_or_else(|| bad("layer.select", format!("no layer named `{name}` at occurrence {index}")))
+    // User report: an action recorded while two layers shared a name (`occurrence` 1) failed on a
+    // document with only one. Like Photoshop, a name with no such occurrence (or none given)
+    // selects the top-most layer of that name.
+    occurrence
+        .and_then(|i| matches.get(i))
+        .or_else(|| matches.last())
+        .copied()
+        .ok_or_else(|| bad("layer.select", format!("no layer named `{name}`")))
 }
 
 /// Layer rows follow the Layers panel's visual order, not Document::walk's storage order.

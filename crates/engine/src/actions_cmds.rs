@@ -1535,17 +1535,22 @@ mod tests {
         s.execute("layer.select", json!({"name":"Photo","occurrence":0,"mode":"add"})).unwrap();
         s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"remove"})).unwrap();
         assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
+        // User report: an occurrence the document no longer has (or none, with duplicates)
+        // selects the top-most layer of that name, as Photoshop does, rather than failing.
+        s.execute("layer.select", json!({"name":"Photo","occurrence":99})).unwrap();
+        assert_eq!(s.active().unwrap().selected_layers(), vec![second]);
+        s.execute("layer.select", json!({"name":"Photo"})).unwrap();
+        assert_eq!(s.active().unwrap().selected_layers(), vec![second]);
+        s.execute("layer.select", json!({"layer":first.0})).unwrap();
         // Removing an unselected layer does not add it; removing the last target keeps it.
         s.execute("layer.select", json!({"layer":"Photo","mode":"remove"})).unwrap();
         s.execute("layer.select", json!({"name":"Photo","occurrence":0,"mode":"remove"})).unwrap();
         assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
         for p in [
             json!({"name":"absent"}),
-            json!({"name":"Photo"}),
             json!({"name":1}),
             json!({"name":"Photo","occurrence":-1}),
             json!({"name":"Photo","occurrence":1.5}),
-            json!({"name":"Photo","occurrence":99}),
             json!({"name":"Photo","layer":first.0}),
             json!({"layer":first.0,"occurrence":0}),
         ] {

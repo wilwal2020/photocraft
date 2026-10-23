@@ -98,16 +98,18 @@ fn resolve_one(s: &Session, cmd: &str, v: &Value) -> Result<Option<LayerId>> {
     let Some(name) = o.get("name") else { return Ok(None) };
     let name = name.as_str().ok_or_else(|| bad(format!("a layer's `name` must be a string, got {name}")))?;
     let occurrence = match o.get("occurrence") {
-        None => 0,
-        Some(n) => n.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(format!("`occurrence` must be a non-negative integer, got {n}")))?,
+        None => None,
+        Some(n) => Some(n.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(format!("`occurrence` must be a non-negative integer, got {n}")))?),
     };
-    st.doc
-        .walk()
-        .into_iter()
-        .filter(|(_, _, l)| l.name == name)
-        .nth(occurrence)
-        .map(|(_, _, l)| Some(l.id))
-        .ok_or_else(|| bad(if occurrence == 0 { format!("no layer named \"{name}\"") } else { format!("no layer #{} named \"{name}\"", occurrence + 1) }))
+    let same: Vec<LayerId> = st.doc.walk().into_iter().filter(|(_, _, l)| l.name == name).map(|(_, _, l)| l.id).collect();
+    // User report: a step recorded while two layers shared a name failed on a document with one.
+    // Like Photoshop, a name with no such occurrence (or none given) means the top-most layer of
+    // that name.
+    occurrence
+        .and_then(|i| same.get(i))
+        .or_else(|| same.last())
+        .map(|l| Some(*l))
+        .ok_or_else(|| bad(format!("no layer named \"{name}\"")))
 }
 
 /// Dispatch: the layer references of a recorded step back to the layer ids of the active
@@ -226,11 +228,14 @@ mod tests {
         assert_eq!(resolve(&s, "layer.showOnly", json!({"layer": {"name": "A"}})).unwrap(), json!({}));
         assert_eq!(resolve(&s, "layer.showOnly", json!({"layers": [{"name": "A"}]})).unwrap(), json!({}));
         assert_eq!(resolve(&s, "layer.showOnly", json!({"layer": a.0})).unwrap(), json!({"layer": a.0}));
+        // User report: an occurrence the document doesn't have (recorded among more layers of
+        // that name), or none with duplicates, is the top-most layer of the name, as in Photoshop.
+        assert_eq!(resolve(&s, "layer.hideLayers", json!({"layer": {"name": "Twin", "occurrence": 2}})).unwrap(), json!({"layer": t2.0}));
+        assert_eq!(resolve(&s, "layer.hideLayers", json!({"layer": {"name": "Twin"}})).unwrap(), json!({"layer": t2.0}));
         // Bad references are errors, not panics.
         for bad in [
             json!({"layer": {"name": "nope"}}),
             json!({"layer": {"name": 3}}),
-            json!({"layer": {"name": "Twin", "occurrence": 2}}),
             json!({"layer": {"name": "Twin", "occurrence": -1}}),
             json!({"layers": [{"name": "nope"}]}),
         ] {
