@@ -4017,3 +4017,11 @@ curves	Smooth	매끄럽게
 	Recording: click to pause	기록 중: 클릭하여 일시 정지
 	Start recording a timelapse	타임랩스 기록 시작
 	Timelapse recording	타임랩스 기록
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	마스크…
+	Expand:	확대:
+	Feather:	페더:
+	How far the layer mask reaches past the area removed	레이어 마스크가 제거한 영역 밖으로 얼마나 넓어지는지
+	How softly the layer mask's edge fades into the original	레이어 마스크 가장자리가 원본에 얼마나 부드럽게 섞이는지
+	Creative shows everything Nano Banana drew: these don't apply.	크리에이티브는 Nano Banana가 그린 모든 것을 보여 주므로 이 설정은 적용되지 않습니다.
+	How Nano Banana's layer mask meets the original	Nano Banana 레이어 마스크가 원본과 만나는 방식

@@ -4559,3 +4559,11 @@ curves	Smooth	Vloeiend maken
 	Recording: click to pause	Opname loopt: klik om te pauzeren
 	Start recording a timelapse	Een timelapse-opname starten
 	Timelapse recording	Timelapse-opname
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Masker…
+	Expand:	Uitbreiden:
+	Feather:	Doezelaar:
+	How far the layer mask reaches past the area removed	Hoe ver het laagmasker buiten het verwijderde gebied reikt
+	How softly the layer mask's edge fades into the original	Hoe zacht de rand van het laagmasker overgaat in het origineel
+	Creative shows everything Nano Banana drew: these don't apply.	Creatief toont alles wat Nano Banana tekende: deze instellingen gelden dan niet.
+	How Nano Banana's layer mask meets the original	Hoe het laagmasker van Nano Banana aansluit op het origineel

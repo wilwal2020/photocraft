@@ -4500,3 +4500,11 @@ curves	Smooth	Εξομάλυνση
 	Recording: click to pause	Εγγραφή: κάντε κλικ για παύση
 	Start recording a timelapse	Έναρξη εγγραφής timelapse
 	Timelapse recording	Εγγραφή timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Μάσκα…
+	Expand:	Επέκταση:
+	Feather:	Ομαλοποίηση:
+	How far the layer mask reaches past the area removed	Πόσο πέρα από την περιοχή που αφαιρέθηκε φτάνει η μάσκα επιπέδου
+	How softly the layer mask's edge fades into the original	Πόσο απαλά σβήνει η άκρη της μάσκας επιπέδου μέσα στο πρωτότυπο
+	Creative shows everything Nano Banana drew: these don't apply.	Η δημιουργική λειτουργία δείχνει ό,τι σχεδίασε το Nano Banana: αυτές οι ρυθμίσεις δεν ισχύουν.
+	How Nano Banana's layer mask meets the original	Πώς συναντά η μάσκα επιπέδου του Nano Banana το πρωτότυπο

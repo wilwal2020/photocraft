@@ -4761,3 +4761,11 @@ navigator	Zoom	Zoom
 	Recording: click to pause	Grabando: haz clic para pausar
 	Start recording a timelapse	Empezar a grabar un timelapse
 	Timelapse recording	Grabación de timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Máscara…
+	Expand:	Expandir:
+	Feather:	Calar:
+	How far the layer mask reaches past the area removed	Cuánto se extiende la máscara de capa más allá del área eliminada
+	How softly the layer mask's edge fades into the original	Con qué suavidad se funde el borde de la máscara de capa con el original
+	Creative shows everything Nano Banana drew: these don't apply.	Creativo muestra todo lo que dibujó Nano Banana: estos ajustes no se aplican.
+	How Nano Banana's layer mask meets the original	Cómo se une la máscara de capa de Nano Banana al original

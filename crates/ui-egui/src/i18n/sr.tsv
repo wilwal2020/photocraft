@@ -4871,3 +4871,11 @@ shape	Appearance	Izgled
 	Recording: click to pause	Snima se: kliknite za pauzu
 	Start recording a timelapse	Pokreni snimanje timelapsea
 	Timelapse recording	Snimanje timelapsea
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maska…
+	Expand:	Proširi:
+	Feather:	Omekšavanje:
+	How far the layer mask reaches past the area removed	Koliko maska sloja seže preko uklonjene oblasti
+	How softly the layer mask's edge fades into the original	Koliko meko ivica maske sloja prelazi u original
+	Creative shows everything Nano Banana drew: these don't apply.	Kreativni režim prikazuje sve što je Nano Banana nacrtala: ova podešavanja se ne primenjuju.
+	How Nano Banana's layer mask meets the original	Kako se maska sloja Nano Banana spaja sa originalom

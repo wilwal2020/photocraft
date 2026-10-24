@@ -4738,3 +4738,11 @@ layerLabel	No Color	Sem cor
 	Recording: click to pause	Gravando: clique para pausar
 	Start recording a timelapse	Começar a gravar um timelapse
 	Timelapse recording	Gravação de timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Máscara…
+	Expand:	Expandir:
+	Feather:	Difusão:
+	How far the layer mask reaches past the area removed	Quanto a máscara de camada se estende além da área removida
+	How softly the layer mask's edge fades into the original	Com que suavidade a borda da máscara de camada se funde ao original
+	Creative shows everything Nano Banana drew: these don't apply.	Criativo mostra tudo o que o Nano Banana desenhou: estes ajustes não se aplicam.
+	How Nano Banana's layer mask meets the original	Como a máscara de camada do Nano Banana encontra o original

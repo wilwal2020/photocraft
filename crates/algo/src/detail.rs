@@ -14,9 +14,13 @@
 //!   candidate that best continues what is already there across its overlap, joined to it along
 //!   the minimum-error cut. Continuing a neighbour's source is always a candidate, so a regular
 //!   pattern keeps its phase, and among nearly equal candidates one is picked at random, so grain
-//!   doesn't repeat. Where the surroundings are a black-and-white screen (a halftone, a dither),
-//!   whole pixels are quilted instead, guided by the fill's tone (Efros and Freeman's texture
-//!   transfer), so the dots stay crisp and in phase rather than becoming the model's grey ones.
+//!   doesn't repeat. Only faint texture (grain) is put back this way: strong detail (lines, a
+//!   pattern) the model draws itself, and quilting it put lines where the model left paper.
+//!   On a black-and-white page, where the hole's surroundings are a dot screen (a regular
+//!   lattice of dots: two independent shifts under which the pattern matches itself), whole
+//!   pixels are quilted from the screen around, guided by the fill's tone (Efros and Freeman's
+//!   texture transfer), so the dots stay crisp and in phase rather than becoming the model's grey
+//!   ones; elsewhere on the page (line art, hatching, paper) the model's fill stays as it is.
 //!
 //! Buffers are interleaved `w × h × ch` normalised floats whose first `colours` channels are
 //! colour (the rest, alpha, is left alone), with a `w × h` hole mask. Deterministic for a seed.
@@ -80,12 +84,22 @@ const ENERGY_RADIUS: usize = 24;
 /// Radius over which the fill's own detail energy is measured.
 const FILL_RADIUS: usize = 8;
 
-/// A screen: the share of the surroundings' pixels at one of its two extreme tones.
+/// A black-and-white page: the share of the surroundings' pixels at one of its two extreme tones.
 const SCREEN_SHARE: f64 = 0.9;
 
-/// Detail energy around a pixel from which a screen's dots are quilted whole (fully from twice
-/// this); below it the fill stays (a black or white area, a line).
-const SCREEN_ENERGY: f32 = 0.012;
+/// Grain is put back fully up to this amplitude (the root of the surroundings' detail energy)
+/// and not at all from this one: stronger detail is lines and patterns, which the model draws.
+const GRAIN_FULL: f32 = 8.0 / 255.0;
+const GRAIN_NONE: f32 = 16.0 / 255.0;
+
+/// The dot screen test: patches this wide, on a grid this fine, within this distance of the hole.
+const LATTICE_PATCH: usize = 32;
+const LATTICE_CELL: usize = 24;
+const LATTICE_NEAR: usize = 96;
+/// Shifts tried (up to this far, from this near) and the correlation both lattice shifts need.
+const LATTICE_SHIFT: i32 = 12;
+const LATTICE_MIN_SHIFT: i32 = 3;
+const LATTICE_CORR: f32 = 0.5;
 
 /// Weight of matching the fill's tone against continuing the neighbours, when quilting whole
 /// pixels.
@@ -159,24 +173,20 @@ pub fn restore_with(w: usize, h: usize, ch: usize, colours: usize, fill: &[f32],
         s.iter().zip(&c).map(|(s, c)| (s + global * eps) / (c + eps)).collect::<Vec<f32>>()
     };
     if screen {
-        // Whole pixels, guided by the fill's tone.
-        let gain: Vec<f32> = (0..n).map(|i| if hole[i] { ((es[i] - SCREEN_ENERGY) / SCREEN_ENERGY).clamp(0.0, 1.0) } else { 0.0 }).collect();
-        if gain.iter().sum::<f32>() / (holes as f32) < ENOUGH {
-            return Ok(out);
-        }
+        // Whole pixels, guided by the fill's tone, where the hole's surroundings are a dot screen;
+        // all or nothing, as a mix of the two is grey.
         let values: Vec<f32> = out.chunks_exact(ch).flat_map(|px| px.iter().take(cc).copied()).collect();
         let lum: Vec<f32> = values.chunks_exact(cc).map(luma).collect();
+        let Some((sources, target)) = dot_screen(w, h, &lum, hole, &valid, ctl)? else { return Ok(out) };
         let guide = {
             let masked: Vec<f32> = lum.iter().zip(&known).map(|(v, k)| v * k).collect();
             let kb = blur_twice(&masked, &known, w, h, GUIDE_BLUR);
             let fb = blur_twice(&lum.iter().zip(&inside).map(|(v, k)| v * k).collect::<Vec<_>>(), &inside, w, h, GUIDE_BLUR);
             (0..n).map(|i| if hole[i] { fb[i] } else { kb[i] }).collect::<Vec<f32>>()
         };
-        let q = quilt(w, h, cc, &values, Some(&guide), hole, &valid, b, o, p, ctl)?;
-        for i in (0..n).filter(|i| hole[*i] && gain[*i] > 0.0) {
-            for c in 0..cc {
-                out[i * ch + c] += gain[i] * (q[i * cc + c] - out[i * ch + c]);
-            }
+        let q = quilt(w, h, cc, &values, Some(&guide), hole, &target, &sources, b, o, p, ctl)?;
+        for i in (0..n).filter(|i| target[*i]) {
+            out[i * ch..i * ch + cc].copy_from_slice(&q[i * cc..(i + 1) * cc]);
         }
         return Ok(out);
     }
@@ -185,11 +195,19 @@ pub fn restore_with(w: usize, h: usize, ch: usize, colours: usize, fill: &[f32],
         let c = box_sum(&inside, w, h, FILL_RADIUS);
         s.iter().zip(&c).map(|(s, c)| if *c > 0.0 { s / c } else { 0.0 }).collect::<Vec<f32>>()
     };
-    let gain: Vec<f32> = (0..n).map(|i| if hole[i] && es[i] > FLAT { (1.0 - ef[i] / es[i]).clamp(0.0, 1.0) } else { 0.0 }).collect();
+    let gain: Vec<f32> = (0..n)
+        .map(|i| {
+            if !hole[i] || es[i] <= FLAT {
+                return 0.0;
+            }
+            let faint = ((GRAIN_NONE - es[i].sqrt()) / (GRAIN_NONE - GRAIN_FULL)).clamp(0.0, 1.0);
+            (1.0 - ef[i] / es[i]).clamp(0.0, 1.0) * faint
+        })
+        .collect();
     if gain.iter().sum::<f32>() / (holes as f32) < ENOUGH {
         return Ok(out);
     }
-    let q = quilt(w, h, cc, &detail, None, hole, &valid, b, o, p, ctl)?;
+    let q = quilt(w, h, cc, &detail, None, hole, hole, &valid, b, o, p, ctl)?;
     for i in (0..n).filter(|i| hole[*i] && gain[*i] > 0.0) {
         for c in 0..cc {
             out[i * ch + c] += gain[i] * (q[i * cc + c] - detail[i * cc + c]);
@@ -255,6 +273,113 @@ fn settle_tone(
     Ok(())
 }
 
+/// A dot screen's sources (valid pixels in it) and the hole pixels to quilt from them.
+type ScreenMasks = (Vec<bool>, Vec<bool>);
+
+/// Where a black-and-white page's hole lies in a dot screen: the valid pixels of the screen
+/// around the hole (quilting's sources) and the hole pixels to quilt, or `None` when there is no
+/// screen around it. Patches near the hole are tested ([`is_lattice`]) on a coarse grid, and the
+/// verdicts are carried into the hole by a membrane, so its middle is judged by all its sides
+/// rather than by the nearest few pixels (user report: a screentone fill grew blurrier towards
+/// the middle).
+fn dot_screen(w: usize, h: usize, lum: &[f32], hole: &[bool], valid: &[bool], ctl: &Interrupt) -> Result<Option<ScreenMasks>, Cancelled> {
+    let n = w * h;
+    let half = LATTICE_PATCH / 2;
+    let near = box_sum(&hole.iter().map(|m| if *m { 1.0 } else { 0.0 }).collect::<Vec<f32>>(), w, h, LATTICE_NEAR);
+    let invalid = box_sum(&valid.iter().map(|v| if *v { 0.0 } else { 1.0 }).collect::<Vec<f32>>(), w, h, half);
+    let (gw, gh) = (w.div_ceil(LATTICE_CELL), h.div_ceil(LATTICE_CELL));
+    let mut cells = vec![0f32; gw * gh];
+    let mut judged = vec![false; gw * gh];
+    for gy in 0..gh {
+        ctl.check()?;
+        for gx in 0..gw {
+            let (cx, cy) = (gx * LATTICE_CELL + LATTICE_CELL / 2, gy * LATTICE_CELL + LATTICE_CELL / 2);
+            if cx < half || cy < half || cx + half > w || cy + half > h {
+                continue;
+            }
+            let c = cy * w + cx;
+            if near[c] <= 0.0 || invalid[c] > 0.0 {
+                continue;
+            }
+            judged[gy * gw + gx] = true;
+            cells[gy * gw + gx] = if is_lattice(lum, w, cx - half, cy - half) { 1.0 } else { 0.0 };
+        }
+    }
+    if !cells.iter().any(|v| *v > 0.0) {
+        return Ok(None);
+    }
+    let unjudged: Vec<bool> = judged.iter().map(|j| !j).collect();
+    let mut spread = cells.clone();
+    crate::poisson::solve_membrane(gw, gh, &unjudged, &mut spread);
+    let at = |x: usize, y: usize| {
+        let u = ((x as f32 + 0.5) / LATTICE_CELL as f32 - 0.5).clamp(0.0, (gw - 1) as f32);
+        let v = ((y as f32 + 0.5) / LATTICE_CELL as f32 - 0.5).clamp(0.0, (gh - 1) as f32);
+        let (x0, y0) = (u.floor() as usize, v.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(gw - 1), (y0 + 1).min(gh - 1));
+        let (fx, fy) = (u - x0 as f32, v - y0 as f32);
+        let g = |x: usize, y: usize| spread[y * gw + x];
+        (g(x0, y0) * (1.0 - fx) + g(x1, y0) * fx) * (1.0 - fy) + (g(x0, y1) * (1.0 - fx) + g(x1, y1) * fx) * fy
+    };
+    let target: Vec<bool> = (0..n).map(|i| hole[i] && at(i % w, i / w) >= 0.5).collect();
+    if !target.iter().any(|t| *t) {
+        return Ok(None);
+    }
+    // Sources: valid pixels in a cell judged a screen.
+    let sources: Vec<bool> = (0..n)
+        .map(|i| {
+            let k = (i / w / LATTICE_CELL) * gw + (i % w) / LATTICE_CELL;
+            valid[i] && judged[k] && cells[k] > 0.0
+        })
+        .collect();
+    Ok(Some((sources, target)))
+}
+
+/// Whether the [`LATTICE_PATCH`]-square patch of `lum` (a plane `w` wide) at `(x0, y0)` is a dot
+/// screen: it matches itself under two shifts that aren't along one line (a line, or hatching,
+/// matches itself only along its own direction).
+fn is_lattice(lum: &[f32], w: usize, x0: usize, y0: usize) -> bool {
+    let s = LATTICE_PATCH;
+    let patch: Vec<f32> = (0..s * s).map(|k| lum.get((y0 + k / s) * w + x0 + k % s).copied().unwrap_or(0.0)).collect();
+    let mean = patch.iter().sum::<f32>() / (s * s) as f32;
+    let var = patch.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / (s * s) as f32;
+    if var < 0.01 || !var.is_finite() {
+        return false;
+    }
+    let corr = |dx: i32, dy: i32| {
+        let (mut sum, mut count) = (0f32, 0u32);
+        for y in 0..s as i32 {
+            let yy = y + dy;
+            if yy < 0 || yy >= s as i32 {
+                continue;
+            }
+            for x in 0..s as i32 {
+                let xx = x + dx;
+                if xx < 0 || xx >= s as i32 {
+                    continue;
+                }
+                sum += (patch[(y as usize) * s + x as usize] - mean) * (patch[(yy as usize) * s + xx as usize] - mean);
+                count += 1;
+            }
+        }
+        if count == 0 { 0.0 } else { sum / (count as f32 * var) }
+    };
+    // Half the shifts: a shift and its opposite match equally.
+    let shifts: Vec<(i32, i32, f32)> = (0..=LATTICE_SHIFT)
+        .flat_map(|dy| (-LATTICE_SHIFT..=LATTICE_SHIFT).map(move |dx| (dx, dy)))
+        .filter(|&(dx, dy)| (dy > 0 || dx > 0) && dx * dx + dy * dy >= LATTICE_MIN_SHIFT * LATTICE_MIN_SHIFT)
+        .map(|(dx, dy)| (dx, dy, corr(dx, dy)))
+        .collect();
+    let Some(&(ax, ay, a)) = shifts.iter().max_by(|p, q| p.2.total_cmp(&q.2)) else { return false };
+    if a < LATTICE_CORR {
+        return false;
+    }
+    let la = ((ax * ax + ay * ay) as f32).sqrt();
+    shifts.iter().any(|&(bx, by, c)| {
+        let lb = ((bx * bx + by * by) as f32).sqrt();
+        c >= LATTICE_CORR && ((ax * by - ay * bx) as f32).abs() > 0.5 * la * lb
+    })
+}
+
 /// Whether `tones` (0–1) are a black-and-white screen: nearly all at one of two well separated
 /// extremes.
 fn is_screen(tones: &[f32]) -> bool {
@@ -293,8 +418,9 @@ fn is_screen(tones: &[f32]) -> bool {
     (dark + light) as f64 >= SCREEN_SHARE * total && dark as f64 >= 0.03 * total && light as f64 >= 0.03 * total
 }
 
-/// `values` (`vc` per pixel) quilted into the hole from the valid pixels' (outside the hole, the
-/// known pixels' own). With a `guide` (one plane), a candidate also has to match its tone.
+/// `values` (`vc` per pixel) quilted into the `target` pixels of the hole from the valid pixels'
+/// (outside the hole, the known pixels' own). With a `guide` (one plane), a candidate also has to
+/// match its tone.
 #[allow(clippy::too_many_arguments)]
 fn quilt(
     w: usize,
@@ -303,6 +429,7 @@ fn quilt(
     values: &[f32],
     guide: Option<&[f32]>,
     hole: &[bool],
+    target: &[bool],
     valid: &[bool],
     b: usize,
     o: usize,
@@ -337,7 +464,7 @@ fn quilt(
         return Ok(q);
     }
     let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0, 0);
-    for i in (0..n).filter(|i| hole[*i]) {
+    for i in (0..n).filter(|i| target[*i]) {
         let (x, y) = (i % w, i / w);
         (bx0, by0, bx1, by1) = (bx0.min(x), by0.min(y), bx1.max(x + 1), by1.max(y + 1));
     }
@@ -365,7 +492,7 @@ fn quilt(
     for (bj, &ty) in ys.iter().enumerate() {
         ctl.check()?;
         for (bi, &tx) in xs.iter().enumerate() {
-            if !(ty..ty + b).any(|y| hole[y * w + tx..y * w + tx + b].iter().any(|m| *m)) {
+            if !(ty..ty + b).any(|y| target[y * w + tx..y * w + tx + b].iter().any(|m| *m)) {
                 continue;
             }
             cand.clear();
@@ -435,7 +562,7 @@ fn quilt(
             for (y, &vy) in vcut.iter().enumerate() {
                 for (x, &hx) in hcut.iter().enumerate() {
                     let t = (ty + y) * w + tx + x;
-                    if !hole[t] || (set[t] && (x < vy || y < hx)) {
+                    if !target[t] || (set[t] && (x < vy || y < hx)) {
                         continue;
                     }
                     let s = (sy + y) * w + sx + x;
@@ -611,6 +738,64 @@ mod tests {
         let n = hole.iter().filter(|m| **m).count() as f32;
         let err = hole.iter().enumerate().filter(|(_, m)| **m).map(|(i, _)| (out[i * 3] - img[i * 3]).abs()).sum::<f32>() / n;
         assert!(err < 0.05, "mean error {err} against the screen");
+    }
+
+    /// A page of round dots (period 8) on white.
+    fn dots(x: usize, y: usize) -> f32 {
+        let (dx, dy) = ((x % 8) as f32 - 3.5, (y % 8) as f32 - 3.5);
+        if dx.hypot(dy) < 2.6 { 0.0 } else { 1.0 }
+    }
+
+    /// Pen lines on white: diagonal, at irregular spacing (about 9 px apart), over the left two
+    /// thirds.
+    fn hatching(x: usize, y: usize) -> f32 {
+        let t = (x + y / 2) as u64;
+        let line = crate::photo_util::splitmix64(&mut t.wrapping_mul(0x9E37)).is_multiple_of(9);
+        if x < 170 && line { 0.0 } else { 1.0 }
+    }
+
+    /// User report: the middle of a large screentone fill was blurrier than its edges. The whole
+    /// hole gets crisp dots (no grey), as dense as around it.
+    #[test]
+    fn a_large_hole_in_a_dot_screen_gets_crisp_dots_to_its_middle() {
+        let (w, h) = (256, 256);
+        let img: Vec<f32> = (0..w * h).flat_map(|i| [dots(i % w, i / w); 3]).collect();
+        let hole = disc(w, h, 128.0, 128.0, 75.0);
+        // The model's fill: grey, a blur of the screen.
+        let out = restore(w, h, 3, 3, &filled(&img, &hole, |_| [0.8; 3]), &hole, &Interrupt::NONE).unwrap();
+        let middle = disc(w, h, 128.0, 128.0, 25.0);
+        let grey = (0..w * h).filter(|i| hole[*i] && (0.1..0.9).contains(&out[i * 3])).count();
+        assert_eq!(grey, 0, "grey pixels in the fill");
+        let dark = |m: &[bool], v: &[f32]| (0..w * h).filter(|i| m[*i] && v[i * 3] < 0.5).count() as f32 / m.iter().filter(|m| **m).count() as f32;
+        let (got, want) = (dark(&middle, &out), dark(&middle, &img));
+        assert!((got - want).abs() < 0.05, "dots cover {got} of the middle, {want} around");
+    }
+
+    /// User report: on a manga page the pass greyed the model's lines and drew hatching where the
+    /// model had left paper. Line art isn't a dot screen: the model's fill stays as it is.
+    #[test]
+    fn line_art_keeps_the_models_fill() {
+        let (w, h) = (256, 160);
+        let img: Vec<f32> = (0..w * h).flat_map(|i| [hatching(i % w, i / w); 3]).collect();
+        let hole = disc(w, h, 150.0, 80.0, 45.0);
+        // The model left paper where the lines thin out, and a soft line elsewhere.
+        let fill = filled(&img, &hole, |i| if i % w < 150 { [0.6; 3] } else { [1.0; 3] });
+        assert_eq!(restore(w, h, 3, 3, &fill, &hole, &Interrupt::NONE).unwrap(), fill);
+        assert!(!is_lattice(&img.iter().step_by(3).copied().collect::<Vec<_>>(), w, 40, 40));
+        let screen: Vec<f32> = (0..w * h).map(|i| dots(i % w, i / w)).collect();
+        assert!(is_lattice(&screen, w, 40, 40));
+    }
+
+    /// Strong texture on a photo (not black and white) is the model's to draw: only faint grain
+    /// is quilted.
+    #[test]
+    fn strong_texture_is_not_quilted() {
+        let (w, h) = (160, 160);
+        let img = noise(w, h, 9, 0.3);
+        let hole = disc(w, h, 80.0, 80.0, 40.0);
+        let fill = filled(&img, &hole, |_| [0.5; 3]);
+        let out = restore_with(w, h, 3, 3, &fill, &hole, &Params { tone: false, ..Params::default() }, &Interrupt::NONE).unwrap();
+        assert_eq!(out, fill);
     }
 
     #[test]

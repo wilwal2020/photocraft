@@ -4546,3 +4546,11 @@ cameraRaw	Dehaze	Odstranění oparu
 	Recording: click to pause	Nahrává se: klepnutím pozastavíte
 	Start recording a timelapse	Spustit nahrávání časosběru
 	Timelapse recording	Nahrávání časosběru
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maska…
+	Expand:	Rozšířit:
+	Feather:	Prolnutí:
+	How far the layer mask reaches past the area removed	Jak daleko sahá maska vrstvy za odstraněnou oblast
+	How softly the layer mask's edge fades into the original	Jak jemně okraj masky vrstvy přechází do originálu
+	Creative shows everything Nano Banana drew: these don't apply.	Kreativní režim ukazuje vše, co Nano Banana nakreslila: tato nastavení neplatí.
+	How Nano Banana's layer mask meets the original	Jak se maska vrstvy Nano Banana napojuje na originál

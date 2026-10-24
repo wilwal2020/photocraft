@@ -3818,3 +3818,11 @@ curves	Smooth	Glätten
 	Recording: click to pause	Aufnahme läuft: Klicken zum Pausieren
 	Start recording a timelapse	Zeitrafferaufnahme starten
 	Timelapse recording	Zeitrafferaufnahme
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maske…
+	Expand:	Ausdehnen:
+	Feather:	Weiche Kante:
+	How far the layer mask reaches past the area removed	Wie weit die Ebenenmaske über den entfernten Bereich hinausreicht
+	How softly the layer mask's edge fades into the original	Wie weich der Rand der Ebenenmaske in das Original übergeht
+	Creative shows everything Nano Banana drew: these don't apply.	„Kreativ“ zeigt alles, was Nano Banana gezeichnet hat: Diese Einstellungen gelten dann nicht.
+	How Nano Banana's layer mask meets the original	Wie die Ebenenmaske von Nano Banana an das Original anschließt

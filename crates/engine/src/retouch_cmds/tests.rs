@@ -2582,7 +2582,7 @@ fn nano_banana_keeps_everything_it_drew_on_a_layer_masked_to_the_hole() {
     let picture = Region { rect: canvas, ch: 3, data: vec![0.25; 96 * 64 * 3] };
     let hole: Vec<bool> = (0..36 * 30).map(|k| (10..26).contains(&(k % 36)) && (9..21).contains(&(k / 36))).collect();
     let mut doc = (*s.active().unwrap().doc).clone();
-    let (damage, nid) = remove::generated_layer(&mut doc, id, &[picture], &hole, win, false).unwrap();
+    let (damage, nid) = remove::generated_layer(&mut doc, id, &[picture], &hole, win, false, remove::MaskEdge::default()).unwrap();
     assert_eq!(damage, canvas);
     let l = doc.layer(nid).unwrap();
     assert!(l.name.starts_with("Nano Banana"), "{}", l.name);
@@ -2597,6 +2597,38 @@ fn nano_banana_keeps_everything_it_drew_on_a_layer_masked_to_the_hole() {
     assert!((at(10, 10)[0] - before[0]).abs() < 0.01 && (at(46, 30)[0] - 0.25).abs() < 0.02, "{:?} {:?}", at(10, 10), at(46, 30));
 }
 
+/// User request: Nano Banana's hard-edged mask showed where its picture met the original.
+/// `maskExpand` grows it past the hole and `maskFeather` softens its edge; bad values are errors.
+#[test]
+fn a_nano_banana_mask_is_expanded_and_feathered() {
+    let s = square_session(8, "rgb");
+    let id = s.active().unwrap().active_layer;
+    let canvas = Rect::new(0, 0, 96, 64);
+    let win = Rect::new(30, 15, 66, 45);
+    let picture = Region { rect: canvas, ch: 3, data: vec![0.25; 96 * 64 * 3] };
+    // The hole: x 40..56, y 24..36.
+    let hole: Vec<bool> = (0..36 * 30).map(|k| (10..26).contains(&(k % 36)) && (9..21).contains(&(k / 36))).collect();
+    let mut doc = (*s.active().unwrap().doc).clone();
+    let edge = remove::MaskEdge { expand: 4.0, feather: 1.5 };
+    let (_, nid) = remove::generated_layer(&mut doc, id, std::slice::from_ref(&picture), &hole, win, false, edge).unwrap();
+    let mask = doc.layer(nid).unwrap().mask.as_ref().unwrap();
+    let v = |x, y| mask.value(x, y);
+    assert!(v(48, 30) > 0.99, "the middle of the hole shows: {}", v(48, 30));
+    assert!(v(57, 30) > 0.9, "a pixel past the hole's edge shows: {}", v(57, 30));
+    assert!(v(60, 30) > 0.05 && v(60, 30) < 0.95, "the edge 4 px out is soft: {}", v(60, 30));
+    assert!(v(66, 30) < 0.01, "and gone past it: {}", v(66, 30));
+    // Creative ignores it.
+    let mut doc = (*s.active().unwrap().doc).clone();
+    let (_, nid) = remove::generated_layer(&mut doc, id, &[picture], &hole, win, true, edge).unwrap();
+    assert_eq!(doc.layer(nid).unwrap().mask.as_ref().unwrap().value(48, 30), 1.0);
+    // Parsed from the command's params.
+    assert_eq!(remove::MaskEdge::parse(&json!({"maskExpand": 3, "maskFeather": 2.5}), "paint.remove").unwrap(), remove::MaskEdge { expand: 3.0, feather: 2.5 });
+    assert_eq!(remove::MaskEdge::parse(&json!({}), "paint.remove").unwrap(), remove::MaskEdge::default());
+    for bad in [json!({"maskExpand": -1}), json!({"maskFeather": "4"}), json!({"maskExpand": 1e9}), json!({"maskFeather": f64::MAX})] {
+        assert!(remove::MaskEdge::parse(&bad, "paint.remove").is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn a_creative_nano_banana_layer_shows_all_it_drew_fading_at_the_inner_edges() {
     let s = square_session(8, "rgb");
@@ -2607,7 +2639,7 @@ fn a_creative_nano_banana_layer_shows_all_it_drew_fading_at_the_inner_edges() {
     let drawn = Rect::new(0, 0, 80, 64);
     let picture = Region { rect: drawn, ch: 3, data: vec![0.25; 80 * 64 * 3] };
     let mut doc = (*s.active().unwrap().doc).clone();
-    let (_, nid) = remove::generated_layer(&mut doc, id, &[picture], &hole, win, true).unwrap();
+    let (_, nid) = remove::generated_layer(&mut doc, id, &[picture], &hole, win, true, remove::MaskEdge::default()).unwrap();
     let mask = doc.layer(nid).unwrap().mask.as_ref().unwrap();
     let v = |x, y| mask.value(x, y);
     assert_eq!((v(46, 30), v(10, 10), v(0, 0), v(20, 63)), (1.0, 1.0, 1.0, 1.0), "the hole and all of the area, the canvas's edges too");

@@ -3470,3 +3470,11 @@ curves	Smooth	平滑
 	Recording: click to pause	正在录制：点按以暂停
 	Start recording a timelapse	开始录制延时录像
 	Timelapse recording	延时录制
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	蒙版…
+	Expand:	扩展：
+	Feather:	羽化：
+	How far the layer mask reaches past the area removed	图层蒙版超出移除区域多远
+	How softly the layer mask's edge fades into the original	图层蒙版边缘融入原图的柔和程度
+	Creative shows everything Nano Banana drew: these don't apply.	创意模式会显示 Nano Banana 绘制的全部内容：这些设置不适用。
+	How Nano Banana's layer mask meets the original	Nano Banana 图层蒙版与原图的衔接方式

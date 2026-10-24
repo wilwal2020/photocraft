@@ -685,6 +685,10 @@ pub struct ToolOptions {
     /// Nano Banana's layer shows everything it drew, its changes around the area too
     /// (`paint.remove` `creative`).
     pub remove_creative: bool,
+    /// Nano Banana's layer mask, when not creative: grown past the area removed and softened, in
+    /// pixels (`paint.remove` `maskExpand`, `maskFeather`; user request: its hard edge showed).
+    pub remove_mask_expand: f32,
+    pub remove_mask_feather: f32,
     /// Remove tool with LaMa: standard | high (`paint.remove` `quality`: high runs the model at
     /// 1024 instead of 512, sharper on large removals).
     pub remove_quality: String,
@@ -1055,6 +1059,8 @@ impl Default for ToolOptions {
             remove_nano_mark: "paint".into(),
             remove_area: "near".into(),
             remove_creative: false,
+            remove_mask_expand: 4.0,
+            remove_mask_feather: 2.0,
             remove_quality: "standard".into(),
             remove_lama: RemoveModelOptions::default(),
             remove_diffusion: RemoveModelOptions::default(),

@@ -5003,3 +5003,11 @@ shape	Appearance	Оформление
 	Recording: click to pause	Идёт запись: нажмите для паузы
 	Start recording a timelapse	Начать запись таймлапса
 	Timelapse recording	Запись таймлапса
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Маска…
+	Expand:	Расширить:
+	Feather:	Растушёвка:
+	How far the layer mask reaches past the area removed	Насколько маска слоя выходит за удалённую область
+	How softly the layer mask's edge fades into the original	Насколько мягко край маски слоя переходит в оригинал
+	Creative shows everything Nano Banana drew: these don't apply.	В творческом режиме видно всё, что нарисовала Nano Banana: эти настройки не применяются.
+	How Nano Banana's layer mask meets the original	Как маска слоя Nano Banana стыкуется с оригиналом

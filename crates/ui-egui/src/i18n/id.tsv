@@ -3821,3 +3821,11 @@ curves	Smooth	Haluskan
 	Recording: click to pause	Merekam: klik untuk menjeda
 	Start recording a timelapse	Mulai merekam timelapse
 	Timelapse recording	Perekaman timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Masker…
+	Expand:	Perluas:
+	Feather:	Feather:
+	How far the layer mask reaches past the area removed	Seberapa jauh masker lapisan melampaui area yang dihapus
+	How softly the layer mask's edge fades into the original	Seberapa halus tepi masker lapisan memudar ke gambar asli
+	Creative shows everything Nano Banana drew: these don't apply.	Mode Kreatif menampilkan semua yang digambar Nano Banana: pengaturan ini tidak berlaku.
+	How Nano Banana's layer mask meets the original	Bagaimana masker lapisan Nano Banana bertemu gambar asli

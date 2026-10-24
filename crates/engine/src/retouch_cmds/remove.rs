@@ -30,7 +30,9 @@
 //! (`"page"`). Its result always goes to a new layer above the target: everything the model drew,
 //! with a layer mask showing only the hole, so painting the mask shows more of it where the edge
 //! doesn't meet; `creative: true` shows all of it (fading out at the edges of the area sent), the
-//! model's changes around the hole too.
+//! model's changes around the hole too. Otherwise `maskExpand` (pixels) grows the mask past the
+//! hole and `maskFeather` (pixels, a Gaussian's radius as Select › Modify › Feather) softens its
+//! edge, so the picture blends into the original instead of meeting it at a hard edge.
 //!
 //! `selection: true` removes the selection itself instead of strokes: what is selected is the
 //! hole (Photoshop's way of asking Generative Fill to remove something, without a prompt).
@@ -167,6 +169,60 @@ pub(crate) fn nano_options(p: &Value, cmd: &str) -> Result<photocraft_ml::gemini
     Ok(Options { mark, area, intent })
 }
 
+/// Most a Nano Banana mask may be expanded or feathered, in pixels.
+const MAX_MASK_EDGE: f64 = 200.0;
+
+/// How a Nano Banana layer's mask meets the original (`maskExpand`, `maskFeather`, pixels): the
+/// hole grown by `expand`, then blurred with a Gaussian of radius `feather` (user request: the
+/// hard edge of the hole showed where the picture met the original).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct MaskEdge {
+    pub(crate) expand: f32,
+    pub(crate) feather: f32,
+}
+
+impl MaskEdge {
+    pub(crate) fn parse(p: &Value, cmd: &str) -> Result<Self> {
+        let px = |key: &str| -> Result<f32> {
+            match p.get(key) {
+                None | Some(Value::Null) => Ok(0.0),
+                Some(v) => match v.as_f64() {
+                    Some(x) if (0.0..=MAX_MASK_EDGE).contains(&x) => Ok(x as f32),
+                    _ => Err(bad(cmd, format!("`{key}` is a number of pixels from 0 to {MAX_MASK_EDGE}, not {v}"))),
+                },
+            }
+        };
+        Ok(MaskEdge { expand: px("maskExpand")?, feather: px("maskFeather")? })
+    }
+
+    /// How far past the hole the mask can reach.
+    fn reach(self) -> i32 {
+        (self.expand + 3.0 * self.feather).ceil() as i32 + 1
+    }
+
+    /// The mask's coverage over `area` for a `hole` given on `win` (inside `area`).
+    fn coverage(self, area: Rect, win: Rect, hole: &[bool]) -> Vec<f32> {
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        let ww = win.width() as usize;
+        let mut m = vec![0f32; w * h];
+        for (k, _) in hole.iter().enumerate().filter(|(_, h)| **h) {
+            let (x, y) = (win.x0 + (k % ww.max(1)) as i32, win.y0 + (k / ww.max(1)) as i32);
+            if area.contains(x, y)
+                && let Some(v) = m.get_mut((y - area.y0) as usize * w + (x - area.x0) as usize)
+            {
+                *v = 1.0;
+            }
+        }
+        if self.expand > 0.0 {
+            m = photocraft_algo::selection::expand(&m, w, h, self.expand);
+        }
+        if self.feather > 0.0 {
+            m = photocraft_algo::selection::feather(&m, w, h, self.feather);
+        }
+        m
+    }
+}
+
 /// `quality`: `"standard"` (the default) or `"high"`, LaMa's Quality mode
 /// ([`photocraft_ml::inpaint::LAMA_QUALITY`]: LaMa at 1024 instead of 512).
 pub(crate) fn high_quality(p: &Value, cmd: &str) -> Result<bool> {
@@ -250,6 +306,8 @@ pub(super) struct Plan {
     nano: photocraft_ml::gemini::Options,
     /// Nano Banana's layer shows everything it drew, not only the hole (`creative`).
     creative: bool,
+    /// How Nano Banana's layer mask meets the original when not `creative`.
+    edge: MaskEdge,
     settings: photocraft_ml::diffusion::Settings,
 }
 
@@ -310,6 +368,7 @@ pub(super) fn plan(s: &Session, p: &Value) -> Result<Plan> {
     let high = high_quality(p, CMD)?;
     let nano = nano_options(p, CMD)?;
     let creative = flag(p, "creative", false);
+    let edge = MaskEdge::parse(p, CMD)?;
     let from_selection = flag(p, "selection", false);
     let (strokes, id) = if from_selection { (Vec::new(), selection_target(s, p)?) } else { parse_strokes(s, p)? };
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -340,7 +399,22 @@ pub(super) fn plan(s: &Session, p: &Value) -> Result<Plan> {
     {
         return Err(bad(CMD, format!("Generative AI is on, but {e}")));
     }
-    Ok(Plan { id, strokes, from_selection, window, close_loops, all_layers, new_layer, generative, model, high, nano, creative, settings: diffusion_settings(p) })
+    Ok(Plan {
+        id,
+        strokes,
+        from_selection,
+        window,
+        close_loops,
+        all_layers,
+        new_layer,
+        generative,
+        model,
+        high,
+        nano,
+        creative,
+        edge,
+        settings: diffusion_settings(p),
+    })
 }
 
 /// The hole over the plan's window: the strokes' footprints, their enclosed areas and a margin,
@@ -601,7 +675,8 @@ const CREATIVE_FADE: i32 = 48;
 /// Nano Banana's pictures on a new layer above `id`: every area it drew, whole, under a layer mask
 /// that shows only the hole (over `win`), so painting the mask shows more of the picture. With
 /// `creative` the mask shows every area drawn, fading out over [`CREATIVE_FADE`] px inside its
-/// edges (not at the canvas's edges), and the hole whole. Returns the damage and the new layer.
+/// edges (not at the canvas's edges), and the hole whole; without it the hole is shown as `edge`
+/// grows and softens it. Returns the damage and the new layer.
 pub(super) fn generated_layer(
     doc: &mut Document,
     id: Option<LayerId>,
@@ -609,6 +684,7 @@ pub(super) fn generated_layer(
     hole: &[bool],
     win: Rect,
     creative: bool,
+    edge: MaskEdge,
 ) -> Result<(Rect, LayerId)> {
     let base = doc.pixel_format();
     let fmt = PixelFormat::new(base.mode, base.sample, true);
@@ -656,6 +732,16 @@ pub(super) fn generated_layer(
         }
     }
     mask.surface.write_region(win, &shown);
+    if !creative && edge != MaskEdge::default() {
+        // Grown and softened over the hole's window and as far past it as that reaches.
+        let area = win.inflate(edge.reach()).intersect(&doc.bounds());
+        let soft = edge.coverage(area, win, hole);
+        let mut shown = mask.surface.read_region(area);
+        for (v, s) in shown.iter_mut().zip(&soft) {
+            *v = s.clamp(0.0, 1.0);
+        }
+        mask.surface.write_region(area, &shown);
+    }
     l.mask = Some(crate::commands::mask_at_depth(mask, doc.depth)?);
     let nid = doc.insert_above(id, l);
     Ok((damage.unwrap_or(win), nid))
@@ -670,6 +756,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let id = plan.id;
     let new_layer = plan.new_layer;
     let creative = plan.creative;
+    let edge = plan.edge;
     crate::jobs::run(
         s,
         label,
@@ -687,7 +774,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(pieces) = drawn {
                 let win = out.rect;
                 let (damage, nid) = s.edit(label, |doc, active| {
-                    let r = generated_layer(doc, id, &pieces, &hole, win, creative)?;
+                    let r = generated_layer(doc, id, &pieces, &hole, win, creative, edge)?;
                     *active = Some(r.1);
                     Ok(r)
                 })?;

@@ -4715,3 +4715,11 @@ cameraRaw	Yellow	Sárga
 	Recording: click to pause	Felvétel: kattintson a szüneteltetéshez
 	Start recording a timelapse	Időzített felvétel indítása
 	Timelapse recording	Időzített felvétel
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maszk…
+	Expand:	Kiterjesztés:
+	Feather:	Lágy szél:
+	How far the layer mask reaches past the area removed	Mennyivel nyúlik túl a rétegmaszk az eltávolított területen
+	How softly the layer mask's edge fades into the original	Milyen lágyan olvad a rétegmaszk széle az eredetibe
+	Creative shows everything Nano Banana drew: these don't apply.	A Kreatív mód mindent mutat, amit a Nano Banana rajzolt: ezek a beállítások nem érvényesek.
+	How Nano Banana's layer mask meets the original	Hogyan illeszkedik a Nano Banana rétegmaszkja az eredetihez

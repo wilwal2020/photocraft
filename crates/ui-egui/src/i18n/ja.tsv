@@ -4481,3 +4481,11 @@ curves	Smooth	スムーズ
 	Recording: click to pause	記録中: クリックで一時停止
 	Start recording a timelapse	タイムラプスの記録を開始
 	Timelapse recording	タイムラプスの記録
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	マスク…
+	Expand:	拡張:
+	Feather:	ぼかし:
+	How far the layer mask reaches past the area removed	レイヤーマスクが削除した範囲からどこまで広がるか
+	How softly the layer mask's edge fades into the original	レイヤーマスクの境界が元の画像にどれだけ柔らかく溶け込むか
+	Creative shows everything Nano Banana drew: these don't apply.	クリエイティブでは Nano Banana が描いたものがすべて表示されるため、これらの設定は適用されません。
+	How Nano Banana's layer mask meets the original	Nano Banana のレイヤーマスクと元の画像のつなぎ方

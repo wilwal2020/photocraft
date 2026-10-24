@@ -4297,3 +4297,11 @@ curves	Smooth	Làm mượt
 	Recording: click to pause	Đang ghi: bấm để tạm dừng
 	Start recording a timelapse	Bắt đầu ghi timelapse
 	Timelapse recording	Ghi timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Mặt nạ…
+	Expand:	Mở rộng:
+	Feather:	Làm mềm:
+	How far the layer mask reaches past the area removed	Mặt nạ lớp vượt ra ngoài vùng đã xóa bao xa
+	How softly the layer mask's edge fades into the original	Mép mặt nạ lớp hòa vào ảnh gốc mềm đến mức nào
+	Creative shows everything Nano Banana drew: these don't apply.	Chế độ Sáng tạo hiển thị mọi thứ Nano Banana đã vẽ: các thiết lập này không áp dụng.
+	How Nano Banana's layer mask meets the original	Cách mặt nạ lớp của Nano Banana nối với ảnh gốc

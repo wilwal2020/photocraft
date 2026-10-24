@@ -4843,3 +4843,11 @@ shape	Appearance	Apparence
 	Recording: click to pause	Enregistrement : cliquez pour mettre en pause
 	Start recording a timelapse	Démarrer l’enregistrement d’un timelapse
 	Timelapse recording	Enregistrement du timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Masque…
+	Expand:	Dilater :
+	Feather:	Contour progressif :
+	How far the layer mask reaches past the area removed	Jusqu’où le masque de fusion déborde de la zone supprimée
+	How softly the layer mask's edge fades into the original	Avec quelle douceur le bord du masque de fusion se fond dans l’original
+	Creative shows everything Nano Banana drew: these don't apply.	Le mode Créatif montre tout ce que Nano Banana a dessiné : ces réglages ne s’appliquent pas.
+	How Nano Banana's layer mask meets the original	Comment le masque de fusion de Nano Banana rejoint l’original

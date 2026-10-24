@@ -222,8 +222,40 @@ fn model_params(o: &crate::state::ToolOptions, model: &str, generative: &str) ->
         m.insert("mark".into(), json!(if o.remove_nano_mark == "mask" { "mask" } else { "paint" }));
         m.insert("area".into(), json!(if o.remove_area == "page" { "page" } else { "near" }));
         m.insert("creative".into(), json!(o.remove_creative));
+        if !o.remove_creative {
+            m.insert("maskExpand".into(), json!(o.remove_mask_expand.clamp(0.0, MASK_EDGE_MAX)));
+            m.insert("maskFeather".into(), json!(o.remove_mask_feather.clamp(0.0, MASK_EDGE_MAX)));
+        }
     }
     p
+}
+
+/// Most the Nano Banana mask settings take, in pixels (the engine's limit).
+const MASK_EDGE_MAX: f32 = 200.0;
+
+/// Nano Banana's mask settings: how far its layer mask grows past the area removed and how much
+/// its edge is softened, so the picture blends into the original (user request). Creative shows
+/// everything it drew instead, so they don't apply then.
+fn nano_mask_settings(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions) {
+    ui.menu_button(tl!("Mask…"), |ui| {
+        ui.add_enabled_ui(!o.remove_creative, |ui| {
+            egui::Grid::new("nano-mask-settings").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label(tl!("Expand:"));
+                crate::widgets::value_field(ui, &mut o.remove_mask_expand, 0.0..=MASK_EDGE_MAX, "px", 70.0)
+                    .on_hover_text(tl!("How far the layer mask reaches past the area removed"));
+                ui.end_row();
+                ui.label(tl!("Feather:"));
+                crate::widgets::value_field(ui, &mut o.remove_mask_feather, 0.0..=MASK_EDGE_MAX, "px", 70.0)
+                    .on_hover_text(tl!("How softly the layer mask's edge fades into the original"));
+                ui.end_row();
+            });
+        });
+        if o.remove_creative {
+            ui.label(tl!("Creative shows everything Nano Banana drew: these don't apply."));
+        }
+    })
+    .response
+    .on_hover_text(tl!("How Nano Banana's layer mask meets the original"));
 }
 
 /// The Remove tool's model as `paint.remove` takes it (an unknown saved value is LaMa).
@@ -858,6 +890,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                         crate::widgets::checkbox(ui, &mut o.remove_creative, tl!("Creative")).on_hover_text(tl!(
                             "Show everything Nano Banana drew, also what it changed around the area you remove (its layer mask fades out at the edges)"
                         ));
+                        nano_mask_settings(ui, o);
                         nano_banana_key(ui);
                     }
                 } else {
@@ -1901,10 +1934,14 @@ mod tests {
         let p = remove_params(&o);
         assert_eq!((&p["model"], &p["prompt"], &p["mark"]), (&json!("nanoBanana"), &json!("a window"), &json!("paint")));
         assert_eq!((&p["area"], &p["creative"]), (&json!("near"), &json!(false)), "close up, only the area removed");
+        assert_eq!((&p["maskExpand"], &p["maskFeather"]), (&json!(4.0), &json!(2.0)), "the mask is grown and softened by default");
+        (o.remove_mask_expand, o.remove_mask_feather) = (7.0, 1e9);
+        assert_eq!((&remove_params(&o)["maskExpand"], &remove_params(&o)["maskFeather"]), (&json!(7.0), &json!(MASK_EDGE_MAX)));
         o.remove_nano_mark = "mask".into();
         assert_eq!(remove_params(&o)["mark"], "mask");
         (o.remove_area, o.remove_creative) = ("page".into(), true);
         assert_eq!((&remove_params(&o)["area"], &remove_params(&o)["creative"]), (&json!("page"), &json!(true)));
+        assert!(remove_params(&o).get("maskExpand").is_none(), "creative shows everything: no mask settings");
         o.remove_model = "unknown".into();
         assert_eq!(remove_params(&o)["model"], "lama");
     }

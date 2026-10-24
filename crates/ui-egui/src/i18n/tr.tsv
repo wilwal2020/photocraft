@@ -4529,3 +4529,11 @@ cameraData	Lens	Lens
 	Recording: click to pause	Kaydediliyor: duraklatmak için tıklayın
 	Start recording a timelapse	Hızlandırılmış kayda başla
 	Timelapse recording	Hızlandırılmış kayıt
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maske…
+	Expand:	Genişlet:
+	Feather:	Yumuşat:
+	How far the layer mask reaches past the area removed	Katman maskesinin kaldırılan alanın ne kadar ötesine uzandığı
+	How softly the layer mask's edge fades into the original	Katman maskesinin kenarının orijinale ne kadar yumuşak geçtiği
+	Creative shows everything Nano Banana drew: these don't apply.	Yaratıcı mod, Nano Banana'nın çizdiği her şeyi gösterir: bu ayarlar uygulanmaz.
+	How Nano Banana's layer mask meets the original	Nano Banana katman maskesinin orijinalle nasıl birleştiği

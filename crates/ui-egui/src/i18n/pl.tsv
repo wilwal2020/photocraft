@@ -4420,3 +4420,11 @@ curves	Smooth	Wygładź
 	Recording: click to pause	Nagrywanie: kliknij, aby wstrzymać
 	Start recording a timelapse	Rozpocznij nagrywanie timelapse
 	Timelapse recording	Nagrywanie timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maska…
+	Expand:	Rozszerz:
+	Feather:	Wtapianie:
+	How far the layer mask reaches past the area removed	Jak daleko maska warstwy sięga poza usunięty obszar
+	How softly the layer mask's edge fades into the original	Jak łagodnie krawędź maski warstwy przechodzi w oryginał
+	Creative shows everything Nano Banana drew: these don't apply.	Tryb kreatywny pokazuje wszystko, co narysowała Nano Banana: te ustawienia nie mają zastosowania.
+	How Nano Banana's layer mask meets the original	Jak maska warstwy Nano Banana łączy się z oryginałem

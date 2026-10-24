@@ -4916,3 +4916,11 @@ shape	Appearance	Aspetto
 	Recording: click to pause	Registrazione: fai clic per mettere in pausa
 	Start recording a timelapse	Avvia la registrazione di un timelapse
 	Timelapse recording	Registrazione timelapse
+# Remove tool Nano Banana mask settings (2026-10-24)
+	Mask…	Maschera…
+	Expand:	Espandi:
+	Feather:	Sfuma:
+	How far the layer mask reaches past the area removed	Quanto la maschera di livello si estende oltre l’area rimossa
+	How softly the layer mask's edge fades into the original	Quanto dolcemente il bordo della maschera di livello sfuma nell’originale
+	Creative shows everything Nano Banana drew: these don't apply.	Creativo mostra tutto ciò che Nano Banana ha disegnato: queste impostazioni non si applicano.
+	How Nano Banana's layer mask meets the original	Come la maschera di livello di Nano Banana si unisce all’originale
