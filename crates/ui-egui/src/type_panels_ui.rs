@@ -232,7 +232,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
     let selected = app.ui.type_panels.options.filter(|o| o.0 == paragraph).map(|o| u64::from(o.1)).or(cur_id);
     let mut action: Option<(String, Value)> = None;
     let row_h = 22.0;
-    egui::ScrollArea::vertical().id_salt(("type-styles", paragraph)).max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+    // The list fills the panel above its footer (it stopped at 220 pt, as the preset panels did).
+    let list_h = (ui.available_height() - 34.0).max(88.0);
+    egui::ScrollArea::vertical().id_salt(("type-styles", paragraph)).max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
         for s in &styles {
             let id = s["id"].as_u64().unwrap_or(0);
             let name = s["name"].as_str().unwrap_or("");
@@ -678,7 +680,10 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let cols = ((width / size).floor() as usize).max(1);
     let rows = chars.len().div_ceil(cols);
     let selected = app.ui.type_panels.glyph_selected.clone();
-    egui::ScrollArea::vertical().id_salt("glyph-grid").max_height(260.0).auto_shrink([false, false]).show_rows(ui, size, rows, |ui, range| {
+    // The grid fills the panel above its info line (it stopped at 260 pt, as the preset panels
+    // did).
+    let grid_h = (ui.available_height() - 56.0).max(size * 3.0);
+    egui::ScrollArea::vertical().id_salt("glyph-grid").max_height(grid_h).auto_shrink([false, true]).show_rows(ui, size, rows, |ui, range| {
         for row in range {
             let (rect, _) = ui.allocate_exact_size(vec2(width, size), Sense::hover());
             for col in 0..cols {

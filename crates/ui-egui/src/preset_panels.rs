@@ -665,6 +665,13 @@ fn canvas_drop_rect(app: &PhotocraftApp) -> egui::Rect {
 
 // ------------------------------------------------------------------ Gradients
 
+/// The most a preset panel's list may take: the screen's height (the list itself takes no more
+/// than the panel leaves it, see [`browser`]). The lists used to stop at 260–300 pt, so a taller
+/// panel left empty space under them (user report: the Gradients panel kept one size).
+fn list_cap(ui: &egui::Ui) -> f32 {
+    ui.ctx().content_rect().height().max(120.0)
+}
+
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     let groups_src = app.session.presets.gradients.clone();
@@ -680,7 +687,7 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
-    let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
+    let max_h = list_cap(ui);
     let events =
         browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false }, &mut |ui, r, gi, ii| {
             let stops = groups_src[gi].items[ii].resolve(fg, bg);
@@ -728,7 +735,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.session.presets.pattern_groups.iter().map(|g| g.items.iter().filter_map(|id| lib.iter().find(|p| &p.id == id).cloned()).collect()).collect();
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
-    let max_h = (ui.available_height() - 40.0).clamp(90.0, 280.0);
+    let max_h = list_cap(ui);
     let ctx = ui.ctx().clone();
     let events = browser(
         ui,
@@ -841,7 +848,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "styles",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false },
+        Place { canvas, max_h: list_cap(ui), new_tip: tl!("Create new style from the selected layer"), flush: false },
         &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
             ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -885,7 +892,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "shapes",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), flush: false },
+        Place { canvas, max_h: list_cap(ui), new_tip: tl!("Create new shape from the current path"), flush: false },
         &mut |ui, r, gi, ii| {
             let tex = shape_texture(&ctx, &src[gi].items[ii]);
             ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
@@ -1079,7 +1086,9 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     }
-    egui::ScrollArea::vertical().id_salt("tool-presets").max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+    // The list fills the panel and the footer stays under it.
+    let list_h = (ui.available_height() - 36.0).clamp(48.0, list_cap(ui));
+    egui::ScrollArea::vertical().id_salt("tool-presets").max_height(list_h).auto_shrink([false, true]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         if items.is_empty() {
             empty(ui, if only { tl!("No presets for the current tool.") } else { tl!("No tool presets.") });
@@ -1295,6 +1304,41 @@ mod tests {
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.sync_views();
         (app, ctx)
+    }
+
+    /// User report: the Gradients panel kept one size however tall the panel was. Each preset
+    /// panel's list now grows with the panel (and still scrolls in a short one).
+    #[test]
+    fn preset_lists_grow_with_the_panel() {
+        use egui_kittest::Harness;
+        // Patterns and Styles have too few built-in presets to fill a list; they share the code
+        // (`list_cap`).
+        type Panel = fn(&mut PhotocraftApp, &mut egui::Ui);
+        let panels: [(&str, Panel); 2] = [("gradients", gradients_panel), ("shapes", shapes_panel)];
+        for (name, draw) in panels {
+            let list_height = |height: f32| {
+                let (mut app, _) = app();
+                // Every folder open, so the list is longer than either panel.
+                let groups: Vec<String> = match name {
+                    "gradients" => app.session.presets.gradients.iter().map(|g| g.name.clone()).collect(),
+                    _ => app.session.presets.shapes.iter().map(|g| g.name.clone()).collect(),
+                };
+                app.ui.presets_ui.toggled.extend(groups.iter().skip(1).map(|g| format!("{name}/{g}")));
+                let mut h = Harness::builder().with_size(vec2(300.0, height)).build_ui_state(move |ui, app: &mut PhotocraftApp| draw(app, ui), app);
+                h.run_steps(3);
+                // The footer's New button sits right under the list.
+                use egui_kittest::kittest::Queryable;
+                let tip = match name {
+                    "gradients" => "Create new gradient",
+                    _ => "Create new shape from the current path",
+                };
+                h.query_by_label(tip).map_or(0.0, |n| n.rect().top())
+            };
+            let (short, tall) = (list_height(420.0), list_height(1100.0));
+            assert!(short > 0.0 && short < 420.0, "{name}: the footer stays in a short panel ({short})");
+            // The lists stopped at 260–300 pt before, the footer near 320 pt whatever the panel.
+            assert!(tall > short + 100.0 && tall < 1100.0, "{name}: the list grows with the panel, footer at {tall} (was {short})");
+        }
     }
 
     #[test]

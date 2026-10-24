@@ -129,7 +129,9 @@ fn check_mips(gpu: &GpuCanvas) {
 }
 
 /// The compositor built on a thread at start ([`GpuCanvas::warm_up`]) is the one the first
-/// composite takes, and a canvas dropped while one builds waits for it.
+/// composite takes once it is done; until then the CPU draws instead of the UI waiting (user
+/// report: the first new document froze for 15 s while D3D12 compiled the shaders). A canvas
+/// dropped while one builds waits for it.
 #[test]
 fn the_warmed_up_compositor_composites_the_first_document() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -139,13 +141,31 @@ fn the_warmed_up_compositor_composites_the_first_document() {
         return;
     };
     let gpu = GpuCanvas::new(&rs);
-    gpu.warm_up();
+    // A build that is still running (held back until the first refresh has been drawn).
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    {
+        let mut r = gpu.rs.renderer.write();
+        let res = r.callback_resources.get_mut::<Resources>().unwrap();
+        let (device, format) = (gpu.rs.device.clone(), photocraft_gpu::Compositor::preferred_acc_format(&gpu.rs.adapter));
+        res.compositor_warmup = Some(std::thread::spawn(move || {
+            let _ = wait.recv();
+            photocraft_gpu::Compositor::try_new_with_format(&device, format)
+        }));
+    }
     gpu.warm_up();
     let building = |gpu: &GpuCanvas| gpu.rs.renderer.read().callback_resources.get::<Resources>().is_some_and(|r| r.compositor_warmup.is_some());
     assert!(building(&gpu), "building on a thread");
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", serde_json::json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     let doc = s.active().unwrap().doc.clone();
+    let r = gpu.refresh(doc.id.0, &doc, None, None);
+    assert!(!r.kind.starts_with("gpu"), "drawn on the CPU, not waited for: {r:?}");
+    assert_eq!(r.fallback.as_deref(), Some(COMPOSITOR_BUILDING));
+    assert!(building(&gpu), "still building");
+    go.send(()).unwrap();
+    while gpu.rs.renderer.read().callback_resources.get::<Resources>().and_then(|r| r.compositor_warmup.as_ref()).is_some_and(|h| !h.is_finished()) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let r = gpu.refresh(doc.id.0, &doc, None, None);
     assert_eq!(r.kind, "gpu-full", "{r:?}");
     assert!(!building(&gpu), "taken by the first composite");

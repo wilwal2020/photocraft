@@ -631,6 +631,49 @@ fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wg
     (out, error)
 }
 
+/// Each key's pipeline (`None` for a kernel without one) and the error building it, built on up to
+/// eight threads (each with its own error scopes: wgpu keeps them per thread). Serial on the web.
+fn build_all<K: Copy + Send + Sync>(
+    device: &wgpu::Device,
+    keys: &[K],
+    make: impl Fn(K) -> Option<wgpu::RenderPipeline> + Sync,
+) -> Vec<(K, Option<wgpu::RenderPipeline>, Option<wgpu::Error>)> {
+    let one = |key: K| {
+        let (p, e) = first_error(device, || make(key));
+        (key, p, e)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get).clamp(1, 8).min(keys.len());
+        if threads > 1 {
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let mut out: Vec<(usize, _)> = std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            let mut mine = Vec::new();
+                            loop {
+                                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(&key) = keys.get(i) else { break };
+                                mine.push((i, one(key)));
+                            }
+                            mine
+                        })
+                    })
+                    // Spawn them all before joining any.
+                    .collect();
+                // A worker that panicked (it never should) loses only its pipelines, which then
+                // fall back as a missing pipeline does.
+                workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
+            });
+            // Back in the keys' order, so the first error reported is the first kernel's.
+            out.sort_by_key(|(i, _)| *i);
+            return out.into_iter().map(|(_, r)| r).collect();
+        }
+    }
+    keys.iter().map(|&k| one(k)).collect()
+}
+
 /// Unwatched native callers need GPU errors to become `Unsupported` instead of reaching wgpu's
 /// default panic handler. Watched callers keep their fault callbacks, which stop work promptly
 /// and update the health flag shared with the canvas.
@@ -665,9 +708,9 @@ impl Compositor {
     /// to the CPU compositor. Where errors only arrive asynchronously (WebGPU), creation is assumed
     /// to have worked.
     pub fn try_new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, Unsupported> {
-        match first_error(device, || Self::new_with_format(device, acc_format)) {
-            (comp, None) => Ok(comp),
-            (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
+        match first_error(device, || Self::build(device, acc_format)) {
+            ((comp, None), None) => Ok(comp),
+            ((_, Some(e)), _) | (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
         }
     }
 
@@ -675,6 +718,18 @@ impl Compositor {
     /// `Rgba16Float` on adapters that can't render to `Rgba32Float` (e.g. some Intel Vulkan drivers),
     /// which otherwise panics at render-pipeline creation. See `Compositor::preferred_acc_format`.
     pub fn new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Self {
+        let (comp, error) = Self::build(device, acc_format);
+        if let Some(e) = error {
+            log::warn!("GPU compositor: a pipeline didn't build: {e}");
+        }
+        comp
+    }
+
+    /// The compositor, and the first error building a kernel's pipeline (on a worker thread, where
+    /// the caller's error scopes don't reach). Pipelines build in parallel: on D3D12 each one
+    /// compiles the whole shader with FXC, optimizing, and one after another they froze the first
+    /// new document for about 15 s (user report).
+    fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> (Self, Option<wgpu::Error>) {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_compose_uniforms"),
@@ -709,19 +764,33 @@ impl Compositor {
                 cache: None,
             }))
         };
-        let mut pipelines: HashMap<_, _> =
-            Kernel::DRAWN.iter().filter(|k| !k.is_map()).filter_map(|&k| Some(((k, acc_format), pipeline(k, acc_format)?))).collect();
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        let maps = Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)]);
-        let (maps, map_error) = first_error(device, || maps.filter_map(|key| Some((key, pipeline(key.0, key.1)?))).collect::<Vec<_>>());
+        let keys: Vec<_> = Kernel::DRAWN
+            .iter()
+            .filter(|k| !k.is_map())
+            .map(|&k| (k, acc_format))
+            .chain(Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)]))
+            .collect();
+        let built = build_all(device, &keys, |key| pipeline(key.0, key.1));
+        let mut pipelines = HashMap::new();
+        let (mut maps, mut error, mut map_error) = (Vec::new(), None, None);
+        for (key, p, e) in built {
+            if key.0.is_map() {
+                map_error = map_error.or(e);
+                maps.extend(p.map(|p| (key, p)));
+            } else {
+                error = error.or(e);
+                pipelines.extend(p.map(|p| (key, p)));
+            }
+        }
         if let Some(e) = &map_error {
             log::info!("GPU compositor: no effect-map pipelines ({e}); layer effects use the CPU");
         } else {
             pipelines.extend(maps);
         }
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
-        Self {
+        let comp = Self {
             kit: Kit { pipelines, bgl0, bgl1, dummy },
             pool: Vec::new(),
             residents: HashMap::new(),
@@ -751,7 +820,8 @@ impl Compositor {
             health: None,
             timer: None,
         }
-        .with_texture_limit(device.limits().max_texture_dimension_2d)
+        .with_texture_limit(device.limits().max_texture_dimension_2d);
+        (comp, error)
     }
 
     fn with_texture_limit(mut self, max: u32) -> Self {

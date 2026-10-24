@@ -662,6 +662,9 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 let t = Tokens::get(ui.ctx());
                 ui.label(egui::RichText::new(tl!("The gradient the Gradient tool paints with")).color(t.text_dim));
                 ui.add_space(6.0);
+                // The presets, as at the top of Photoshop's Gradient Editor (user request).
+                properties_panel::presets(app, ui);
+                ui.add_space(6.0);
                 preset_stops_editor(app, ui);
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {

@@ -522,6 +522,13 @@ impl GpuCanvas {
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
         }
+        // Still being built on its thread (seconds on D3D12): the CPU draws this refresh rather
+        // than the UI waiting for it (user report: the first new document froze for 15 s). The
+        // next refresh after it is done uses it.
+        #[cfg(not(target_arch = "wasm32"))]
+        if res.compositor.is_none() && res.compositor_warmup.as_ref().is_some_and(|h| !h.is_finished()) {
+            return Err(photocraft_gpu::Unsupported(COMPOSITOR_BUILDING.into()));
+        }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
             None => match self.new_compositor(res) {
@@ -1468,6 +1475,9 @@ pub fn vram_share(vram: u64) -> u64 {
 }
 
 /// Why a document whose display textures don't fit [`canvas_budget`] is drawn on the CPU canvas.
+/// [`GpuCanvas::composite`]'s answer while the compositor is still being built: the CPU draws.
+pub const COMPOSITOR_BUILDING: &str = "the GPU compositor is still being built";
+
 pub const OVER_CANVAS_BUDGET: &str = "the canvas exceeds the GPU texture budget; drawing it on the CPU canvas";
 
 /// [`Refresh::kind`] when the document's display textures don't fit [`canvas_budget`]: nothing

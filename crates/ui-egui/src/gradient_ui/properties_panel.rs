@@ -26,6 +26,11 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) 
 }
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    // The presets, as at the top of Photoshop's Gradient Editor (user request): a click puts one
+    // on this layer.
+    if props_layout::section(ui, "gradient-fill-presets", "Presets") {
+        presets(app, ui);
+    }
     if props_layout::section(ui, "gradient-fill-stops", "Gradient")
         && let Some(fill) = current_fill(app, layer.id)
     {
@@ -119,6 +124,43 @@ fn numeric_row(ui: &mut egui::Ui, id: &str, name: &str, current: f32, range: std
         .inner
     })
     .inner
+}
+
+/// The gradient presets by folder, as swatches: a click selects one (`gradient.presets.select`),
+/// which also puts it on the selected gradient fill layer, as in Photoshop's Gradient Editor.
+/// Folders start closed but the first; each keeps its state.
+pub(super) fn presets(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let groups = app.session.presets.gradients.clone();
+    let current = app.session.presets.gradient.name.clone();
+    let mut picked = None;
+    egui::ScrollArea::vertical().id_salt("gradient-presets").max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+        for (gi, g) in groups.iter().enumerate() {
+            egui::CollapsingHeader::new(egui::RichText::new(&g.name).color(t.text_dim)).id_salt(("gradient-preset-group", gi)).default_open(gi == 0).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    for item in &g.items {
+                        let (r, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), egui::Sense::click());
+                        crate::preset_panels::paint_gradient(ui, r.shrink(1.0), &item.resolve(fg, bg));
+                        let selected = item.name == current;
+                        let stroke = if selected { egui::Stroke::new(2.0, t.accent) } else if resp.hovered() { egui::Stroke::new(1.0, t.text) } else { egui::Stroke::new(1.0, t.card_border) };
+                        ui.painter().rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &item.name));
+                        if resp.on_hover_text(&item.name).clicked() {
+                            picked = Some(item.name.clone());
+                        }
+                    }
+                });
+            });
+        }
+    });
+    if let Some(name) = picked
+        && let Err(e) = app.run("gradient.presets.select", json!({"preset": name}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
 }
 
 /// Small procedural previews: no proprietary icon assets, colours follow the theme.
@@ -272,6 +314,28 @@ mod tests {
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(3);
+    }
+
+    /// User request: the presets open from the gradient itself, as in Photoshop's Gradient
+    /// Editor. A swatch in the Properties panel puts that preset on the layer, in one step.
+    #[test]
+    fn a_preset_swatch_puts_the_preset_on_the_layer() {
+        let app = app();
+        let group = app.session.presets.gradients[0].clone();
+        let preset = group.items.iter().find(|i| i.name != app.session.presets.gradient.name).unwrap().clone();
+        let mut h = Harness::builder().with_size(vec2(320.0, 900.0)).build_ui_state(panel, app);
+        h.run_steps(3);
+        let past = h.state().session.active().unwrap().history.past_len();
+        h.get_by_label(&preset.name).click();
+        h.run_steps(3);
+        let (colour, _) = preset.fill_stops(h.state().session.tools.foreground, h.state().session.tools.background);
+        let want: Vec<[f32; 4]> = colour.iter().map(|s| { let c = s.1.to_rgb(); [c[0], c[1], c[2], s.1.alpha] }).collect();
+        let Fill::Gradient { stops, .. } = fill(h.state()) else { panic!() };
+        let got: Vec<[f32; 4]> = stops.iter().map(|s| { let c = s.1.to_rgb(); [c[0], c[1], c[2], s.1.alpha] }).collect();
+        assert_eq!(got.len(), want.len(), "the preset's stops");
+        assert!(got.iter().zip(&want).all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-3)), "{got:?} vs {want:?}");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), past + 1, "one step");
+        assert_eq!(h.state().session.presets.gradient.name, preset.name);
     }
 
     /// A Photoshop gradient keeps its method: the panel shows it and changes it in one step.
