@@ -5017,6 +5017,7 @@ dependencies = [
  "keyring",
  "log",
  "ort",
+ "photocraft-algo",
  "photocraft-codecs",
  "photocraft-geom",
  "photocraft-raster",

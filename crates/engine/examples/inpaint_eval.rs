@@ -7,7 +7,8 @@
 //! ```
 //!
 //! Each `x,y,w,h` is an elliptical hole (`--rect`: a rectangle, as a painted-over caption). Variants: `plain` (no refinement, no correction), `lama`
-//! (the Remove tool's LaMa fill), `lama-high` (its Quality: High, 1024 crops)
+//! (the Remove tool's LaMa fill), `no-detail` (that without its texture pass), `lama-high` (its
+//! Quality: High, 1024 crops)
 //! and, with `--diffusion`, the diffusion model.
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType};
@@ -35,7 +36,9 @@ fn main() {
         let v: Vec<i32> = spec.split(',').filter_map(|s| s.trim().parse().ok()).collect();
         let [x, y, hw, hh] = v[..] else { panic!("bad hole {spec}") };
         let hole_rect = Rect::new(x, y, x + hw, y + hh).intersect(&canvas);
-        let window = hole_rect.inflate(4).intersect(&canvas);
+        // The Remove tool's sampling margin: three quarters of the hole's extent (at least 32).
+        let margin = (hole_rect.width().max(hole_rect.height()) * 3 / 4).max(32) as i32;
+        let window = hole_rect.inflate(margin).intersect(&canvas);
         let (ww, wh) = (window.width() as usize, window.height() as usize);
         let (cx, cy, rx, ry) = (f64::from(x) + f64::from(hw) / 2.0, f64::from(y) + f64::from(hh) / 2.0, f64::from(hw) / 2.0, f64::from(hh) / 2.0);
         let mut hole = vec![false; ww * wh];
@@ -93,7 +96,8 @@ fn main() {
         };
         // `PHOTOCRAFT_EVAL_ONLY_DIFFUSION`: no LaMa (its GPU session stays unloaded).
         if std::env::var_os("PHOTOCRAFT_EVAL_ONLY_DIFFUSION").is_none() {
-            run("plain", Options { refine: false, correct: false, ..LAMA }, false);
+            run("plain", Options { refine: false, correct: false, detail: false, ..LAMA }, false);
+            run("no-detail", Options { detail: false, ..LAMA }, false);
             run("lama", LAMA, false);
             run("lama-high", LAMA_QUALITY, false);
         }

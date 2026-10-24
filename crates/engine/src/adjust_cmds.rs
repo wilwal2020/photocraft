@@ -127,9 +127,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         loaded = Some((f, base_name(file_name)));
     }
     if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
-        let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
-        let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
-        loaded = Some((f, base_name(path)));
+        let f = read_lut(path).map_err(|e| bad(CMD, e))?;
+        loaded = Some(((*f).clone(), base_name(path)));
     }
     if let Some((f, label)) = loaded {
         if !f.domain_is_default() {
@@ -204,6 +203,54 @@ pub fn folder_luts(dir: &str) -> Vec<(String, String)> {
 #[cfg(target_arch = "wasm32")]
 pub fn folder_luts(_: &str) -> Vec<(String, String)> {
     Vec::new()
+}
+
+/// LUT files read lately: path, the length and modification time it was read at, the table.
+type LutCache = Vec<(String, (u64, Option<std::time::SystemTime>), std::sync::Arc<photocraft_cms::lutfile::LutFile>)>;
+
+/// The LUT files read lately, newest first. The Color Lookup dropdown previews a LUT folder's
+/// files as the wheel steps through them (user report: it couldn't), and reading and parsing one
+/// per step (a 33³ `.cube` is about a megabyte of text) would stall every step.
+static LUT_CACHE: std::sync::Mutex<LutCache> = std::sync::Mutex::new(Vec::new());
+
+/// Most files [`LUT_CACHE`] keeps (a 33³ table is about 430 KB).
+const LUT_CACHE_LEN: usize = 12;
+
+/// The LUT file at `path`, parsed: from [`LUT_CACHE`] while the file's length and modification
+/// time are what they were, else read again. A file that can't be read or parsed is an error
+/// (and isn't kept).
+fn read_lut(path: &str) -> std::result::Result<std::sync::Arc<photocraft_cms::lutfile::LutFile>, String> {
+    let stamp = file_stamp(path);
+    let mut cache = LUT_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(st) = stamp
+        && let Some(i) = cache.iter().position(|(p, s, _)| p == path && *s == st)
+    {
+        let hit = cache.remove(i);
+        let f = std::sync::Arc::clone(&hit.2);
+        cache.insert(0, hit);
+        return Ok(f);
+    }
+    // Not held while reading: a slow share shouldn't stall a preview of another file.
+    drop(cache);
+    let bytes = read_file(path).ok_or_else(|| format!("can't read {path}"))?;
+    let f = std::sync::Arc::new(photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| format!("{path}: {}", e.0))?);
+    if let Some(st) = stamp {
+        let mut cache = LUT_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.retain(|(p, _, _)| p != path);
+        cache.insert(0, (path.to_string(), st, std::sync::Arc::clone(&f)));
+        cache.truncate(LUT_CACHE_LEN);
+    }
+    Ok(f)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_stamp(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()))
+}
+#[cfg(target_arch = "wasm32")]
+fn file_stamp(_: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
+    None
 }
 
 #[cfg(not(target_arch = "wasm32"))]

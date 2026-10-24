@@ -1554,13 +1554,13 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, op
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, false);
+    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, false, None);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false, true);
+    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false, true, None);
     (!chosen.is_empty(), hovered)
 }
 
@@ -1572,10 +1572,11 @@ const BLEND_BREAK_H: f32 = 7.0;
 const BLEND_MIN_ROW_H: f32 = 14.0;
 
 /// The row height that fits a blend menu of `rows` options and `breaks` section lines in `room`
-/// points: [`BLEND_ROW_H`] when it fits, tighter down to [`BLEND_MIN_ROW_H`] when it doesn't.
-fn blend_row_height(room: f32, rows: usize, breaks: usize) -> f32 {
+/// points: `max` ([`BLEND_ROW_H`]) when it fits, tighter down to [`BLEND_MIN_ROW_H`] when it
+/// doesn't.
+fn blend_row_height(room: f32, rows: usize, breaks: usize, max: f32) -> f32 {
     let fit = (room - breaks as f32 * BLEND_BREAK_H - 12.0) / rows.max(1) as f32;
-    if fit.is_finite() { fit.clamp(BLEND_MIN_ROW_H, BLEND_ROW_H) } else { BLEND_ROW_H }
+    if fit.is_finite() { fit.clamp(BLEND_MIN_ROW_H, max.max(BLEND_MIN_ROW_H)) } else { max }
 }
 
 /// The section of Photoshop's blend mode menus a mode's label falls in (Normal, darken, lighten,
@@ -1613,8 +1614,27 @@ pub(crate) fn blend_breaks(labels: &[&str]) -> Option<Vec<usize>> {
 /// in order (one per notch; the last is `current`) and the option under the pointer in the open
 /// list, none while the pointer rests where the wheel last stepped.
 pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, current, options, width, true, true)
+    dropdown_with(ui, id, current, options, width, true, true, None)
 }
+
+/// [`dropdown_wheel_hovered`] whose open list shows every option at once in compact rows, with a
+/// line above each option in `sections`, moving up as far as it must to fit the window (as a
+/// blend mode menu does), instead of a short list that scrolls (Color Lookup's looks, as in
+/// Photoshop). Option labels are shown as they are (file names), not translated.
+pub fn dropdown_sections<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    sections: &[usize],
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, current, options, width, true, false, Some(sections))
+}
+
+/// Row height of a [`dropdown_sections`] list: tighter than a blend menu's, as such a list can be
+/// long (a LUT folder).
+const SECTION_ROW_H: f32 = 16.0;
 
 #[allow(clippy::too_many_arguments)]
 fn dropdown_with<T: PartialEq + Clone>(
@@ -1625,6 +1645,8 @@ fn dropdown_with<T: PartialEq + Clone>(
     width: f32,
     wheel: bool,
     translate: bool,
+    // Show every option at once, with section lines above these ([`dropdown_sections`]).
+    sections: Option<&[usize]>,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -1640,7 +1662,8 @@ fn dropdown_with<T: PartialEq + Clone>(
     // The list opens on the press: press, drag onto an option and release to choose it (#2735).
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     // A blend mode menu shows every mode at once, in Photoshop's sections.
-    let breaks = blend_breaks(&options.iter().map(|(_, l)| *l).collect::<Vec<_>>());
+    let max_row = if sections.is_some() { SECTION_ROW_H } else { BLEND_ROW_H };
+    let breaks = sections.map(<[usize]>::to_vec).or_else(|| blend_breaks(&options.iter().map(|(_, l)| *l).collect::<Vec<_>>()));
     // A blend list opens at the button and moves up as far as it must to fit the window, as in
     // Photoshop ([`blend_list`]): when even the whole window is too short, the rows tighten (to
     // [`BLEND_MIN_ROW_H`]) so every mode still shows.
@@ -1654,7 +1677,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         (Some(_), Some(kept)) => kept,
         // Never below the text's own height: every row stays the same size.
         // Whole points: a fractional row height is rounded for the highlighted row only.
-        (Some(b), None) => blend_row_height(below, options.len(), b.len()).max(ui.text_style_height(&egui::TextStyle::Button) + 2.0).ceil(),
+        (Some(b), None) => blend_row_height(below, options.len(), b.len(), max_row).max(ui.text_style_height(&egui::TextStyle::Button) + 2.0).ceil(),
         (None, _) => BLEND_ROW_H,
     };
     if breaks.is_some() {
@@ -3210,11 +3233,11 @@ mod blend_menu_tests {
         assert!(super::blend_breaks(&["Pixels", "Inches", "Percent"]).is_none());
         assert!(super::blend_breaks(&["Normal", "Multiply", "Screen"]).is_none(), "a few modes aren't the full menu");
         // Rows tighten to fit a short window, within limits.
-        assert_eq!(super::blend_row_height(1000.0, 28, 5), super::BLEND_ROW_H);
-        let tight = super::blend_row_height(450.0, 28, 5);
+        assert_eq!(super::blend_row_height(1000.0, 28, 5, super::BLEND_ROW_H), super::BLEND_ROW_H);
+        let tight = super::blend_row_height(450.0, 28, 5, super::BLEND_ROW_H);
         assert!((super::BLEND_MIN_ROW_H..super::BLEND_ROW_H).contains(&tight), "{tight}");
-        assert_eq!(super::blend_row_height(10.0, 28, 5), super::BLEND_MIN_ROW_H);
-        assert_eq!(super::blend_row_height(f32::NAN, 28, 5), super::BLEND_ROW_H);
+        assert_eq!(super::blend_row_height(10.0, 28, 5, super::BLEND_ROW_H), super::BLEND_MIN_ROW_H);
+        assert_eq!(super::blend_row_height(f32::NAN, 28, 5, super::BLEND_ROW_H), super::BLEND_ROW_H);
     }
 }
 #[cfg(test)]

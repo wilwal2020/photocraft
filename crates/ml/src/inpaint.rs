@@ -13,7 +13,9 @@
 //! Each fill is corrected before it is used (`correct`): the model's drift in tone, measured on
 //! the known pixels at the hole's edge, is taken out smoothly across the fill, and a crop whose
 //! surroundings are neutral (a black-and-white manga page, even in an RGB document) gets a
-//! neutral fill.
+//! neutral fill. LaMa's finished fill then has its small wanderings in tone taken out and the
+//! fine texture it smoothed away (grain, a halftone screen) quilted back in from around the hole
+//! (`restore_detail`).
 //!
 //! The model sees colour only, as sRGB-encoded values from 0 to 1 (32-bit documents hold linear
 //! light and are encoded on the way in and decoded on the way out). It needs opaque surroundings:
@@ -186,10 +188,13 @@ pub struct Options {
     /// Refine in rings from the edge inwards (a model that can't use a hint); else all at once,
     /// each tile hinted with the shrunk fill.
     pub rings: bool,
+    /// Take the model's small wanderings in tone out and put back the fine texture (grain, a
+    /// halftone screen) it smoothed away ([`restore_detail`]).
+    pub detail: bool,
 }
 
-/// LaMa's: 512 square, refined, corrected.
-pub const LAMA: Options = Options { side: SIDE, refine: true, max_runs: 48, correct: true, rings: true };
+/// LaMa's: 512 square, refined, corrected, its tone settled and its texture restored.
+pub const LAMA: Options = Options { side: SIDE, refine: true, max_runs: 48, correct: true, rings: true, detail: true };
 
 /// LaMa's Quality mode (the Remove tool's Quality: High): the same model at 1024 square, so a
 /// hole up to 896 pixels across is filled 1:1 instead of shrunk to 512, and a larger one is shrunk
@@ -197,10 +202,10 @@ pub const LAMA: Options = Options { side: SIDE, refine: true, max_runs: 48, corr
 /// fewer runs for a large hole. Measured on a public-domain photo (RTX 5070 Laptop, DirectML): a
 /// 700 × 420 hole kept 61 % of its surroundings' sharpness instead of 43 %, in 1.3 s instead of
 /// 1.8 s. Averaging each run with a run on the mirrored crop was tried and blurred texture.
-pub const LAMA_QUALITY: Options = Options { side: 1024, refine: true, max_runs: 24, correct: true, rings: true };
+pub const LAMA_QUALITY: Options = Options { side: 1024, refine: true, max_runs: 24, correct: true, rings: true, detail: true };
 
 /// Stable Diffusion's: 512 square, refined in one hinted pass, corrected.
-pub const DIFFUSION: Options = Options { side: 512, refine: true, max_runs: 24, correct: true, rings: false };
+pub const DIFFUSION: Options = Options { side: 512, refine: true, max_runs: 24, correct: true, rings: false, detail: false };
 
 /// The square crop the model sees for `group`: its extent plus context, at least [`SIDE`],
 /// centred on it and moved inside the canvas. A group up to `SIDE - 2 × FULL_RES_MARGIN` across
@@ -812,7 +817,40 @@ pub fn fill_from(
         }
         ctl.progress((gi + 1) as f32 / groups.len() as f32);
     }
+    if opts.detail {
+        restore_detail(req, &mut out, ctl)?;
+    }
     Ok(out)
+}
+
+/// Make the fill look like its surroundings up close ([`photocraft_algo::detail`], in the model's
+/// colour space; user report: LaMa's fills in a grainy sky showed as blotches once the contrast
+/// went up, and on a halftone page its dots were grey and irregular): its small wanderings in
+/// tone are taken out, and where its detail falls short of its surroundings', theirs is quilted
+/// in. Pixels the model saw as unknown outside the hole (transparent ones, when outpainting) are
+/// no source, and an outpainting's tone is the model's: there is nothing on the far side to
+/// interpolate it from.
+fn restore_detail(req: &Request, out: &mut [f32], ctl: &Interrupt) -> Result<(), MlError> {
+    let (w, h) = (req.window.width() as usize, req.window.height() as usize);
+    let cc = req.colours.channels();
+    let ch = req.ch;
+    let enc = |v: f32| if req.linear { encode(v) } else { v };
+    let buf: Vec<f32> = out.chunks_exact(ch).flat_map(|px| (0..cc).map(move |c| enc(px.get(c).copied().unwrap_or(0.0)))).collect();
+    let unknown: Vec<bool> =
+        req.hole.iter().zip(out.chunks_exact(ch)).map(|(m, px)| *m || req.alpha.is_some_and(|a| px.get(a).is_some_and(|v| *v < OPAQUE))).collect();
+    let params = photocraft_algo::detail::Params { tone: !req.transparent_unknown, ..Default::default() };
+    let done = photocraft_algo::detail::restore_with(w, h, cc, cc, &buf, &unknown, &params, ctl)?;
+    for (k, m) in req.hole.iter().enumerate() {
+        if !*m {
+            continue;
+        }
+        for c in 0..cc {
+            if let (Some(d), Some(v)) = (out.get_mut(k * ch + c), done.get(k * cc + c)) {
+                *d = if req.linear { decode(*v) } else { v.clamp(0.0, 1.0) };
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The depth of each refinement ring, in pixels.
@@ -1092,7 +1130,7 @@ mod tests {
         let (side, n) = (256usize, 256 * 256);
         let at = |x: i32, y: i32| ((y + 68) as usize) * side + (x + 28) as usize;
         let mut seen = None;
-        let opts = Options { side, refine: false, max_runs: 1, correct: false, rings: false };
+        let opts = Options { side, refine: false, max_runs: 1, correct: false, rings: false, detail: false };
         let out = fill_with(
             &req,
             &mut |r| read(r),
@@ -1148,7 +1186,8 @@ mod tests {
             Request { canvas, window, hole: &hole, pixels: &pixels, ch, colours: Colours::Rgb, alpha: Some(3), linear: false, transparent_unknown: false };
         let mut reads = Vec::new();
         let mut calls = 0;
-        let out = fill(
+        // The model's fill as it is (the tone pass would make this flat one a gradient).
+        let out = fill_with(
             &req,
             &mut |r| {
                 reads.push(r);
@@ -1161,6 +1200,7 @@ mod tests {
                 mean_model(rgb, m, None)
             },
             &Interrupt::NONE,
+            &Options { detail: false, ..LAMA },
         )
         .unwrap();
         assert_eq!(calls, 1);
@@ -1434,8 +1474,14 @@ mod tests {
         let mid = &out[(50 * 100 + 50) * 3..(50 * 100 + 50) * 3 + 3];
         assert!(mid.iter().all(|v| (v - 0.9).abs() < 0.01), "{mid:?}");
         // Uncorrected it is off.
-        let raw = fill_with(&req, &mut |r| vec![0.9f32; area(r) * 3], &mut |rgb, m, _| drifting(rgb, m), &Interrupt::NONE, &Options { correct: false, ..LAMA })
-            .unwrap();
+        let raw = fill_with(
+            &req,
+            &mut |r| vec![0.9f32; area(r) * 3],
+            &mut |rgb, m, _| drifting(rgb, m),
+            &Interrupt::NONE,
+            &Options { correct: false, detail: false, ..LAMA },
+        )
+        .unwrap();
         assert!((raw[(50 * 100 + 50) * 3] - 0.82).abs() < 0.01);
         // Grey surroundings and a model that tints: a grey fill.
         let tinting = |rgb: &[f32], m: &[f32]| -> Result<Vec<f32>, MlError> {

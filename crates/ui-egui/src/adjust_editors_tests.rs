@@ -201,6 +201,68 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
     assert!(h.state().live_adjust.is_none(), "the completed wheel gesture is committed");
 }
 
+/// User report: the wheel stepped through the built-in looks but not the LUT folder's files
+/// (Photoshop's 3DLUTs folder), and the open list scrolled a few at a time. The wheel previews a
+/// folder file too and commits it at rest, and the open list shows every look at once.
+#[test]
+fn color_lookup_wheel_reaches_the_lut_folder_and_the_list_shows_every_look() {
+    const CUBE: &str = "LUT_3D_SIZE 2
+0 0 0
+1 0 0
+0 1 0
+1 1 0
+0 0 1
+1 0 1
+0 1 1
+1 1 1
+";
+    let tmp = tempfile::tempdir().unwrap();
+    let names: Vec<String> = (0..30).map(|i| format!("look{i:02}.cube")).collect();
+    for n in &names {
+        std::fs::write(tmp.path().join(n), CUBE).unwrap();
+    }
+    let mut h = app_harness("colorLookup", "rgb", 8);
+    let last = photocraft_engine::adjust_cmds::LOOKS.last().unwrap().0;
+    let (id, _) = layer(&h);
+    h.state_mut().run("prefs.set", json!({"path": "fileHandling.lutFolder", "value": tmp.path().to_str().unwrap()})).unwrap();
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "lut": last})).unwrap();
+    // The folder is scanned on a worker thread.
+    for _ in 0..30 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let label = label_rect(&h, "3D LUT File").unwrap();
+    let picker = h
+        .query_all_by_role(egui::accesskit::Role::ComboBox)
+        .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
+        .unwrap()
+        .rect();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.hover_at(picker.center());
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, -1.0), phase: egui::TouchPhase::Move, modifiers: Default::default() });
+    h.run_steps(1);
+    let previewed = h.state().live_adjust.as_ref().and_then(|(_, p)| p.get("file").and_then(serde_json::Value::as_str).map(str::to_owned));
+    assert!(previewed.as_deref().is_some_and(|f| f.ends_with("look00.cube")), "the wheel previews the folder's first file: {:?}", h.state().live_adjust);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "a preview, not an edit");
+    h.run_steps(6);
+    let (_, after) = layer(&h);
+    let Adjustment::ColorLookup { name, lut, .. } = after else { panic!("Color Lookup layer") };
+    assert_eq!((name.as_str(), lut.is_some()), ("look00.cube", true));
+    // Open: the first look and the folder's last file show at once, inside the window.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
+        .unwrap()
+        .click();
+    h.run_steps(2);
+    let screen = h.ctx.content_rect();
+    for text in ["Load 3D LUT…", "Warm Filter", "look29.cube"] {
+        let r = h.query_all_by_label(text).last().unwrap_or_else(|| panic!("{text} not listed")).rect();
+        assert!(screen.contains_rect(r), "{text} at {r:?} is outside {screen:?}");
+        assert!(r.height() <= 17.0, "{text}: rows are compact, not {}", r.height());
+    }
+}
+
 fn curve_of(a: &Adjustment) -> Vec<[f32; 2]> {
     match a {
         Adjustment::Curves { master, .. } => master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect(),

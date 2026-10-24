@@ -163,6 +163,16 @@ fn current_lookup(name: &str, has_lut: bool, folder: &[(String, String)]) -> Str
     folder.iter().find(|(file, _)| file == name).map_or_else(|| "custom".into(), |(_, path)| format!("{FOLDER_LUT}{path}"))
 }
 
+/// The dropdown key a wheel preview's params show ([`lookup_params`] backwards), if they pick a
+/// look.
+fn previewed_lookup(params: &Value) -> Option<String> {
+    match (params.get("lut").and_then(Value::as_str), params.get("file").and_then(Value::as_str)) {
+        (Some(lut), _) => Some(lut.to_owned()),
+        (None, Some(path)) => Some(format!("{FOLDER_LUT}{path}")),
+        (None, None) => None,
+    }
+}
+
 /// `layer.setAdjustment` params for a dropdown key: a folder file is read and embedded like
 /// Load 3D LUT… does; anything else is a built-in id or `none`.
 fn lookup_params(key: &str) -> Value {
@@ -180,20 +190,20 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let builtins = photocraft_engine::adjust_cmds::LOOKS;
     let folder = folder_luts(app, ui.ctx());
     let current = current_lookup(name, lut.is_some(), &folder);
-    let current = app
-        .live_adjust
-        .as_ref()
-        .filter(|(layer, params)| *layer == id && params.get("lut").is_some())
-        .and_then(|(_, params)| params.get("lut").and_then(Value::as_str))
-        .map(str::to_owned)
-        .unwrap_or(current);
+    let current = app.live_adjust.as_ref().filter(|(layer, _)| *layer == id).and_then(|(_, params)| previewed_lookup(params)).unwrap_or(current);
     let custom_label = format!("{name} ({size}³)");
     let mut opts: Vec<(String, &str)> = vec![("load".into(), tl!("Load 3D LUT…")), ("none".into(), tl!("None"))];
-    opts.extend(builtins.iter().map(|(id, label)| (id.to_string(), *label)));
+    // Photoshop's sections: loading and none, the looks, the LUT folder's files, the custom one.
+    let mut sections = vec![opts.len()];
+    opts.extend(builtins.iter().map(|(id, label)| (id.to_string(), tl!(label))));
+    sections.push(opts.len());
     opts.extend(folder.iter().map(|(file, path)| (format!("{FOLDER_LUT}{path}"), file.as_str())));
     if current == "custom" {
+        sections.push(opts.len());
         opts.push(("custom".into(), custom_label.as_str()));
     }
+    sections.retain(|&i| i > 0 && i < opts.len());
+    sections.dedup();
     let mut sel = current.clone();
     let mut params: Option<Value> = None;
     let mut browse = false;
@@ -207,13 +217,13 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let mut cycling_preview = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
-        let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0);
+        let (chosen, _) = widgets::dropdown_sections(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0, &sections);
         if !chosen.is_empty() {
             if cycle_input {
-                // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read
-                // from disk on every step. Pick it with a click.
-                if sel != "load" && sel != "custom" && !sel.starts_with(FOLDER_LUT) {
-                    app.live_adjust = Some((id, json!({"lut": sel})));
+                // The LUT folder's files too (user report): the engine keeps the files it read,
+                // so stepping back and forth doesn't read them again.
+                if sel != "load" && sel != "custom" {
+                    app.live_adjust = Some((id, lookup_params(&sel)));
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -231,7 +241,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if ui.input(|input| input.time - since) >= 0.75 {
             if let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
-                && preview.get("lut").is_some()
+                && previewed_lookup(preview).is_some()
             {
                 params = Some(preview.clone());
             }
@@ -263,11 +273,15 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     }
     if let Some(mut p) = params {
         if p.get("lut").is_none()
+            && p.get("file").is_none()
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
-            && let Some(lut) = preview.get("lut")
         {
-            p["lut"] = lut.clone();
+            for key in ["lut", "file"] {
+                if let Some(v) = preview.get(key) {
+                    p[key] = v.clone();
+                }
+            }
         }
         p["layer"] = json!(id.0);
         // Errors (an unreadable LUT file) land in the status bar.
