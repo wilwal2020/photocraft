@@ -4832,3 +4832,6 @@ shape	Appearance	Apparence
 	Remove what is selected with Nano Banana ({key})	Supprimer la sélection avec Nano Banana ({key})
 	Pin to Top	Épingler en haut
 	Unpin from Top	Ne plus épingler en haut
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Étendre par IA
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Prolonger l’image dans la sélection avec Nano Banana, au-delà du bord de la case

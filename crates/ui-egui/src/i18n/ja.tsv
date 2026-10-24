@@ -4470,3 +4470,6 @@ curves	Smooth	スムーズ
 	Remove what is selected with Nano Banana ({key})	選択範囲を Nano Banana で削除 ({key})
 	Pin to Top	上部に固定
 	Unpin from Top	上部への固定を解除
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	AI 拡張
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Nano Banana で選択範囲に絵を続けて描く（コマ枠の外まで）

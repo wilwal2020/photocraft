@@ -4535,3 +4535,6 @@ cameraRaw	Dehaze	Odstranění oparu
 	Remove what is selected with Nano Banana ({key})	Odstranit vybrané pomocí Nano Banana ({key})
 	Pin to Top	Připnout nahoru
 	Unpin from Top	Odepnout shora
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	AI rozšíření
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Pokračovat v obrazu do vybrané oblasti pomocí Nano Banana, i za okraj panelu

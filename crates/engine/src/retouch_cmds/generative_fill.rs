@@ -4,7 +4,8 @@
 //! above the active one ("Generative Layer"), shaped by the selection, so the picture under it is
 //! untouched and the fill can be masked, moved or deleted. The default model is the diffusion one
 //! (`photocraft_ml::diffusion`), which draws what most likely belongs there, with an optional
-//! `prompt`; `model: "lama"` uses the fast one.
+//! `prompt`; `model: "lama"` uses the fast one; `model: "nanoBanana"` sends Google's model the picture
+//! and the prompt exactly as typed (a plain editor: AI Remove and AI Outpaint have the worded requests).
 //!
 //! It is also how a panel is extended past its edge (outpainting): enlarge the canvas (Image ›
 //! Canvas Size or the Crop tool), select the new, empty area and Generative Fill. Transparent
@@ -76,6 +77,9 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         return Err(bad(CMD, format!("Generative Fill can't use that model: {e}")));
     }
     let prompt = p.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if model == AiModel::NanoBanana && prompt.is_empty() {
+        return Err(bad(CMD, "Nano Banana needs a prompt: type what it should do"));
+    }
     let name = if prompt.is_empty() { d.doc.next_layer_name("Generative Layer") } else { prompt.chars().take(60).collect() };
     Ok(Plan {
         window: bounds,
@@ -83,9 +87,9 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         alpha,
         model,
         high: super::remove::high_quality(p, CMD)?,
-        // Generative Fill carries the picture on into the selection (past a panel's frame) where
-        // the Remove tool asks for what is behind it.
-        nano: photocraft_ml::gemini::Options { intent: photocraft_ml::gemini::Intent::Extend, ..nano_options(p, CMD)? },
+        // Nano Banana gets the picture and the prompt as typed, nothing added (user request: a
+        // plain editor; AI Remove and AI Outpaint have the worded requests).
+        nano: photocraft_ml::gemini::Options { intent: photocraft_ml::gemini::Intent::Prompt, ..nano_options(p, CMD)? },
         settings: diffusion_settings(p),
         above: d.active_layer,
         name,

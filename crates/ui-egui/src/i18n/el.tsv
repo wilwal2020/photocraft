@@ -4489,3 +4489,6 @@ curves	Smooth	Εξομάλυνση
 	Remove what is selected with Nano Banana ({key})	Αφαίρεση της επιλογής με το Nano Banana ({key})
 	Pin to Top	Καρφίτσωμα στην κορυφή
 	Unpin from Top	Ξεκαρφίτσωμα από την κορυφή
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Επέκταση με AI
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Συνέχιση της εικόνας στην επιλογή με το Nano Banana, πέρα από το περίγραμμα του καρέ

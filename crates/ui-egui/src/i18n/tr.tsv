@@ -4518,3 +4518,6 @@ cameraData	Lens	Lens
 	Remove what is selected with Nano Banana ({key})	Seçili alanı Nano Banana ile kaldır ({key})
 	Pin to Top	Üste Sabitle
 	Unpin from Top	Üstten Sabitlemeyi Kaldır
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	YZ ile Genişlet
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Resmi Nano Banana ile seçili alana, panel kenarının ötesine devam ettir

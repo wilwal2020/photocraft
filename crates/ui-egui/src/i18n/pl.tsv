@@ -4409,3 +4409,6 @@ curves	Smooth	Wygładź
 	Remove what is selected with Nano Banana ({key})	Usuń zaznaczenie za pomocą Nano Banana ({key})
 	Pin to Top	Przypnij na górze
 	Unpin from Top	Odepnij z góry
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Rozszerz AI
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Kontynuuj obraz w zaznaczeniu za pomocą Nano Banana, poza krawędź kadru

@@ -4286,3 +4286,6 @@ curves	Smooth	Làm mượt
 	Remove what is selected with Nano Banana ({key})	Xóa vùng chọn bằng Nano Banana ({key})
 	Pin to Top	Ghim lên đầu
 	Unpin from Top	Bỏ ghim khỏi đầu
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Mở rộng bằng AI
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Vẽ tiếp hình vào vùng chọn bằng Nano Banana, vượt qua viền khung

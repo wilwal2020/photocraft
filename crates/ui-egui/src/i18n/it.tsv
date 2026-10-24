@@ -4905,3 +4905,6 @@ shape	Appearance	Aspetto
 	Remove what is selected with Nano Banana ({key})	Rimuovi la selezione con Nano Banana ({key})
 	Pin to Top	Fissa in alto
 	Unpin from Top	Sblocca dall’alto
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Estensione IA
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Continua l’immagine nella selezione con Nano Banana, oltre il bordo della vignetta

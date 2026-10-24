@@ -3423,3 +3423,6 @@ curves	Smooth	平滑
 	Remove what is selected with Nano Banana ({key})	用 Nano Banana 移除所選內容 ({key})
 	Pin to Top	釘選到頂端
 	Unpin from Top	取消釘選到頂端
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	AI 擴展
+	Continue the picture into what is selected with Nano Banana, past a panel's border	用 Nano Banana 將畫面延續到所選區域（越過分格邊框）

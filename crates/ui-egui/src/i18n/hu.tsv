@@ -4704,3 +4704,6 @@ cameraRaw	Yellow	Sárga
 	Remove what is selected with Nano Banana ({key})	A kijelölés eltávolítása a Nano Bananával ({key})
 	Pin to Top	Rögzítés felül
 	Unpin from Top	Rögzítés feloldása
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	MI-kiterjesztés
+	Continue the picture into what is selected with Nano Banana, past a panel's border	A kép folytatása a kijelölésbe a Nano Bananával, a panel szélén túl is

@@ -4750,3 +4750,6 @@ navigator	Zoom	Zoom
 	Remove what is selected with Nano Banana ({key})	Eliminar lo seleccionado con Nano Banana ({key})
 	Pin to Top	Fijar arriba
 	Unpin from Top	Dejar de fijar arriba
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Ampliar con IA
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Continuar la imagen en lo seleccionado con Nano Banana, más allá del borde de la viñeta

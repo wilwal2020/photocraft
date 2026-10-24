@@ -4860,3 +4860,6 @@ shape	Appearance	Izgled
 	Remove what is selected with Nano Banana ({key})	Ukloni izabrano pomoću Nano Banana ({key})
 	Pin to Top	Zakači na vrh
 	Unpin from Top	Otkači sa vrha
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	AI proširenje
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Nastavi sliku u izabrano pomoću Nano Banana, preko ivice panela

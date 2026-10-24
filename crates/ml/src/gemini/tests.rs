@@ -150,10 +150,10 @@ fn the_body_asks_for_an_unstored_png_of_the_frame() {
 
 /// User report: extending a manga panel down over the blank paper below it with Nano Banana
 /// erased the foot standing on the frame, kept the paper blank, or redrew the frame line across
-/// the new ground. The removal wording asks for exactly that; Generative Fill's asks to carry the
+/// the new ground. The removal wording asks for exactly that; AI Outpaint's asks to carry the
 /// picture on past the frame, and both still follow the user's words.
 #[test]
-fn generative_fill_asks_to_extend_the_picture_where_removal_keeps_paper_blank() {
+fn ai_outpaint_asks_to_extend_the_picture_where_removal_keeps_paper_blank() {
     for (remove, extend) in [
         (prompt("", MARKERS[0].1, Intent::Remove), prompt("", MARKERS[0].1, Intent::Extend)),
         (mask_prompt("", Intent::Remove), mask_prompt("", Intent::Extend)),
@@ -426,3 +426,46 @@ fn an_answer_that_changed_the_framing_is_refused() {
     let mut sent = Vec::new();
     assert!(fill_via(&req, &mut read, "", Options::default(), &Interrupt::NONE, &mut fake(&mut sent)).is_ok());
 }
+
+/// User request: Generative Fill's Nano Banana is a plain editor. It is sent the picture as it is
+/// (no marker painted, no mask) and the prompt exactly as typed, nothing added; only the
+/// selection's pixels are taken back. Without a prompt nothing is sent.
+#[test]
+fn generative_fills_prompt_goes_alone_with_the_unmarked_picture() {
+    let (win, px, hole) = scene();
+    let req = request(win, &px, &hole, 3, None);
+    let mut read = |r: Rect| {
+        let mut out = Vec::new();
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let k = (y as usize * 200 + x as usize) * 3;
+                out.extend_from_slice(&px[k..k + 3]);
+            }
+        }
+        out
+    };
+    let opts = Options { intent: Intent::Prompt, ..PAINT };
+    let mut texts = Vec::new();
+    let out = fill_via(&req, &mut read, "  make it a brick wall  ", opts, &Interrupt::NONE, &mut |body, _| {
+        let v: Value = serde_json::from_str(body).unwrap();
+        texts.push(v["input"][0]["text"].as_str().unwrap().to_string());
+        assert!(v["input"].get(2).is_none(), "one image, no mask");
+        let data = base64::engine::general_purpose::STANDARD.decode(v["input"][1]["data"].as_str().unwrap()).unwrap();
+        let img = photocraft_codecs::decode(&data).unwrap();
+        let rgb: Vec<f32> = img.to_rgba_f32().as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+        assert!(!rgb.as_chunks::<3>().0.contains(&[1.0, 0.0, 0.0]), "no marker painted");
+        Ok(answer_with(&png(&rgb, img.width(), img.height())))
+    })
+    .unwrap();
+    assert_eq!(texts, ["make it a brick wall"], "the prompt as typed, nothing added");
+    for (k, h) in hole.iter().enumerate() {
+        if !*h {
+            assert_eq!(&px[k * 3..k * 3 + 3], &out[k * 3..k * 3 + 3], "pixel {k} outside the selection is untouched");
+        }
+    }
+    let e = fill_via(&req, &mut read, "   ", opts, &Interrupt::NONE, &mut |_, _| panic!("nothing is sent without a prompt")).unwrap_err();
+    assert!(matches!(e, MlError::BadInput(_)), "{e}");
+    assert_eq!(prompt(" a cat ", MARKERS[0].1, Intent::Prompt), "a cat");
+    assert_eq!(mask_prompt(" a cat ", Intent::Prompt), "a cat");
+}
+

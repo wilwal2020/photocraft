@@ -4992,3 +4992,6 @@ shape	Appearance	Оформление
 	Remove what is selected with Nano Banana ({key})	Удалить выделенное с помощью Nano Banana ({key})
 	Pin to Top	Закрепить сверху
 	Unpin from Top	Открепить сверху
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Расширение ИИ
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Продолжить изображение в выделенную область с помощью Nano Banana, за рамку панели

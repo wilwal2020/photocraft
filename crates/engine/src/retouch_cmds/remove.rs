@@ -141,9 +141,17 @@ pub(crate) fn diffusion_settings(p: &Value) -> photocraft_ml::diffusion::Setting
 
 /// How Nano Banana is asked: `mark`, how it is shown the hole, `"paint"` (the default: the hole
 /// painted red, the Photoshop routine) or `"mask"` (the picture and a mask image); `area`, what it is
-/// sent, `"near"` (the default: the area around the hole, sharper) or `"page"` (the whole page).
+/// sent, `"near"` (the default: the area around the hole, sharper) or `"page"` (the whole page);
+/// `intent`, `"remove"` (the default: what is behind) or `"outpaint"` (AI Outpaint: the picture
+/// carried on into the hole, past a panel's frame).
 pub(crate) fn nano_options(p: &Value, cmd: &str) -> Result<photocraft_ml::gemini::Options> {
-    use photocraft_ml::gemini::{Area, Mark, Options};
+    use photocraft_ml::gemini::{Area, Intent, Mark, Options};
+    let intent = match p.get("intent") {
+        None | Some(Value::Null) => Intent::Remove,
+        Some(Value::String(v)) if v == "remove" => Intent::Remove,
+        Some(Value::String(v)) if v == "outpaint" => Intent::Extend,
+        Some(v) => return Err(bad(cmd, format!("`intent` is \"remove\" or \"outpaint\", not {v}"))),
+    };
     let mark = match p.get("mark") {
         None | Some(Value::Null) => Mark::Paint,
         Some(Value::String(v)) if v == "mask" => Mark::Mask,
@@ -156,7 +164,7 @@ pub(crate) fn nano_options(p: &Value, cmd: &str) -> Result<photocraft_ml::gemini
         Some(Value::String(v)) if v == "page" => Area::Page,
         Some(v) => return Err(bad(cmd, format!("`area` is \"near\" or \"page\", not {v}"))),
     };
-    Ok(Options { mark, area, ..Options::default() })
+    Ok(Options { mark, area, intent })
 }
 
 /// `quality`: `"standard"` (the default) or `"high"`, LaMa's Quality mode

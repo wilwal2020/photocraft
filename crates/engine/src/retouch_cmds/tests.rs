@@ -2484,6 +2484,10 @@ fn generative_fill_needs_a_selection_and_a_model_and_never_panics() {
         let e = s.execute("edit.generativeFill", json!({"prompt": "a cat"})).unwrap_err().to_string();
         assert!(e.contains("can't use that model"), "{e}");
     }
+    // Nano Banana gets the prompt as typed, so it needs one: refused before anything is sent
+    // (or, without an API key, for the key).
+    let e = s.execute("edit.generativeFill", json!({"model": "nanoBanana", "prompt": "  "})).unwrap_err().to_string();
+    assert!(e.contains("needs a prompt") || e.contains("can't use that model"), "{e}");
     // A selection off the canvas, and a CMYK document.
     s.execute("select.rect", json!({"x": 500, "y": 500, "width": 10, "height": 10})).ok();
     assert!(s.execute("edit.generativeFill", json!({})).is_err());

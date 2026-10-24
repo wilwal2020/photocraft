@@ -3810,3 +3810,6 @@ curves	Smooth	Haluskan
 	Remove what is selected with Nano Banana ({key})	Hapus yang dipilih dengan Nano Banana ({key})
 	Pin to Top	Sematkan di Atas
 	Unpin from Top	Lepas Sematan
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Perluas AI
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Lanjutkan gambar ke area yang dipilih dengan Nano Banana, melewati batas panel

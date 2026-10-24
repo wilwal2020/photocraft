@@ -269,6 +269,29 @@ pub fn remove_selection(app: &mut PhotocraftApp) -> bool {
     true
 }
 
+/// AI Outpaint: AI Remove's request with the `outpaint` intent, so Nano Banana carries the
+/// picture on into the selection (past a panel's border, over blank paper) where AI Remove keeps
+/// blank paper blank (user request: removal wording erased a foot and redrew a panel's frame).
+fn ai_outpaint_params(app: &PhotocraftApp) -> Value {
+    let mut p = ai_remove_params(app);
+    p["intent"] = json!("outpaint");
+    p
+}
+
+/// AI Outpaint from the options bar's button, beside AI Remove. Nothing on the web.
+pub fn outpaint_selection(app: &mut PhotocraftApp) -> bool {
+    if cfg!(target_arch = "wasm32") || !app.session.active().is_some_and(|st| st.doc.selection.is_some()) {
+        return false;
+    }
+    let p = ai_outpaint_params(app);
+    app.ui.status.clear();
+    if let Err(e) = app.run("paint.remove", p) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
 /// The Nano Banana API key window's state (egui memory: it is the shell's alone, and the key
 /// typed in it never reaches the UI state, the preferences or a command).
 #[derive(Clone, Default)]
@@ -860,6 +883,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                     .clicked()
                 {
                     remove_selection(app);
+                }
+                if crate::widgets::secondary_button(ui, tl!("AI Outpaint"), 0.0)
+                    .on_hover_text(tl!("Continue the picture into what is selected with Nano Banana, past a panel's border"))
+                    .clicked()
+                {
+                    outpaint_selection(app);
                 }
             }
             if !app.remove_pending.is_empty() {
@@ -1834,6 +1863,11 @@ mod tests {
         let s = remove_params(&app.ui.tool_options);
         assert_eq!((&s["model"], &s["generative"], &s["newLayer"]), (&json!("lama"), &json!("off"), &json!(false)));
         assert!(s.get("prompt").is_none());
+        // AI Outpaint: the same request, carried on into the selection instead of removed.
+        let o = ai_outpaint_params(&app);
+        assert_eq!((&o["intent"], &o["model"], &o["selection"], &o["prompt"]), (&json!("outpaint"), &json!("nanoBanana"), &json!(true), &json!("grass")));
+        assert!(p.get("intent").is_none(), "AI Remove removes");
+        assert!(!outpaint_selection(&mut app), "nothing is selected");
     }
 
     /// Each model keeps its own prompt, Create a new layer and Remove after each stroke: switching

@@ -120,7 +120,7 @@ hatching, screentones and colours that run into it, in exactly the same style, s
 next to the area is blank paper or a flat tone, keep the matching part of the area blank or flat too. Do not invent \
 scenery, ground, plants, water, objects, people, text or speech bubbles that are not already there.";
 
-/// What a Generative Fill asks of the fill instead of [`RESTRAINT`]: carry the picture on into the
+/// What AI Outpaint asks of the fill instead of [`RESTRAINT`]: carry the picture on into the
 /// area, past a panel's frame. With the removal wording, extending a manga panel down over the
 /// blank paper below it (the selection over the paper and a foot standing on the frame) erased
 /// the foot, kept the paper blank, or redrew the frame line across the new ground, so the
@@ -151,7 +151,13 @@ pub(crate) fn prompt(extra: &str, marker: &str, intent: Intent) -> String {
 same framing, and leave none of the marker colour.{}",
             asked(extra, "What to draw there:")
         ),
+        Intent::Prompt => typed(extra),
     }
+}
+
+/// [`Intent::Prompt`]'s text: the user's words alone, at most 2000 characters.
+fn typed(extra: &str) -> String {
+    extra.trim().chars().take(2000).collect()
 }
 
 /// How much of the page the model is sent.
@@ -176,11 +182,16 @@ pub struct Options {
 /// What the fill is for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Intent {
-    /// The Remove tool: what is behind the hole, continuing only what reaches it ([`RESTRAINT`]).
+    /// The Remove tool and AI Remove: what is behind the hole, continuing only what reaches it
+    /// ([`RESTRAINT`]).
     #[default]
     Remove,
-    /// Generative Fill: the picture carried on into the hole, past a panel's frame ([`EXTEND`]).
+    /// AI Outpaint: the picture carried on into the hole, past a panel's frame ([`EXTEND`]).
     Extend,
+    /// Generative Fill: the picture as it is and the user's words alone, nothing added and no
+    /// marker painted (user request: Nano Banana as a plain editor). Only the hole's pixels are
+    /// taken from the answer.
+    Prompt,
 }
 
 /// How the hole is shown to the model. Painted, it keeps the picture's framing and what is around
@@ -211,6 +222,7 @@ framing, with every pixel outside the white area unchanged.{}",
 only the edited first image, at the same framing, with every pixel outside the white area unchanged.{}",
             asked(extra, "What to draw there:")
         ),
+        Intent::Prompt => typed(extra),
     }
 }
 
@@ -984,8 +996,12 @@ pub fn eval_fill(req: &Request, read: &mut dyn FnMut(Rect) -> Vec<f32>, extra: &
     let mark = if std::env::var("PHOTOCRAFT_EVAL_MARK").is_ok_and(|m| m == "mask") { Mark::Mask } else { Mark::Paint };
     // `PHOTOCRAFT_EVAL_AREA=page` sends the whole page instead of the area near the hole.
     let area = if std::env::var("PHOTOCRAFT_EVAL_AREA").is_ok_and(|a| a == "page") { Area::Page } else { Area::Near };
-    // `PHOTOCRAFT_EVAL_INTENT=extend` asks as Generative Fill does.
-    let intent = if std::env::var("PHOTOCRAFT_EVAL_INTENT").is_ok_and(|i| i == "extend") { Intent::Extend } else { Intent::Remove };
+    // `PHOTOCRAFT_EVAL_INTENT=extend` asks as AI Outpaint does, `prompt` as Generative Fill does.
+    let intent = match std::env::var("PHOTOCRAFT_EVAL_INTENT").as_deref() {
+        Ok("extend") => Intent::Extend,
+        Ok("prompt") => Intent::Prompt,
+        _ => Intent::Remove,
+    };
     pieces_via(req, read, extra, Options { mark, area, intent }, ctl, &mut |body, ctl| {
         let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
         if let Some(Ok(png)) = v.pointer("/input/1/data").and_then(Value::as_str).map(|d| base64::engine::general_purpose::STANDARD.decode(d)) {
@@ -1083,6 +1099,9 @@ pub(crate) fn pieces_via(
     if req.hole.len() != w * h || req.pixels.len() != w * h * req.ch {
         return Err(MlError::BadInput("the hole or pixels don't match the window".into()));
     }
+    if opts.intent == Intent::Prompt && typed(extra).is_empty() {
+        return Err(MlError::BadInput("type what Nano Banana should do".into()));
+    }
     let parts = merged(groups(req.window, req.hole), req.canvas, opts.area);
     let mark = opts.mark;
     let mut pieces = Vec::with_capacity(parts.len());
@@ -1101,6 +1120,8 @@ pub(crate) fn pieces_via(
         };
         let marker = MARKERS.get(c.marker).map_or("solid pure red (#FF0000)", |m| m.1);
         let (images, text, shown) = match mark {
+            // The picture and the user's words, nothing else.
+            _ if opts.intent == Intent::Prompt => (vec![png(&c.picture())?], typed(extra), "the prompt alone"),
             Mark::Paint => (vec![png(&c.image())?], prompt(extra, marker, opts.intent), marker),
             Mark::Mask => (vec![png(&c.picture())?, png(&c.mask())?], mask_prompt(extra, opts.intent), "a mask"),
         };

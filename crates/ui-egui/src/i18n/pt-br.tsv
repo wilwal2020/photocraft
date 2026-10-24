@@ -4727,3 +4727,6 @@ layerLabel	No Color	Sem cor
 	Remove what is selected with Nano Banana ({key})	Remover a seleção com o Nano Banana ({key})
 	Pin to Top	Fixar no topo
 	Unpin from Top	Desafixar do topo
+# Remove tool AI Outpaint (2026-10-24)
+	AI Outpaint	Expandir com IA
+	Continue the picture into what is selected with Nano Banana, past a panel's border	Continuar a imagem na seleção com o Nano Banana, além da borda do quadro
