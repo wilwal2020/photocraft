@@ -535,6 +535,17 @@ pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
 /// Photoshop's Actions palette on this machine (`Actions Palette.psp`, every set of its Actions
 /// panel) as (path, bytes), or `None` without one (`actions::import_photoshop`).
 pub type PhotoshopActionsFn = Box<dyn FnMut() -> Option<(String, Vec<u8>)>>;
+
+/// Where Camera Raw's presets are (native; see `photocraft_engine::camera_raw_presets`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CameraRawPresetDirs {
+    /// PhotoCraft's own presets folder: Create Preset writes here.
+    pub own: Option<String>,
+    /// Photoshop's Camera Raw presets folders (the user's), read as they are.
+    pub photoshop: Vec<String>,
+    /// Adobe's presets installed with Photoshop, read as they are, listed when asked for.
+    pub adobe: Vec<String>,
+}
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
@@ -640,6 +651,8 @@ pub struct Services {
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     /// Photoshop's Actions palette, for the Actions panel menu's Import Photoshop Actions.
     pub photoshop_actions: Option<PhotoshopActionsFn>,
+    /// Camera Raw's preset folders (Camera Raw › Presets); none on the web.
+    pub camera_raw_presets: CameraRawPresetDirs,
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,

@@ -62,6 +62,12 @@ const SCALARS: &[(&str, &str)] = &[
     ("vignetteMidpoint", "PCVM"),
     ("vignetteFeather", "PCVF"),
     ("vignetteRoundness", "PCVR"),
+    ("noiseLuminanceContrast", "LNRC"),
+    ("noiseColorSmoothness", "CNRS"),
+    ("lensDistortion", "MDis"),
+    ("lensVignetteAmount", "VigA"),
+    ("lensVignetteMidpoint", "VigM"),
+    ("curveRefineSaturation", "crfs"),
 ];
 const ARRAYS: &[(&str, &[&str])] = &[
     ("curveSplits", &["PC_1", "PC_2", "PC_3"]),
@@ -73,7 +79,7 @@ const CURVES: &[(&str, &str)] = &[("pointCurve", "Crv "), ("pointCurveRed", "Crv
 
 // These controls have no PhotoCraft counterpart yet. Their observed neutral values can be
 // retained in the template; active values must keep the entire filter opaque.
-const NEUTRAL_ONLY: &[(&str, i32)] = &[("LNRC", 0), ("CNRS", 50), ("MDis", 0), ("VigA", 0), ("VigM", 50), ("crfs", 100), ("TMMs", 0), ("PGTM", 0), ("RGBt", 0)];
+const NEUTRAL_ONLY: &[(&str, i32)] = &[("TMMs", 0), ("PGTM", 0), ("RGBt", 0)];
 
 fn default_params() -> Option<J> {
     serde_json::to_value(CameraRaw::default()).ok()
@@ -102,7 +108,7 @@ fn number_range(key: &str) -> std::ops::RangeInclusive<f64> {
         "Shrp" => 0.0..=150.0,
         "STSH" | "STHH" | "CgMH" | "CgGH" => 0.0..=360.0,
         "PC_1" | "PC_2" | "PC_3" | "ShpD" | "ShpM" | "LNR " | "LNRD" | "CNR " | "CNRD" | "STSS" | "STHS" | "CgMS" | "CgGS" | "CgBl" | "GRNA" | "GRNS"
-        | "GRNF" | "PCVM" | "PCVF" => 0.0..=100.0,
+        | "GRNF" | "PCVM" | "PCVF" | "LNRC" | "CNRS" | "VigM" | "crfs" => 0.0..=100.0,
         _ => -100.0..=100.0,
     }
 }
@@ -465,7 +471,8 @@ mod tests {
             let mut edited = f.clone();
             let mut number = get_param(&defaults, param).unwrap().as_f64().unwrap();
             if get_param(&f.params, param).unwrap().as_f64() == Some(number) {
-                number += 1.0;
+                // A step within the range (Refine Saturation's default is its top).
+                number += if number_range(key).contains(&(number + 1.0)) { 1.0 } else { -1.0 };
             }
             *get_param_mut(&mut edited.params, param).unwrap() = json!(number);
             let mut expected = get_desc(&source, "Fltr").unwrap().clone();

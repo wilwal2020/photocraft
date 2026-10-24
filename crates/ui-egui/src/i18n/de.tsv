@@ -3826,3 +3826,57 @@ curves	Smooth	Glätten
 	How softly the layer mask's edge fades into the original	Wie weich der Rand der Ebenenmaske in das Original übergeht
 	Creative shows everything Nano Banana drew: these don't apply.	„Kreativ“ zeigt alles, was Nano Banana gezeichnet hat: Diese Einstellungen gelten dann nicht.
 	How Nano Banana's layer mask meets the original	Wie die Ebenenmaske von Nano Banana an das Original anschließt
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Eine Vorgabe braucht einen Namen
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Vorgabe {name} angewendet
+	Applied preset {name} ({n} settings not supported)	Vorgabe {name} angewendet ({n} Einstellungen nicht unterstützt)
+	Auto white balance found nothing to measure in this image	Der automatische Weißabgleich fand in diesem Bild nichts zum Messen
+	Check All	Alle auswählen
+	Check None	Keine auswählen
+	Choose at least one group of settings	Wählen Sie mindestens eine Gruppe von Einstellungen
+	Click something light grey or white: that point is too dark or too bright to measure	Klicken Sie auf etwas Hellgraues oder Weißes: Dieser Punkt ist zu dunkel oder zu hell zum Messen
+	Copy to My Presets	In meine Vorgaben kopieren
+	Create Preset	Vorgabe erstellen
+	Create Preset…	Vorgabe erstellen…
+	Curve region splits	Kurvenbereichsgrenzen
+	Defringe	Rand entfernen
+	Existing groups	Vorhandene Gruppen
+	How much of the saturation a contrasty curve adds is kept	Wie viel der Sättigung, die eine kontrastreiche Kurve hinzufügt, erhalten bleibt
+	Lens Vignetting	Objektiv-Vignettierung
+	Looking for presets…	Vorgaben werden gesucht…
+	My Presets	Meine Vorgaben
+	No presets match.	Keine Vorgabe passt.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Noch keine Vorgaben. Erstellen Sie eine mit +, oder legen Sie Camera-Raw-Vorgaben (.xmp) in den Vorgabenordner von PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Positive Werte korrigieren tonnenförmige, negative kissenförmige Verzeichnung
+	Presets can't be saved here	Vorgaben können hier nicht gespeichert werden
+	Presets menu	Vorgabenmenü
+	Rename Preset	Vorgabe umbenennen
+	Saved preset {name}	Vorgabe {name} gespeichert
+	Search presets	Vorgaben durchsuchen
+	Set the Light sliders from the image's tones	Die Licht-Regler anhand der Tonwerte des Bildes einstellen
+	Show Adobe's Presets	Adobe-Vorgaben anzeigen
+	Update with Current Settings	Mit aktuellen Einstellungen aktualisieren
+	User Presets	Benutzervorgaben
+	White Balance Tool (I): click something that should be neutral grey	Weißabgleich-Werkzeug (I): auf etwas klicken, das neutral grau sein soll
+cameraRaw	3-Way	3-fach
+cameraRaw	As Shot	Wie Aufnahme
+cameraRaw	B&W Mix	S/W-Mischung
+cameraRaw	Blue Primary	Blau-Primärwert
+cameraRaw	Calibration	Kalibrierung
+cameraRaw	Color Smoothness	Farbe Glättung
+cameraRaw	Green Amount	Grün-Betrag
+cameraRaw	Green Hue	Grün-Farbton
+cameraRaw	Green Primary	Grün-Primärwert
+cameraRaw	Luminance Contrast	Luminanz Kontrast
+cameraRaw	Optics	Optik
+cameraRaw	Parametric	Parametrisch
+cameraRaw	Presence	Präsenz
+cameraRaw	Purple Amount	Lila-Betrag
+cameraRaw	Purple Hue	Lila-Farbton
+cameraRaw	Red Primary	Rot-Primärwert
+cameraRaw	Refine Saturation	Sättigung verfeinern
+cameraRaw	Treatment & Profile	Behandlung und Profil
+cameraRaw	White Balance	Weißabgleich

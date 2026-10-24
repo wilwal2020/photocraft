@@ -4746,3 +4746,56 @@ layerLabel	No Color	Sem cor
 	How softly the layer mask's edge fades into the original	Com que suavidade a borda da máscara de camada se funde ao original
 	Creative shows everything Nano Banana drew: these don't apply.	Criativo mostra tudo o que o Nano Banana desenhou: estes ajustes não se aplicam.
 	How Nano Banana's layer mask meets the original	Como a máscara de camada do Nano Banana encontra o original
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Uma predefinição precisa de um nome
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Predefinição {name} aplicada
+	Applied preset {name} ({n} settings not supported)	Predefinição {name} aplicada ({n} configurações sem suporte)
+	Auto white balance found nothing to measure in this image	O equilíbrio de branco automático não encontrou nada para medir nesta imagem
+	Check All	Marcar tudo
+	Check None	Desmarcar tudo
+	Choose at least one group of settings	Escolha pelo menos um grupo de configurações
+	Click something light grey or white: that point is too dark or too bright to measure	Clique em algo cinza-claro ou branco: esse ponto é escuro ou claro demais para medir
+	Copy to My Presets	Copiar para minhas predefinições
+	Create Preset	Criar predefinição
+	Create Preset…	Criar predefinição…
+	Curve region splits	Divisões das regiões da curva
+	Existing groups	Grupos existentes
+	How much of the saturation a contrasty curve adds is kept	Quanto da saturação que uma curva contrastada adiciona é mantido
+	Lens Vignetting	Vinheta da lente
+	Looking for presets…	Procurando predefinições…
+	My Presets	Minhas predefinições
+	No presets match.	Nenhuma predefinição corresponde.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Ainda não há predefinições. Crie uma com + ou coloque predefinições do Camera Raw (.xmp) na pasta de predefinições do PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Valores positivos corrigem a distorção em barril; negativos, em almofada
+	Presets can't be saved here	Não é possível salvar predefinições aqui
+	Presets menu	Menu de predefinições
+	Rename Preset	Renomear predefinição
+	Saved preset {name}	Predefinição {name} salva
+	Search presets	Pesquisar predefinições
+	Set the Light sliders from the image's tones	Definir os controles de Luz pelos tons da imagem
+	Show Adobe's Presets	Mostrar predefinições da Adobe
+	Update with Current Settings	Atualizar com as configurações atuais
+	User Presets	Predefinições do usuário
+	White Balance Tool (I): click something that should be neutral grey	Ferramenta Equilíbrio de branco (I): clique em algo que deveria ser cinza neutro
+cameraRaw	3-Way	3 vias
+cameraRaw	As Shot	Como fotografado
+cameraRaw	B&W Mix	Mistura P&B
+cameraRaw	Blue Primary	Primária azul
+cameraRaw	Calibration	Calibração
+cameraRaw	Color Smoothness	Suavidade da cor
+cameraRaw	Green Amount	Quantidade de verde
+cameraRaw	Green Hue	Matiz do verde
+cameraRaw	Green Primary	Primária verde
+cameraRaw	Luminance Contrast	Contraste da luminância
+cameraRaw	Optics	Óptica
+cameraRaw	Parametric	Paramétrica
+cameraRaw	Presence	Presença
+cameraRaw	Purple Amount	Quantidade de roxo
+cameraRaw	Purple Hue	Matiz do roxo
+cameraRaw	Red Primary	Primária vermelha
+cameraRaw	Refine Saturation	Refinar saturação
+cameraRaw	Treatment & Profile	Tratamento e perfil
+cameraRaw	White Balance	Equilíbrio de branco

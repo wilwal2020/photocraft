@@ -4537,3 +4537,56 @@ cameraData	Lens	Lens
 	How softly the layer mask's edge fades into the original	Katman maskesinin kenarının orijinale ne kadar yumuşak geçtiği
 	Creative shows everything Nano Banana drew: these don't apply.	Yaratıcı mod, Nano Banana'nın çizdiği her şeyi gösterir: bu ayarlar uygulanmaz.
 	How Nano Banana's layer mask meets the original	Nano Banana katman maskesinin orijinalle nasıl birleştiği
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Bir hazır ayarın adı olmalı
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	{name} hazır ayarı uygulandı
+	Applied preset {name} ({n} settings not supported)	{name} hazır ayarı uygulandı ({n} ayar desteklenmiyor)
+	Auto white balance found nothing to measure in this image	Otomatik beyaz dengesi bu görüntüde ölçülecek bir şey bulamadı
+	Check All	Tümünü işaretle
+	Check None	Hiçbirini işaretleme
+	Choose at least one group of settings	En az bir ayar grubu seçin
+	Click something light grey or white: that point is too dark or too bright to measure	Açık gri ya da beyaz bir şeye tıklayın: o nokta ölçmek için fazla koyu ya da fazla açık
+	Copy to My Presets	Hazır ayarlarıma kopyala
+	Create Preset	Hazır ayar oluştur
+	Create Preset…	Hazır ayar oluştur…
+	Curve region splits	Eğri bölgesi sınırları
+	Existing groups	Mevcut gruplar
+	How much of the saturation a contrasty curve adds is kept	Kontrastlı bir eğrinin eklediği doygunluğun ne kadarının korunduğu
+	Lens Vignetting	Lens vinyeti
+	Looking for presets…	Hazır ayarlar aranıyor…
+	My Presets	Hazır ayarlarım
+	No presets match.	Eşleşen hazır ayar yok.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Henüz hazır ayar yok. + ile bir tane oluşturun veya Camera Raw hazır ayarlarını (.xmp) PhotoCraft'ın hazır ayar klasörüne koyun.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Pozitif değerler fıçı bozulmasını, negatif değerler yastık bozulmasını düzeltir
+	Presets can't be saved here	Hazır ayarlar burada kaydedilemez
+	Presets menu	Hazır ayar menüsü
+	Rename Preset	Hazır ayarı yeniden adlandır
+	Saved preset {name}	{name} hazır ayarı kaydedildi
+	Search presets	Hazır ayar ara
+	Set the Light sliders from the image's tones	Işık kaydırıcılarını görüntünün tonlarına göre ayarla
+	Show Adobe's Presets	Adobe hazır ayarlarını göster
+	Update with Current Settings	Geçerli ayarlarla güncelle
+	User Presets	Kullanıcı hazır ayarları
+	White Balance Tool (I): click something that should be neutral grey	Beyaz Dengesi aracı (I): nötr gri olması gereken bir şeye tıklayın
+cameraRaw	3-Way	3 yönlü
+cameraRaw	As Shot	Çekildiği gibi
+cameraRaw	B&W Mix	S/B karışımı
+cameraRaw	Blue Primary	Mavi ana renk
+cameraRaw	Calibration	Kalibrasyon
+cameraRaw	Color Smoothness	Renk yumuşaklığı
+cameraRaw	Green Amount	Yeşil miktarı
+cameraRaw	Green Hue	Yeşil tonu
+cameraRaw	Green Primary	Yeşil ana renk
+cameraRaw	Luminance Contrast	Parlaklık kontrastı
+cameraRaw	Optics	Optik
+cameraRaw	Parametric	Parametrik
+cameraRaw	Presence	Varlık
+cameraRaw	Purple Amount	Mor miktarı
+cameraRaw	Purple Hue	Mor tonu
+cameraRaw	Red Primary	Kırmızı ana renk
+cameraRaw	Refine Saturation	Doygunluğu iyileştir
+cameraRaw	Treatment & Profile	İşlem ve profil
+cameraRaw	White Balance	Beyaz dengesi

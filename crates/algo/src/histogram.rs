@@ -28,6 +28,39 @@ impl RgbHistogram {
     /// Each visible pixel counts once, including partially transparent pixels. Non-finite
     /// pixels are rejected as a whole; transparent RGB cannot contribute phantom peaks.
     pub fn from_rgba(pixels: &[[f32; 4]]) -> Self {
+        // Chunks counted in parallel and summed: counts add up the same in any order. A
+        // two-megapixel preview took a quarter of each Camera Raw frame on one thread.
+        const CHUNK: usize = 1 << 16;
+        if pixels.len() <= CHUNK {
+            return Self::count(pixels);
+        }
+        let parts = crate::photo_util::par_map(pixels.len().div_ceil(CHUNK), |i| Self::count(&pixels[i * CHUNK..((i + 1) * CHUNK).min(pixels.len())]));
+        let mut h = Self::default();
+        for part in parts {
+            h.add(&part);
+        }
+        h
+    }
+
+    /// Adds `other`'s counts to these.
+    fn add(&mut self, other: &Self) {
+        for (a, b) in self.channels.iter_mut().flatten().zip(other.channels.iter().flatten()) {
+            *a = a.saturating_add(*b);
+        }
+        for (a, b) in [&mut self.underflow, &mut self.overflow, &mut self.shadows, &mut self.highlights]
+            .into_iter()
+            .zip([&other.underflow, &other.overflow, &other.shadows, &other.highlights])
+        {
+            for (x, y) in a.iter_mut().zip(b) {
+                *x = x.saturating_add(*y);
+            }
+        }
+        self.samples = self.samples.saturating_add(other.samples);
+        self.transparent = self.transparent.saturating_add(other.transparent);
+        self.invalid = self.invalid.saturating_add(other.invalid);
+    }
+
+    fn count(pixels: &[[f32; 4]]) -> Self {
         let mut h = Self::default();
         for pixel in pixels {
             if !pixel[3].is_finite() {
@@ -93,6 +126,17 @@ pub fn clipping(p: [f32; 4]) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_image_counts_the_same_in_parallel() {
+        let px: Vec<[f32; 4]> = (0..300_000)
+            .map(|i| {
+                let v = (i % 1013) as f32 / 1000.0 - 0.005;
+                [v, 1.0 - v, (i % 7) as f32 / 6.0, if i % 97 == 0 { 0.0 } else if i % 89 == 0 { f32::NAN } else { 1.0 }]
+            })
+            .collect();
+        assert_eq!(RgbHistogram::from_rgba(&px), RgbHistogram::count(&px));
+    }
 
     #[test]
     fn exact_bins_and_channel_totals() {

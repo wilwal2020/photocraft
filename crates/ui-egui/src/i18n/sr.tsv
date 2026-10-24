@@ -4879,3 +4879,56 @@ shape	Appearance	Izgled
 	How softly the layer mask's edge fades into the original	Koliko meko ivica maske sloja prelazi u original
 	Creative shows everything Nano Banana drew: these don't apply.	Kreativni režim prikazuje sve što je Nano Banana nacrtala: ova podešavanja se ne primenjuju.
 	How Nano Banana's layer mask meets the original	Kako se maska sloja Nano Banana spaja sa originalom
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Unapred podešavanje mora imati ime
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Primenjeno unapred podešavanje {name}
+	Applied preset {name} ({n} settings not supported)	Primenjeno unapred podešavanje {name} ({n} podešavanja nije podržano)
+	Auto white balance found nothing to measure in this image	Automatski balans bele nije našao ništa za merenje na ovoj slici
+	Check All	Označi sve
+	Check None	Ne označi ništa
+	Choose at least one group of settings	Izaberite bar jednu grupu podešavanja
+	Click something light grey or white: that point is too dark or too bright to measure	Kliknite na nešto svetlosivo ili belo: ta tačka je previše tamna ili previše svetla za merenje
+	Copy to My Presets	Kopiraj u moja podešavanja
+	Create Preset	Napravi unapred podešavanje
+	Create Preset…	Napravi unapred podešavanje…
+	Curve region splits	Granice oblasti krive
+	Existing groups	Postojeće grupe
+	How much of the saturation a contrasty curve adds is kept	Koliko zasićenosti koju doda kontrastna kriva ostaje
+	Lens Vignetting	Vinjetiranje objektiva
+	Looking for presets…	Traženje unapred podešavanja…
+	My Presets	Moja podešavanja
+	No presets match.	Nijedno podešavanje se ne poklapa.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Još nema unapred podešavanja. Napravite jedno pomoću + ili stavite Camera Raw podešavanja (.xmp) u PhotoCraft fasciklu za unapred podešavanja.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Pozitivne vrednosti ispravljaju bačvastu, a negativne jastučastu distorziju
+	Presets can't be saved here	Unapred podešavanja se ovde ne mogu sačuvati
+	Presets menu	Meni unapred podešavanja
+	Rename Preset	Preimenuj unapred podešavanje
+	Saved preset {name}	Sačuvano unapred podešavanje {name}
+	Search presets	Pretraži unapred podešavanja
+	Set the Light sliders from the image's tones	Podesi klizače Svetlo prema tonovima slike
+	Show Adobe's Presets	Prikaži Adobe podešavanja
+	Update with Current Settings	Ažuriraj trenutnim podešavanjima
+	User Presets	Korisnička podešavanja
+	White Balance Tool (I): click something that should be neutral grey	Alatka Balans bele (I): kliknite na nešto što treba da bude neutralno sivo
+cameraRaw	3-Way	3 zone
+cameraRaw	As Shot	Kao snimljeno
+cameraRaw	B&W Mix	C/B mešanje
+cameraRaw	Blue Primary	Primarna plava
+cameraRaw	Calibration	Kalibracija
+cameraRaw	Color Smoothness	Glatkoća boje
+cameraRaw	Green Amount	Količina zelene
+cameraRaw	Green Hue	Nijansa zelene
+cameraRaw	Green Primary	Primarna zelena
+cameraRaw	Luminance Contrast	Kontrast osvetljenosti
+cameraRaw	Optics	Optika
+cameraRaw	Parametric	Parametarska
+cameraRaw	Presence	Prisustvo
+cameraRaw	Purple Amount	Količina ljubičaste
+cameraRaw	Purple Hue	Nijansa ljubičaste
+cameraRaw	Red Primary	Primarna crvena
+cameraRaw	Refine Saturation	Fino podesi zasićenost
+cameraRaw	Treatment & Profile	Obrada i profil
+cameraRaw	White Balance	Balans bele

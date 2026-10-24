@@ -1292,6 +1292,35 @@ pub fn slider_row_prec(
     r
 }
 
+/// [`slider_row`] packed tighter, for long panels of sliders (Camera Raw): the label and a
+/// shorter value field above the full-width track, without the gap after the row. The track
+/// keeps the whole width, for fine control.
+pub fn slider_row_compact(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let mut field = None;
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.horizontal(|ui| {
+        let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        scrub_label_within(ui, &l, f32::INFINITY);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            field = Some(value_field_box(ui, value, range.clone(), "", vec2(56.0, 18.0), 0.0, FieldOpts::default()).0);
+        });
+    });
+    let s = slider_with(ui, value, range, gradient, RowGestures::default());
+    ui.spacing_mut().item_spacing.y = spacing;
+    let mut r = s.clone();
+    if let Some(v) = field {
+        if v.changed() {
+            r.mark_changed();
+        }
+        // A scrub of the field or its label is one drag, like the slider's, for history.
+        use egui::response::Flags;
+        r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
+    }
+    r
+}
+
 /// iOS-style toggle switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());

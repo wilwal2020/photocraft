@@ -4489,3 +4489,56 @@ curves	Smooth	スムーズ
 	How softly the layer mask's edge fades into the original	レイヤーマスクの境界が元の画像にどれだけ柔らかく溶け込むか
 	Creative shows everything Nano Banana drew: these don't apply.	クリエイティブでは Nano Banana が描いたものがすべて表示されるため、これらの設定は適用されません。
 	How Nano Banana's layer mask meets the original	Nano Banana のレイヤーマスクと元の画像のつなぎ方
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	プリセットには名前が必要です
+	Adobe Color	Adobe カラー
+	Adobe Monochrome	Adobe モノクロ
+	Applied preset {name}	プリセット {name} を適用しました
+	Applied preset {name} ({n} settings not supported)	プリセット {name} を適用しました（{n} 個の設定は未対応）
+	Auto white balance found nothing to measure in this image	自動ホワイトバランスでこの画像から測定できるものが見つかりませんでした
+	Check All	すべてチェック
+	Check None	すべて解除
+	Choose at least one group of settings	設定のグループを 1 つ以上選んでください
+	Click something light grey or white: that point is too dark or too bright to measure	明るいグレーか白の部分をクリックしてください。その点は暗すぎるか明るすぎて測定できません
+	Copy to My Presets	マイプリセットにコピー
+	Create Preset	プリセットを作成
+	Create Preset…	プリセットを作成…
+	Curve region splits	カーブの領域の境界
+	Existing groups	既存のグループ
+	How much of the saturation a contrasty curve adds is kept	コントラストの強いカーブが加える彩度をどれだけ残すか
+	Lens Vignetting	レンズ周辺光量
+	Looking for presets…	プリセットを検索中…
+	My Presets	マイプリセット
+	No presets match.	一致するプリセットはありません。
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	プリセットはまだありません。+ で作成するか、Camera Raw プリセット（.xmp）を PhotoCraft のプリセットフォルダーに置いてください。
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	正の値はたる型ゆがみを、負の値は糸巻き型ゆがみを補正します
+	Presets can't be saved here	ここではプリセットを保存できません
+	Presets menu	プリセットメニュー
+	Rename Preset	プリセット名を変更
+	Saved preset {name}	プリセット {name} を保存しました
+	Search presets	プリセットを検索
+	Set the Light sliders from the image's tones	画像の階調からライトのスライダーを設定
+	Show Adobe's Presets	Adobe のプリセットを表示
+	Update with Current Settings	現在の設定で更新
+	User Presets	ユーザープリセット
+	White Balance Tool (I): click something that should be neutral grey	ホワイトバランスツール (I)：ニュートラルグレーであるべき部分をクリック
+cameraRaw	3-Way	3 ウェイ
+cameraRaw	As Shot	撮影時の設定
+cameraRaw	B&W Mix	白黒ミックス
+cameraRaw	Blue Primary	色度座標（青）
+cameraRaw	Calibration	キャリブレーション
+cameraRaw	Color Smoothness	カラーの滑らかさ
+cameraRaw	Green Amount	グリーンの適用量
+cameraRaw	Green Hue	グリーンの色相
+cameraRaw	Green Primary	色度座標（緑）
+cameraRaw	Luminance Contrast	輝度のコントラスト
+cameraRaw	Optics	光学
+cameraRaw	Parametric	パラメトリック
+cameraRaw	Presence	外観
+cameraRaw	Purple Amount	パープルの適用量
+cameraRaw	Purple Hue	パープルの色相
+cameraRaw	Red Primary	色度座標（赤）
+cameraRaw	Refine Saturation	彩度を調整
+cameraRaw	Treatment & Profile	処理方法とプロファイル
+cameraRaw	White Balance	ホワイトバランス

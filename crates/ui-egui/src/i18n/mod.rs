@@ -1511,11 +1511,16 @@ mod tests {
     /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
     #[test]
     fn camera_raw_labels_are_translated_in_every_available_language() {
-        let sources = [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")];
+        let sources = [
+            include_str!("../camera_raw_ui.rs"),
+            include_str!("../camera_raw_scope_ui.rs"),
+            include_str!("../camera_raw_edit_ui.rs"),
+            include_str!("../camera_raw_presets_ui.rs"),
+        ];
         let mut labels = std::collections::BTreeSet::new();
         for source in sources {
             let code = source.split("#[cfg(test)]").next().unwrap();
-            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "=> \""] {
+            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "slider_to(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "tr(\"", "=> \""] {
                 for tail in code.split(marker).skip(1) {
                     labels.insert(tail.split('"').next().unwrap());
                 }

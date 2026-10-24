@@ -482,7 +482,18 @@ RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens 
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
 then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `commit` and
-`cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
+`cancel`, and while a raw file opens also `demosaic` (below). Tools: `auto: "tone"` (Light › Auto)
+or `"whiteBalance"` (White Balance › Auto), `whiteBalanceAt: [u, v]` (the White Balance tool at a
+point of the image, 0–1; an error where the original is too dark or clipped to measure). Panels:
+`tab: "edit" | "presets"`. Presets (Camera Raw `.xmp` presets in PhotoCraft's own folder and in
+Photoshop's Camera Raw Settings folders, `showAdobePresets: bool` adding Adobe's installed ones):
+`applyPreset` (a listed preset's path or name; one undo step, Auto white balance measured on the
+image; the reply's `preset` names the settings not supported), `presetAmount` (0–200 %: the applied
+preset mixed with the settings it was applied over), `savePreset: {name, group?, sections?}`
+(sections: `treatment`, `whiteBalance`, `light`, `presence`, `curve`, `colorMixer`, `colorGrading`,
+`detail`, `effects`, `optics`, `calibration`; all when left out; written to PhotoCraft's folder, the
+reply's `savedPreset` its path) and `deletePreset` (a path in PhotoCraft's folder; Photoshop's
+presets are never written). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,
@@ -537,6 +548,11 @@ The response and `ui.inspect.cameraRaw` contain:
   At 100%, one source pixel maps to one physical display pixel, including on HiDPI displays.
 - `previewApproximate`, `detailPending`, `detailError`: whether the visible image still uses
   the proxy, whether full-resolution refinement is running, and any refinement error.
+- `tab`, `curveMode` (`Parametric`, `Point`, `Red`, `Green`, `Blue`), `gradingView` (`3-Way`,
+  `Shadows`, `Midtones`, `Highlights`, `Global`), `whiteBalanceTool`, `previewingPreset` (the
+  preview shows a preset the pointer is on), and `presets`: `count`, `items` (`name`, `group`,
+  `source`: `own` | `photoshop` | `adobe`, `path`; at most 2000), `scanning`, `showAdobe`,
+  `applied` (`name`, `path`, `amount`, `active`: its Amount still applies) or null.
 
 `params.ui.view` changes navigation only: `zoom: "fit" | 0.0001..=16`, `center: [u,v]`
 (finite coordinates in 0..=1, clamped to keep the image within view), `hand: bool`. Fit recentres
@@ -552,7 +568,12 @@ wheel pans. Pinch zooms. Ctrl/Command +/- zoom, 0 fits, and Alt/Option + Ctrl/Co
 percentages. Tool double-clicks fit the image.
 Text fields retain their keys and wheel gestures over the settings panel still scroll it.
 
-The proxy remains the fast path while changing settings. Where more source pixels are needed,
+The proxy is as large as the monitor (1024–2560 px on the long side) and remains the fast path
+while changing settings: the develop keeps the image after the stages that look at the
+surroundings and the Shadows/Highlights filter maps between frames, so a slider redoes only its
+stage and the ones after it, and while a control is dragged (or a preset previewed) Shadows and
+Highlights may reuse maps made for other white balance, Dehaze or Highlights settings, redone
+exactly on release. Where more source pixels are needed,
 Camera Raw lazily refines with the **same engine Camera Raw pipeline** at pixelScale=1 and the
 same selection/filter-mask coverage. Native refinement runs off the UI thread (one revision at
 a time); stale results are discarded. Only a bounded visible crop is uploaded to the GPU, and

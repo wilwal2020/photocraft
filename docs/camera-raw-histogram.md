@@ -48,9 +48,12 @@ save, but their settings cannot be edited or re-rendered by PhotoCraft. Non-defa
 settings without a verified PSD mapping cause the existing export warning and omission of that
 filter; they are never silently written as default Camera Raw settings.
 
-Active manual lens distortion/vignetting, luminance-noise contrast, color-noise smoothness,
-post-crop vignette style (`PCVS`, still unverified) and highlights, RAW Kelvin white balance,
-masks and HDR still need mapping and/or rendering support. Observed neutral-only controls are
+Manual lens distortion (`MDis`), lens vignetting (`VigA`, `VigM`), luminance-noise contrast
+(`LNRC`), color-noise smoothness (`CNRS`) and curve Refine Saturation (`crfs`) are mapped and
+rendered (2026-10-25). Post-crop vignette style (`PCVS`, still unverified) and highlights, RAW
+Kelvin white balance, masks and HDR still need mapping and/or rendering support; the Black & White
+treatment, B&W Mix, Calibration and Defringe render but have no verified PSD key yet, so a filter
+using them takes the export warning above. Observed neutral-only controls are
 retained in the template; non-neutral values keep the filter opaque. In the updated fixture,
 Distortion −28, Lens Vignetting 28 and `PCVS=1` keep the entire filter opaque, while all settings
 survive PSD and `.pcraft` saves. Its supported controls are also checked as a descriptor-only

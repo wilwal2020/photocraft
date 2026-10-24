@@ -4428,3 +4428,56 @@ curves	Smooth	Wygładź
 	How softly the layer mask's edge fades into the original	Jak łagodnie krawędź maski warstwy przechodzi w oryginał
 	Creative shows everything Nano Banana drew: these don't apply.	Tryb kreatywny pokazuje wszystko, co narysowała Nano Banana: te ustawienia nie mają zastosowania.
 	How Nano Banana's layer mask meets the original	Jak maska warstwy Nano Banana łączy się z oryginałem
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Ustawienie predefiniowane musi mieć nazwę
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Zastosowano ustawienie {name}
+	Applied preset {name} ({n} settings not supported)	Zastosowano ustawienie {name} ({n} ustawień nieobsługiwanych)
+	Auto white balance found nothing to measure in this image	Automatyczny balans bieli nie znalazł w tym obrazie nic do zmierzenia
+	Check All	Zaznacz wszystko
+	Check None	Odznacz wszystko
+	Choose at least one group of settings	Wybierz co najmniej jedną grupę ustawień
+	Click something light grey or white: that point is too dark or too bright to measure	Kliknij coś jasnoszarego lub białego: ten punkt jest za ciemny lub za jasny do pomiaru
+	Copy to My Presets	Kopiuj do moich ustawień
+	Create Preset	Utwórz ustawienie predefiniowane
+	Create Preset…	Utwórz ustawienie predefiniowane…
+	Curve region splits	Granice obszarów krzywej
+	Existing groups	Istniejące grupy
+	How much of the saturation a contrasty curve adds is kept	Ile nasycenia dodanego przez kontrastową krzywą zostaje zachowane
+	Lens Vignetting	Winietowanie obiektywu
+	Looking for presets…	Szukanie ustawień predefiniowanych…
+	My Presets	Moje ustawienia
+	No presets match.	Żadne ustawienie nie pasuje.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Brak ustawień predefiniowanych. Utwórz je przyciskiem + albo umieść ustawienia Camera Raw (.xmp) w folderze ustawień PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Wartości dodatnie korygują zniekształcenie beczkowate, ujemne poduszkowate
+	Presets can't be saved here	Tutaj nie można zapisywać ustawień predefiniowanych
+	Presets menu	Menu ustawień predefiniowanych
+	Rename Preset	Zmień nazwę ustawienia
+	Saved preset {name}	Zapisano ustawienie {name}
+	Search presets	Szukaj ustawień predefiniowanych
+	Set the Light sliders from the image's tones	Ustaw suwaki Światła według tonów obrazu
+	Show Adobe's Presets	Pokaż ustawienia Adobe
+	Update with Current Settings	Zaktualizuj bieżącymi ustawieniami
+	User Presets	Ustawienia użytkownika
+	White Balance Tool (I): click something that should be neutral grey	Narzędzie Balans bieli (I): kliknij coś, co powinno być neutralnie szare
+cameraRaw	3-Way	3 strefy
+cameraRaw	As Shot	Jak w aparacie
+cameraRaw	B&W Mix	Mieszanie cz-b
+cameraRaw	Blue Primary	Kolor podstawowy niebieski
+cameraRaw	Calibration	Kalibracja
+cameraRaw	Color Smoothness	Gładkość koloru
+cameraRaw	Green Amount	Wartość zieleni
+cameraRaw	Green Hue	Barwa zieleni
+cameraRaw	Green Primary	Kolor podstawowy zielony
+cameraRaw	Luminance Contrast	Kontrast luminancji
+cameraRaw	Optics	Optyka
+cameraRaw	Parametric	Parametryczna
+cameraRaw	Presence	Obecność
+cameraRaw	Purple Amount	Wartość fioletu
+cameraRaw	Purple Hue	Barwa fioletu
+cameraRaw	Red Primary	Kolor podstawowy czerwony
+cameraRaw	Refine Saturation	Doprecyzuj nasycenie
+cameraRaw	Treatment & Profile	Obróbka i profil
+cameraRaw	White Balance	Balans bieli

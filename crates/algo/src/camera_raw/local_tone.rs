@@ -14,6 +14,10 @@
 //!   brightest content under Shadows and the darkest under Highlights).
 //! - A uniform image is unchanged, edges keep no halo, and the result does not depend on the
 //!   image size.
+//! - Both remappings are the pixel plus the slider's amount times a function of the pixel and its
+//!   reference, and the pyramids are linear, so each pass adds `amount · D` to the log luminance
+//!   for one map `D` per direction: [`Cache`] keeps the maps, and moving a slider redoes only that
+//!   sum. The filter also ignores a constant offset of the plane, which is all Exposure changes.
 //!
 //! The strengths were fitted to Photoshop 25.4's Camera Raw Filter on ten public-domain photos
 //! (black-box measurements, no Adobe code or data). It is an approximation: on those photos the
@@ -21,7 +25,7 @@
 //! 3.7–14.3.
 
 use super::{Encoding, luma};
-use crate::photo_util::par_rows;
+use crate::photo_util::{par_map, par_rows};
 
 /// Spacing of the fast filter's reference values in stops. Its remapping changes within about
 /// half a stop, and coefficients interpolated across wider gaps show as contour lines on smooth
@@ -86,7 +90,12 @@ const PAR_MIN: usize = 1 << 15;
 
 /// [`par_rows`] for a plane, on one thread when it is small (see [`PAR_MIN`]).
 fn rows(buf: &mut [f32], w: usize, f: impl Fn(usize, &mut [f32]) + Sync + Send) {
-    if buf.len() < PAR_MIN {
+    rows_on(true, buf, w, f);
+}
+
+/// [`rows`], or always on this thread unless `parallel`.
+fn rows_on(parallel: bool, buf: &mut [f32], w: usize, f: impl Fn(usize, &mut [f32]) + Sync + Send) {
+    if !parallel || buf.len() < PAR_MIN {
         buf.chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| f(y, row));
     } else {
         par_rows(buf, w, 1, f);
@@ -95,12 +104,17 @@ fn rows(buf: &mut [f32], w: usize, f: impl Fn(usize, &mut [f32]) + Sync + Send) 
 
 /// The binomial 5-tap blur, sampled every `step` pixels from 0 (1 = full resolution).
 fn blur_step(p: &Plane, step: usize) -> Plane {
+    blur_step_on(true, p, step)
+}
+
+/// [`blur_step`], on this thread only unless `parallel`.
+fn blur_step_on(parallel: bool, p: &Plane, step: usize) -> Plane {
     let (w2, h2) = (p.w.div_ceil(step), p.h.div_ceil(step));
     // Columns first at the kept rows, then rows at the kept columns. Each sum adds the same terms
     // in the same order as a `mirror` per tap would, so the result is bit for bit the same; the
     // source rows are found once per row and the columns mirrored only near the edges.
     let mut tmp = vec![0.0f32; p.w * h2];
-    rows(&mut tmp, p.w, |y2, row| {
+    rows_on(parallel, &mut tmp, p.w, |y2, row| {
         let y = (y2 * step) as isize;
         let src: [&[f32]; 5] = std::array::from_fn(|k| {
             let r = mirror(y + k as isize - 2, p.h);
@@ -111,7 +125,7 @@ fn blur_step(p: &Plane, step: usize) -> Plane {
         }
     });
     let mut out = vec![0.0f32; w2 * h2];
-    rows(&mut out, w2, |y2, row| {
+    rows_on(parallel, &mut out, w2, |y2, row| {
         let src = &tmp[y2 * p.w..(y2 + 1) * p.w];
         for (x2, o) in row.iter_mut().enumerate() {
             let x = x2 * step;
@@ -226,8 +240,20 @@ fn gaussian(p: Plane, n: usize) -> Vec<Plane> {
     g
 }
 
-/// The local Laplacian filter of `u` with `remap(value, reference)`; the coarsest level is kept.
-fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
+/// [`gaussian`] on this thread only (for work already split across threads).
+fn gaussian_serial(p: Plane, n: usize) -> Vec<Plane> {
+    let mut g = vec![p];
+    for _ in 1..n {
+        let next = blur_step_on(false, &g[g.len() - 1], 2);
+        g.push(next);
+    }
+    g
+}
+
+/// The local Laplacian filter's change for the remapping `x + delta(x, reference)`: the sum of
+/// the remapped Laplacian levels of `delta` alone (the plane's own levels add up to the plane, the
+/// interpolation weights summing to one), over a coarsest level of zero.
+fn llf_delta(u: &Plane, delta: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
     let n = depth(u.w, u.h);
     let g = gaussian(Plane { w: u.w, h: u.h, v: u.v.clone() }, n);
     // References span the image's tones; the deepest 0.1 % (noise down to the floor) share the
@@ -235,35 +261,52 @@ fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
     let hi = u.v.iter().fold(f32::NEG_INFINITY, |a, &v| a.max(v));
     let lo = quantile(&u.v, 0.001).min(hi);
     if hi - lo <= 1e-6 || (hi - lo).is_nan() {
-        return Plane { w: u.w, h: u.h, v: u.v.clone() };
+        return Plane { w: u.w, h: u.h, v: vec![0.0; u.v.len()] };
     }
     let refs = (((hi - lo) / REF_STEP).ceil() as usize + 1).clamp(2, 96);
     let step = (hi - lo) / (refs - 1) as f32;
     let mut lap: Vec<Vec<f32>> = g[..n - 1].iter().map(|p| vec![0.0; p.v.len()]).collect();
-    for k in 0..refs {
+    // One reference's weighted Laplacian coefficients where its weight isn't zero (a pixel lies
+    // between two references, so that is about two in `refs` of them), as (index, value) per level.
+    let contribution = |k: usize| -> Vec<Vec<(u32, f32)>> {
         let r = lo + step * k as f32;
-        let mut m = Plane { w: u.w, h: u.h, v: u.v.clone() };
-        rows(&mut m.v, u.w, |_, row| {
-            for v in row.iter_mut() {
-                *v = remap(*v, r);
-            }
-        });
-        let gr = gaussian(m, n);
-        for l in 0..n - 1 {
-            let (gl, fine, lw, lh, coarse) = (&g[l].v, &gr[l].v, g[l].w, g[l].h, &gr[l + 1]);
-            rows(&mut lap[l], lw, |y, row| {
-                let taps = up_rows(coarse, lh, y);
-                for (x, o) in row.iter_mut().enumerate() {
-                    let i = y * lw + x;
-                    let wgt = (1.0 - (gl[i].clamp(lo, hi) - r).abs() / step).max(0.0);
-                    if wgt > 0.0 {
-                        *o += wgt * (fine[i] - up_at(coarse, lw, &taps, x));
+        let m = Plane { w: u.w, h: u.h, v: u.v.iter().map(|v| delta(*v, r)).collect() };
+        let gr = gaussian_serial(m, n);
+        (0..n - 1)
+            .map(|l| {
+                let (gl, fine, lw, lh, coarse) = (&g[l].v, &gr[l].v, g[l].w, g[l].h, &gr[l + 1]);
+                let mut out = Vec::new();
+                for y in 0..lh {
+                    let taps = up_rows(coarse, lh, y);
+                    for x in 0..lw {
+                        let i = y * lw + x;
+                        let wgt = (1.0 - (gl[i].clamp(lo, hi) - r).abs() / step).max(0.0);
+                        if wgt > 0.0 {
+                            out.push((i as u32, wgt * (fine[i] - up_at(coarse, lw, &taps, x))));
+                        }
                     }
                 }
-            });
+                out
+            })
+            .collect()
+    };
+    // References in parallel batches (each one's pyramid is small work to split further: rayon's
+    // scheduling of its levels' rows was a large part of the filter), added in reference order,
+    // so the result doesn't depend on the threads and is the one a single pass gives.
+    let batch = refs.min(32);
+    for first in (0..refs).step_by(batch) {
+        let parts = par_map((refs - first).min(batch), |j| contribution(first + j));
+        for part in parts {
+            for (acc, level) in lap.iter_mut().zip(part) {
+                for (i, v) in level {
+                    if let Some(a) = acc.get_mut(i as usize) {
+                        *a += v;
+                    }
+                }
+            }
         }
     }
-    let mut o = Plane { w: g[n - 1].w, h: g[n - 1].h, v: g[n - 1].v.clone() };
+    let mut o = Plane { w: g[n - 1].w, h: g[n - 1].h, v: vec![0.0; g[n - 1].v.len()] };
     for l in (0..n - 1).rev() {
         let mut next = up(&o, g[l].w, g[l].h);
         for (a, b) in next.v.iter_mut().zip(&lap[l]) {
@@ -287,15 +330,19 @@ fn quantile(v: &[f32], q: f32) -> f32 {
 fn range(u: &Plane) -> (f32, f32) {
     let f = u.w.max(u.h).div_ceil(256).max(1);
     let (sw, sh) = (u.w.div_ceil(f), u.h.div_ceil(f));
-    let mut sum = vec![(0.0f64, 0u32); sw * sh];
-    for y in 0..u.h {
-        for x in 0..u.w {
-            let c = &mut sum[(y / f) * sw + x / f];
-            c.0 += f64::from(u.v[y * u.w + x]);
-            c.1 += 1;
+    // Rows of cells in parallel; each cell adds its pixels in the order one pass would.
+    let rows = par_map(sh, |sy| {
+        let mut sum = vec![(0.0f64, 0u32); sw];
+        for y in sy * f..((sy + 1) * f).min(u.h) {
+            for (x, v) in u.v[y * u.w..(y + 1) * u.w].iter().enumerate() {
+                let c = &mut sum[x / f];
+                c.0 += f64::from(*v);
+                c.1 += 1;
+            }
         }
-    }
-    let cells: Vec<f32> = sum.iter().filter(|c| c.1 > 0).map(|c| (c.0 / f64::from(c.1)) as f32).collect();
+        sum
+    });
+    let cells: Vec<f32> = rows.iter().flatten().filter(|c| c.1 > 0).map(|c| (c.0 / f64::from(c.1)) as f32).collect();
     (quantile(&cells, 0.01), quantile(&cells, 0.99))
 }
 
@@ -310,68 +357,110 @@ fn knot(t: f32, k: &[f32; KNOTS]) -> f32 {
     k[i] + (k[i + 1] - k[i]) * (x - i as f32)
 }
 
-/// The Highlights pass on the log luminance `u` (`amount` −1 … 1): pixels brighter than their
-/// surroundings move toward them (or away, for positive values) by the part of the difference
-/// past `sigma`, then the darkest content is put back where it was.
-fn highlights_pass(u: &Plane, amount: f32, side: &Side) -> Plane {
+/// The Highlights map of the log luminance `u`, for raising it (`push`) or lowering it: pixels
+/// brighter than their surroundings move toward them (or away) by the part of the difference
+/// past `sigma`, per unit amount.
+fn highlights_map(u: &Plane, push: bool, side: &Side) -> Plane {
     let (lo, hi) = range(u);
     let span = (hi - lo).max(1.0);
-    let strengths = if amount < 0.0 { &side.pull } else { &side.push };
-    let o = llf(u, |x, g| x + knot((g - lo) / span, strengths) * amount * excess((x - g).max(0.0), side.sigma));
-    let shift = quantile(&u.v, 0.01) - quantile(&o.v, 0.01);
-    Plane { w: o.w, h: o.h, v: o.v.iter().map(|v| v + shift).collect() }
+    let strengths = if push { &side.push } else { &side.pull };
+    llf_delta(u, |x, g| knot((g - lo) / span, strengths) * excess((x - g).max(0.0), side.sigma))
 }
 
-/// The Shadows pass on the log luminance `u` (`amount` −1 … 1).
-fn shadows_pass(u: &Plane, amount: f32) -> Plane {
+/// The Shadows map of the log luminance `u`, per unit amount.
+fn shadows_map(u: &Plane) -> Plane {
     let (lo, hi) = range(u);
     let span = (hi - lo).max(1.0);
-    let k = if amount > 0.0 { amount } else { amount * SHADOWS.down };
-    let o = llf(u, |x, g| {
+    llf_delta(u, |x, g| {
         let below = ((g - x) / SHADOWS.sigma).clamp(0.0, 1.0);
         if below == 0.0 {
-            return x;
+            return 0.0;
         }
         let w = below * below * (3.0 - 2.0 * below);
-        x + k * knot((x - lo) / span, &SHADOWS.own) * knot((g - lo) / span, &SHADOWS.around) * w
-    });
-    // Keep the brightest content.
-    let shift = quantile(&u.v, 0.99) - quantile(&o.v, 0.99);
-    Plane { w: o.w, h: o.h, v: o.v.iter().map(|v| v + shift).collect() }
+        knot((x - lo) / span, &SHADOWS.own) * knot((g - lo) / span, &SHADOWS.around) * w
+    })
+}
+
+/// `u + k · d`, shifted so that its `q` quantile stays where `u`'s was (Highlights keeps the
+/// darkest content, Shadows the brightest, as Photoshop does).
+fn add_kept(u: &Plane, k: f32, d: &Plane, q: f32) -> Plane {
+    let v: Vec<f32> = par_map(u.v.len(), |i| u.v[i] + k * d.v[i]);
+    let shift = quantile(&u.v, q) - quantile(&v, q);
+    Plane { w: u.w, h: u.h, v: par_map(v.len(), |i| v[i] + shift) }
+}
+
+/// The filter maps [`apply`] keeps between calls, each with the key of the plane it was made
+/// from (the caller's: the pixels and the settings before this stage, see the module docs).
+#[derive(Default)]
+pub(crate) struct Cache {
+    /// Highlights: the key, whether the map raises, the map.
+    highlights: Option<(u64, bool, Plane)>,
+    /// Shadows: the key, the Highlights value it ran after (its bits), the map.
+    shadows: Option<(u64, u32, Plane)>,
 }
 
 /// Applies Shadows and Highlights (−100 … 100) to straight RGBA pixels encoded with `enc`.
-pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highlights: f32, enc: Encoding) {
-    if (shadows == 0.0 && highlights == 0.0) || w < 2 || h < 2 {
-        return;
+/// `cache`: maps kept from earlier calls, the key of these pixels, and whether a map made for
+/// another key (or Highlights value) may serve, which is close but not exact. Returns false when
+/// one did.
+pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highlights: f32, enc: Encoding, cache: Option<(&mut Cache, u64, bool)>) -> bool {
+    if (shadows == 0.0 && highlights == 0.0) || w < 2 || h < 2 || px.len() != w * h {
+        return true;
     }
     const FLOOR: f32 = 1.0 / 65536.0;
-    let u = Plane { w, h, v: px.iter().map(|q| (luma([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0) + FLOOR).log2()).collect() };
+    let curves = enc.curves();
+    let u = Plane { w, h, v: par_map(px.len(), |i| (luma([0, 1, 2].map(|c| curves.decode(px[i][c]))).max(0.0) + FLOOR).log2()) };
     // The filter on a copy at most WORK_SIDE across (box-averaged in log).
     let f = w.max(h).div_ceil(WORK_SIDE).max(1);
     let small = if f == 1 { Plane { w, h, v: u.v.clone() } } else { shrink(&u, f) };
+    let mut fresh = Cache::default();
+    let (cache, key, draft) = match cache {
+        Some((c, key, draft)) => (c, key, draft),
+        None => (&mut fresh, 0, false),
+    };
+    let mut exact = true;
     let mut o = Plane { w: small.w, h: small.h, v: small.v.clone() };
     if highlights != 0.0 {
-        o = highlights_pass(&o, highlights.clamp(-100.0, 100.0) / 100.0, &HIGHLIGHTS);
+        let amount = highlights.clamp(-100.0, 100.0) / 100.0;
+        let push = amount > 0.0;
+        let fits = |c: &&(u64, bool, Plane)| c.1 == push && (c.2.w, c.2.h) == (o.w, o.h) && (c.0 == key || draft);
+        if cache.highlights.as_ref().filter(fits).is_none() {
+            cache.highlights = Some((key, push, highlights_map(&o, push, &HIGHLIGHTS)));
+        }
+        if let Some((made, _, d)) = &cache.highlights {
+            exact &= *made == key;
+            o = add_kept(&o, amount, d, 0.01);
+        }
     }
     if shadows != 0.0 {
-        o = shadows_pass(&o, shadows.clamp(-100.0, 100.0) / 100.0);
+        let amount = shadows.clamp(-100.0, 100.0) / 100.0;
+        let k = if amount > 0.0 { amount } else { amount * SHADOWS.down };
+        let after = highlights.to_bits();
+        let fits = |c: &&(u64, u32, Plane)| (c.2.w, c.2.h) == (o.w, o.h) && ((c.0, c.1) == (key, after) || draft);
+        if cache.shadows.as_ref().filter(fits).is_none() {
+            cache.shadows = Some((key, after, shadows_map(&o)));
+        }
+        if let Some((made, made_after, d)) = &cache.shadows {
+            exact &= (*made, *made_after) == (key, after);
+            o = add_kept(&o, k, d, 0.99);
+        }
     }
     // The change in log luminance, at full size.
     let change: Vec<f32> = if f == 1 {
-        o.v.iter().zip(&u.v).map(|(a, b)| a - b).collect()
+        par_map(o.v.len(), |i| o.v[i] - u.v[i])
     } else {
-        let d: Vec<f32> = o.v.iter().zip(&small.v).map(|(a, b)| a - b).collect();
+        let d: Vec<f32> = par_map(o.v.len(), |i| o.v[i] - small.v[i]);
         guided_upsample(&small, &d, &u)
     };
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
             let gain = change[y * w + x].exp2();
             for c in 0..3 {
-                q[c] = enc.encode(enc.decode(q[c]) * gain);
+                q[c] = curves.encode(curves.decode(q[c]) * gain);
             }
         }
     });
+    exact
 }
 
 /// `u` averaged over `f × f` blocks.
@@ -399,15 +488,7 @@ fn shrink(u: &Plane, f: usize) -> Plane {
 /// *Fast Guided Filter*, 2015), fitted on the small copy and evaluated on the full one.
 fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
     let (sw, sh) = (small.w, small.h);
-    let r = 2;
-    let eps = 0.01;
-    let mean = |v: &[f32]| super::box_mean(v, sw, sh, r);
-    let ud: Vec<f32> = small.v.iter().zip(d).map(|(a, b)| a * b).collect();
-    let uu: Vec<f32> = small.v.iter().map(|a| a * a).collect();
-    let (mu, md, mud, muu) = (mean(&small.v), mean(d), mean(&ud), mean(&uu));
-    let a: Vec<f32> = (0..sw * sh).map(|i| (mud[i] - mu[i] * md[i]) / (muu[i] - mu[i] * mu[i] + eps)).collect();
-    let b: Vec<f32> = (0..sw * sh).map(|i| md[i] - a[i] * mu[i]).collect();
-    let (ma, mb) = (mean(&a), mean(&b));
+    let (ma, mb) = super::guided_coefficients(&small.v, d, sw, sh, 2, 0.01);
     let (fx, fy) = (sw as f32 / full.w as f32, sh as f32 / full.h as f32);
     let mut out = vec![0.0f32; full.w * full.h];
     par_rows(&mut out, full.w, 1, |y, row| {
@@ -513,7 +594,7 @@ mod tests {
     #[test]
     fn a_flat_image_is_unchanged() {
         let mut px = grey(64, 48, |_, _| 0.4);
-        apply(&mut px, 64, 48, 100.0, -100.0, SRGB);
+        apply(&mut px, 64, 48, 100.0, -100.0, SRGB, None);
         assert!(px.iter().all(|q| (q[0] - 0.4).abs() < 1e-5));
     }
 
@@ -523,7 +604,7 @@ mod tests {
         // moves either): the bright half stays, and no halo forms on either side of the edge.
         let (w, h) = (256, 128);
         let mut px = grey(w, h, |x, _| if x < w / 2 { 0.1 } else { 0.6 });
-        apply(&mut px, w, h, 100.0, 0.0, SRGB);
+        apply(&mut px, w, h, 100.0, 0.0, SRGB, None);
         let row = &px[64 * w..65 * w];
         assert!((row[w / 2 + 1][0] - 0.6).abs() < 0.002 && (row[w - 5][0] - 0.6).abs() < 0.002);
         let (far, near) = (row[10][0], row[w / 2 - 1][0]);
@@ -548,7 +629,7 @@ mod tests {
         };
         for (s, hl, want) in [(100.0, 0.0, 165.3), (0.0, -100.0, 89.6)] {
             let mut px = image(0.5);
-            apply(&mut px, n, n, s, hl, SRGB);
+            apply(&mut px, n, n, s, hl, SRGB, None);
             let got = px[175 * n + 100][0] * 255.0;
             assert!((got - want).abs() < 5.0, "{s} {hl}: {got} vs {want}");
         }
@@ -558,7 +639,7 @@ mod tests {
     fn highlights_lower_a_bright_area_and_keep_the_darkest() {
         let (w, h) = (192, 192);
         let mut px = grey(w, h, |x, y| if (64..128).contains(&x) && (64..128).contains(&y) { 0.8 } else { 0.2 });
-        apply(&mut px, w, h, 0.0, -100.0, SRGB);
+        apply(&mut px, w, h, 0.0, -100.0, SRGB, None);
         assert!(px[96 * w + 96][0] < 0.75, "{}", px[96 * w + 96][0]);
         assert!((px[5 * w + 5][0] - 0.2).abs() < 0.01, "{}", px[5 * w + 5][0]);
     }
@@ -572,7 +653,7 @@ mod tests {
         let mut px = grey(w, h, |x, _| crate::photo_util::linear_to_srgb((x as f32 / (w - 1) as f32 * 8.0 - 9.0).exp2()));
         for (s, hl) in [(100.0, 0.0), (0.0, -100.0), (-100.0, 100.0)] {
             let mut p = px.clone();
-            apply(&mut p, w, h, s, hl, SRGB);
+            apply(&mut p, w, h, s, hl, SRGB, None);
             let row: Vec<f32> = (0..w).map(|x| crate::photo_util::srgb_to_linear(p[24 * w + x][0]).max(1e-6).log2()).collect();
             let steps: Vec<f32> = row.windows(2).map(|d| d[1] - d[0]).collect();
             assert!(steps.iter().all(|d| *d > 0.0), "{s} {hl}: the ramp reverses");
@@ -588,7 +669,7 @@ mod tests {
     fn the_result_does_not_depend_on_the_image_size() {
         let at = |n: usize| {
             let mut px = grey(n, n, |x, y| if x < n / 3 || y < n / 4 { 0.08 } else { 0.7 });
-            apply(&mut px, n, n, 70.0, -60.0, SRGB);
+            apply(&mut px, n, n, 70.0, -60.0, SRGB, None);
             [px[(n / 8) * n + n / 8][0], px[(3 * n / 4) * n + 3 * n / 4][0]]
         };
         let (a, b) = (at(96), at(384));

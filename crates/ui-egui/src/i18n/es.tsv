@@ -4769,3 +4769,56 @@ navigator	Zoom	Zoom
 	How softly the layer mask's edge fades into the original	Con qué suavidad se funde el borde de la máscara de capa con el original
 	Creative shows everything Nano Banana drew: these don't apply.	Creativo muestra todo lo que dibujó Nano Banana: estos ajustes no se aplican.
 	How Nano Banana's layer mask meets the original	Cómo se une la máscara de capa de Nano Banana al original
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Un ajuste preestablecido necesita un nombre
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Ajuste preestablecido {name} aplicado
+	Applied preset {name} ({n} settings not supported)	Ajuste preestablecido {name} aplicado ({n} ajustes no admitidos)
+	Auto white balance found nothing to measure in this image	El balance de blancos automático no encontró nada que medir en esta imagen
+	Check All	Marcar todo
+	Check None	Desmarcar todo
+	Choose at least one group of settings	Elija al menos un grupo de ajustes
+	Click something light grey or white: that point is too dark or too bright to measure	Haga clic en algo gris claro o blanco: ese punto es demasiado oscuro o demasiado claro para medirlo
+	Copy to My Presets	Copiar en mis ajustes preestablecidos
+	Create Preset	Crear ajuste preestablecido
+	Create Preset…	Crear ajuste preestablecido…
+	Curve region splits	Divisiones de zonas de la curva
+	Existing groups	Grupos existentes
+	How much of the saturation a contrasty curve adds is kept	Cuánta de la saturación que añade una curva contrastada se conserva
+	Lens Vignetting	Viñeteado del objetivo
+	Looking for presets…	Buscando ajustes preestablecidos…
+	My Presets	Mis ajustes preestablecidos
+	No presets match.	Ningún ajuste preestablecido coincide.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Aún no hay ajustes preestablecidos. Cree uno con + o coloque ajustes preestablecidos de Camera Raw (.xmp) en la carpeta de ajustes preestablecidos de PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Los valores positivos corrigen la distorsión de barril, los negativos la de cojín
+	Presets can't be saved here	Aquí no se pueden guardar ajustes preestablecidos
+	Presets menu	Menú de ajustes preestablecidos
+	Rename Preset	Cambiar nombre del ajuste preestablecido
+	Saved preset {name}	Ajuste preestablecido {name} guardado
+	Search presets	Buscar ajustes preestablecidos
+	Set the Light sliders from the image's tones	Ajustar los reguladores de Luz según los tonos de la imagen
+	Show Adobe's Presets	Mostrar los ajustes preestablecidos de Adobe
+	Update with Current Settings	Actualizar con los ajustes actuales
+	User Presets	Ajustes preestablecidos de usuario
+	White Balance Tool (I): click something that should be neutral grey	Herramienta Balance de blancos (I): haga clic en algo que deba ser gris neutro
+cameraRaw	3-Way	3 vías
+cameraRaw	As Shot	Como se tomó
+cameraRaw	B&W Mix	Mezcla de B/N
+cameraRaw	Blue Primary	Primario azul
+cameraRaw	Calibration	Calibración
+cameraRaw	Color Smoothness	Suavizado de color
+cameraRaw	Green Amount	Cantidad de verde
+cameraRaw	Green Hue	Tono del verde
+cameraRaw	Green Primary	Primario verde
+cameraRaw	Luminance Contrast	Contraste de luminancia
+cameraRaw	Optics	Óptica
+cameraRaw	Parametric	Paramétrica
+cameraRaw	Presence	Presencia
+cameraRaw	Purple Amount	Cantidad de púrpura
+cameraRaw	Purple Hue	Tono del púrpura
+cameraRaw	Red Primary	Primario rojo
+cameraRaw	Refine Saturation	Refinar saturación
+cameraRaw	Treatment & Profile	Tratamiento y perfil
+cameraRaw	White Balance	Balance de blancos

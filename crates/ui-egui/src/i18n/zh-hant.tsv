@@ -3442,3 +3442,61 @@ curves	Smooth	平滑
 	How softly the layer mask's edge fades into the original	圖層遮色片邊緣融入原圖的柔和程度
 	Creative shows everything Nano Banana drew: these don't apply.	創意模式會顯示 Nano Banana 繪製的全部內容：這些設定不適用。
 	How Nano Banana's layer mask meets the original	Nano Banana 圖層遮色片與原圖的銜接方式
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	預設集需要名稱
+	Adobe Color	Adobe 顏色
+	Adobe Monochrome	Adobe 單色
+	Applied preset {name}	已套用預設集 {name}
+	Applied preset {name} ({n} settings not supported)	已套用預設集 {name}（{n} 項設定不受支援）
+	Auto white balance found nothing to measure in this image	自動白平衡在此影像中找不到可測量的內容
+	Check All	全部勾選
+	Check None	全部取消
+	Choose at least one group of settings	請至少選擇一組設定
+	Click something light grey or white: that point is too dark or too bright to measure	請按一下淺灰色或白色的地方：該點太暗或太亮，無法測量
+	Copy to My Presets	拷貝到我的預設集
+	Create Preset	建立預設集
+	Create Preset…	建立預設集…
+	Curve region splits	曲線區域分界
+	Defringe	去除色邊
+	Distortion	扭曲
+	Existing groups	現有群組
+	How much of the saturation a contrasty curve adds is kept	保留對比曲線所增加的飽和度的多寡
+	Lens Vignetting	鏡頭暈映
+	Looking for presets…	正在尋找預設集…
+	My Presets	我的預設集
+	No presets match.	沒有符合的預設集。
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	尚無預設集。以 + 建立一個，或將 Camera Raw 預設集（.xmp）放入 PhotoCraft 的預設集資料夾。
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	正值校正桶狀變形，負值校正枕狀變形
+	Presets can't be saved here	此處無法儲存預設集
+	Presets menu	預設集選單
+	Profile	描述檔
+	Rename Preset	重新命名預設集
+	Saved preset {name}	已儲存預設集 {name}
+	Search presets	搜尋預設集
+	Set the Light sliders from the image's tones	依影像的色調設定「光線」滑桿
+	Show Adobe's Presets	顯示 Adobe 的預設集
+	Update with Current Settings	以目前設定更新
+	User Presets	使用者預設集
+	White Balance Tool (I): click something that should be neutral grey	白平衡工具 (I)：按一下應為中性灰的地方
+cameraRaw	3-Way	三向
+cameraRaw	As Shot	拍攝設定
+cameraRaw	B&W Mix	黑白混合
+cameraRaw	Blue Primary	藍原色
+cameraRaw	Calibration	校正
+cameraRaw	Color Smoothness	顏色平滑度
+cameraRaw	Distortion	扭曲
+cameraRaw	Green Amount	綠色總量
+cameraRaw	Green Hue	綠色色相
+cameraRaw	Green Primary	綠原色
+cameraRaw	Luminance Contrast	明度對比
+cameraRaw	Optics	光學
+cameraRaw	Parametric	參數
+cameraRaw	Point	點
+cameraRaw	Presence	外觀
+cameraRaw	Purple Amount	紫色總量
+cameraRaw	Purple Hue	紫色色相
+cameraRaw	Red Primary	紅原色
+cameraRaw	Refine Saturation	微調飽和度
+cameraRaw	Treatment & Profile	處理方式和描述檔
+cameraRaw	White Balance	白平衡

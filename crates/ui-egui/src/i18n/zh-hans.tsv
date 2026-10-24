@@ -3478,3 +3478,61 @@ curves	Smooth	平滑
 	How softly the layer mask's edge fades into the original	图层蒙版边缘融入原图的柔和程度
 	Creative shows everything Nano Banana drew: these don't apply.	创意模式会显示 Nano Banana 绘制的全部内容：这些设置不适用。
 	How Nano Banana's layer mask meets the original	Nano Banana 图层蒙版与原图的衔接方式
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	预设需要一个名称
+	Adobe Color	Adobe 颜色
+	Adobe Monochrome	Adobe 单色
+	Applied preset {name}	已应用预设 {name}
+	Applied preset {name} ({n} settings not supported)	已应用预设 {name}（{n} 项设置不受支持）
+	Auto white balance found nothing to measure in this image	自动白平衡在此图像中没有找到可测量的内容
+	Check All	全选
+	Check None	全不选
+	Choose at least one group of settings	请至少选择一组设置
+	Click something light grey or white: that point is too dark or too bright to measure	请单击浅灰色或白色的地方：该点太暗或太亮，无法测量
+	Copy to My Presets	复制到我的预设
+	Create Preset	创建预设
+	Create Preset…	创建预设…
+	Curve region splits	曲线区域分界
+	Defringe	去边
+	Distortion	扭曲度
+	Existing groups	现有组
+	How much of the saturation a contrasty curve adds is kept	保留对比度曲线所增加的饱和度的多少
+	Lens Vignetting	镜头晕影
+	Looking for presets…	正在查找预设…
+	My Presets	我的预设
+	No presets match.	没有匹配的预设。
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	还没有预设。用 + 创建一个，或将 Camera Raw 预设（.xmp）放入 PhotoCraft 的预设文件夹。
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	正值校正桶形畸变，负值校正枕形畸变
+	Presets can't be saved here	此处无法保存预设
+	Presets menu	预设菜单
+	Profile	配置文件
+	Rename Preset	重命名预设
+	Saved preset {name}	已保存预设 {name}
+	Search presets	搜索预设
+	Set the Light sliders from the image's tones	根据图像的色调设置“亮”滑块
+	Show Adobe's Presets	显示 Adobe 的预设
+	Update with Current Settings	用当前设置更新
+	User Presets	用户预设
+	White Balance Tool (I): click something that should be neutral grey	白平衡工具 (I)：单击应为中性灰的地方
+cameraRaw	3-Way	三向
+cameraRaw	As Shot	原照设置
+cameraRaw	B&W Mix	黑白混合
+cameraRaw	Blue Primary	蓝原色
+cameraRaw	Calibration	校准
+cameraRaw	Color Smoothness	颜色平滑度
+cameraRaw	Distortion	扭曲度
+cameraRaw	Green Amount	绿色数量
+cameraRaw	Green Hue	绿色色相
+cameraRaw	Green Primary	绿原色
+cameraRaw	Luminance Contrast	明亮度对比度
+cameraRaw	Optics	光学
+cameraRaw	Parametric	参数
+cameraRaw	Point	点
+cameraRaw	Presence	外观
+cameraRaw	Purple Amount	紫色数量
+cameraRaw	Purple Hue	紫色色相
+cameraRaw	Red Primary	红原色
+cameraRaw	Refine Saturation	细化饱和度
+cameraRaw	Treatment & Profile	处理方式和配置文件
+cameraRaw	White Balance	白平衡

@@ -362,29 +362,59 @@ pub(crate) fn apply(px: &mut [[f32; 4]], width: usize, w: f32, b: f32, enc: Enco
         let v = if w != 0.0 { whites(v, w) } else { v };
         if b != 0.0 { blacks(v, b) } else { v }
     };
+    // Linear light in, linear light out (0 … 1).
+    let light = |l: f32| super::srgb_to_linear(grey(super::linear_to_srgb(l)));
+    let curves = enc.curves();
     let per_channel = w > 0.0 || b < 0.0;
+    // The whole per-pixel mapping as a table, read with linear interpolation (a curve lookup and
+    // four powers per channel were most of the stage): per channel over the encoded value; for
+    // the luminance-scaling directions the scale over the square root of the luminance, so the
+    // dark end gets its share of entries. Values past 1 take the exact path.
+    let table: Vec<f32> = (0..=TABLE_STEPS)
+        .map(|i| {
+            let t = i as f32 / TABLE_STEPS as f32;
+            if per_channel {
+                enc.encode(light(enc.decode(t)))
+            } else {
+                let y = t * t;
+                if y > 0.0 { light(y) / y } else { 0.0 }
+            }
+        })
+        .collect();
+    let read = |t: f32| {
+        let x = t * TABLE_STEPS as f32;
+        let i = (x as usize).min(TABLE_STEPS - 1);
+        table[i] + (table[i + 1] - table[i]) * (x - i as f32)
+    };
     par_rows(px, width, 1, |_, row| {
         for q in row.iter_mut() {
-            let lin = [0, 1, 2].map(|c| enc.decode(q[c]));
             if per_channel {
                 for c in 0..3 {
-                    let over = (lin[c] - 1.0).max(0.0);
-                    q[c] = enc.encode(super::srgb_to_linear(grey(super::linear_to_srgb(lin[c].min(1.0)))) + over);
+                    q[c] = if (0.0..=1.0).contains(&q[c]) {
+                        read(q[c])
+                    } else {
+                        let lin = enc.decode(q[c]);
+                        enc.encode(light(lin.min(1.0)) + (lin - 1.0).max(0.0))
+                    };
                 }
             } else {
+                let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
                 let y = super::luma_linear(lin).max(0.0);
                 if y <= 1e-7 {
                     continue;
                 }
-                let y2 = super::srgb_to_linear(grey(super::linear_to_srgb(y.min(1.0)))) + (y - 1.0).max(0.0);
-                let k = y2 / y;
+                // Below the first table step the scale is the exact one.
+                let k = if y <= 1.0 && y * (TABLE_STEPS * TABLE_STEPS) as f32 >= 1.0 { read(y.sqrt()) } else { (light(y.min(1.0)) + (y - 1.0).max(0.0)) / y };
                 for c in 0..3 {
-                    q[c] = enc.encode(lin[c] * k);
+                    q[c] = curves.encode(lin[c] * k);
                 }
             }
         }
     });
 }
+
+/// Steps of [`apply`]'s table.
+const TABLE_STEPS: usize = 4096;
 
 #[cfg(test)]
 mod tests {

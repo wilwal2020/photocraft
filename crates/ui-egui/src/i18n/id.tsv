@@ -3829,3 +3829,61 @@ curves	Smooth	Haluskan
 	How softly the layer mask's edge fades into the original	Seberapa halus tepi masker lapisan memudar ke gambar asli
 	Creative shows everything Nano Banana drew: these don't apply.	Mode Kreatif menampilkan semua yang digambar Nano Banana: pengaturan ini tidak berlaku.
 	How Nano Banana's layer mask meets the original	Bagaimana masker lapisan Nano Banana bertemu gambar asli
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Prasetel memerlukan nama
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Prasetel {name} diterapkan
+	Applied preset {name} ({n} settings not supported)	Prasetel {name} diterapkan ({n} pengaturan tidak didukung)
+	Auto white balance found nothing to measure in this image	Keseimbangan putih otomatis tidak menemukan apa pun untuk diukur pada gambar ini
+	Check All	Centang semua
+	Check None	Hapus semua centang
+	Choose at least one group of settings	Pilih setidaknya satu kelompok pengaturan
+	Click something light grey or white: that point is too dark or too bright to measure	Klik sesuatu yang abu-abu muda atau putih: titik itu terlalu gelap atau terlalu terang untuk diukur
+	Copy to My Presets	Salin ke Prasetel Saya
+	Create Preset	Buat Prasetel
+	Create Preset…	Buat Prasetel…
+	Curve region splits	Batas wilayah kurva
+	Defringe	Hapus pinggiran
+	Distortion	Distorsi
+	Existing groups	Kelompok yang ada
+	How much of the saturation a contrasty curve adds is kept	Seberapa banyak saturasi yang ditambahkan kurva kontras yang dipertahankan
+	Lens Vignetting	Vinyet lensa
+	Looking for presets…	Mencari prasetel…
+	My Presets	Prasetel Saya
+	No presets match.	Tidak ada prasetel yang cocok.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Belum ada prasetel. Buat dengan +, atau letakkan prasetel Camera Raw (.xmp) di folder prasetel PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Nilai positif meluruskan distorsi tong, nilai negatif distorsi bantal
+	Presets can't be saved here	Prasetel tidak dapat disimpan di sini
+	Presets menu	Menu prasetel
+	Profile	Profil
+	Rename Preset	Ganti Nama Prasetel
+	Saved preset {name}	Prasetel {name} disimpan
+	Search presets	Cari prasetel
+	Set the Light sliders from the image's tones	Atur penggeser Cahaya dari nada gambar
+	Show Adobe's Presets	Tampilkan prasetel Adobe
+	Update with Current Settings	Perbarui dengan pengaturan saat ini
+	User Presets	Prasetel Pengguna
+	White Balance Tool (I): click something that should be neutral grey	Alat Keseimbangan Putih (I): klik sesuatu yang seharusnya abu-abu netral
+cameraRaw	3-Way	3 Arah
+cameraRaw	As Shot	Sesuai pemotretan
+cameraRaw	B&W Mix	Campuran H&P
+cameraRaw	Blue Primary	Primer biru
+cameraRaw	Calibration	Kalibrasi
+cameraRaw	Color Smoothness	Kehalusan warna
+cameraRaw	Distortion	Distorsi
+cameraRaw	Green Amount	Jumlah hijau
+cameraRaw	Green Hue	Rona hijau
+cameraRaw	Green Primary	Primer hijau
+cameraRaw	Luminance Contrast	Kontras luminans
+cameraRaw	Optics	Optik
+cameraRaw	Parametric	Parametrik
+cameraRaw	Point	Titik
+cameraRaw	Presence	Kehadiran
+cameraRaw	Purple Amount	Jumlah ungu
+cameraRaw	Purple Hue	Rona ungu
+cameraRaw	Red Primary	Primer merah
+cameraRaw	Refine Saturation	Perhalus saturasi
+cameraRaw	Treatment & Profile	Perlakuan & Profil
+cameraRaw	White Balance	Keseimbangan putih

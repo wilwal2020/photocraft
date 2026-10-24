@@ -4723,3 +4723,56 @@ cameraRaw	Yellow	Sárga
 	How softly the layer mask's edge fades into the original	Milyen lágyan olvad a rétegmaszk széle az eredetibe
 	Creative shows everything Nano Banana drew: these don't apply.	A Kreatív mód mindent mutat, amit a Nano Banana rajzolt: ezek a beállítások nem érvényesek.
 	How Nano Banana's layer mask meets the original	Hogyan illeszkedik a Nano Banana rétegmaszkja az eredetihez
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Az előbeállításnak név kell
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	{name} előbeállítás alkalmazva
+	Applied preset {name} ({n} settings not supported)	{name} előbeállítás alkalmazva ({n} beállítás nem támogatott)
+	Auto white balance found nothing to measure in this image	Az automatikus fehéregyensúly nem talált mérhetőt ezen a képen
+	Check All	Mind bejelölve
+	Check None	Egyik sem
+	Choose at least one group of settings	Válasszon legalább egy beállításcsoportot
+	Click something light grey or white: that point is too dark or too bright to measure	Kattintson valami világosszürkére vagy fehérre: az a pont túl sötét vagy túl világos a méréshez
+	Copy to My Presets	Másolás a saját előbeállításokhoz
+	Create Preset	Előbeállítás létrehozása
+	Create Preset…	Előbeállítás létrehozása…
+	Curve region splits	A görbe tartományhatárai
+	Existing groups	Meglévő csoportok
+	How much of the saturation a contrasty curve adds is kept	Mennyi marad meg a kontrasztos görbe által hozzáadott telítettségből
+	Lens Vignetting	Objektív vignettálása
+	Looking for presets…	Előbeállítások keresése…
+	My Presets	Saját előbeállítások
+	No presets match.	Nincs egyező előbeállítás.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Még nincsenek előbeállítások. Hozzon létre egyet a + gombbal, vagy tegyen Camera Raw-előbeállításokat (.xmp) a PhotoCraft előbeállítás-mappájába.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	A pozitív értékek a hordótorzítást, a negatívak a párnatorzítást javítják
+	Presets can't be saved here	Itt nem menthetők előbeállítások
+	Presets menu	Előbeállítások menü
+	Rename Preset	Előbeállítás átnevezése
+	Saved preset {name}	{name} előbeállítás mentve
+	Search presets	Előbeállítások keresése
+	Set the Light sliders from the image's tones	A Fény csúszkák beállítása a kép tónusai alapján
+	Show Adobe's Presets	Az Adobe előbeállításainak megjelenítése
+	Update with Current Settings	Frissítés a jelenlegi beállításokkal
+	User Presets	Felhasználói előbeállítások
+	White Balance Tool (I): click something that should be neutral grey	Fehéregyensúly eszköz (I): kattintson valamire, aminek semleges szürkének kell lennie
+cameraRaw	3-Way	3 utas
+cameraRaw	As Shot	Felvétel szerint
+cameraRaw	B&W Mix	FF keverés
+cameraRaw	Blue Primary	Kék alapszín
+cameraRaw	Calibration	Kalibrálás
+cameraRaw	Color Smoothness	Szín simasága
+cameraRaw	Green Amount	Zöld mértéke
+cameraRaw	Green Hue	Zöld színárnyalata
+cameraRaw	Green Primary	Zöld alapszín
+cameraRaw	Luminance Contrast	Fénysűrűség kontrasztja
+cameraRaw	Optics	Optika
+cameraRaw	Parametric	Paraméteres
+cameraRaw	Presence	Jelenlét
+cameraRaw	Purple Amount	Lila mértéke
+cameraRaw	Purple Hue	Lila színárnyalata
+cameraRaw	Red Primary	Vörös alapszín
+cameraRaw	Refine Saturation	Telítettség finomítása
+cameraRaw	Treatment & Profile	Kezelés és profil
+cameraRaw	White Balance	Fehéregyensúly

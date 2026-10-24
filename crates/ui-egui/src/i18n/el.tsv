@@ -4508,3 +4508,56 @@ curves	Smooth	Εξομάλυνση
 	How softly the layer mask's edge fades into the original	Πόσο απαλά σβήνει η άκρη της μάσκας επιπέδου μέσα στο πρωτότυπο
 	Creative shows everything Nano Banana drew: these don't apply.	Η δημιουργική λειτουργία δείχνει ό,τι σχεδίασε το Nano Banana: αυτές οι ρυθμίσεις δεν ισχύουν.
 	How Nano Banana's layer mask meets the original	Πώς συναντά η μάσκα επιπέδου του Nano Banana το πρωτότυπο
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Μια προεπιλογή χρειάζεται όνομα
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Εφαρμόστηκε η προεπιλογή {name}
+	Applied preset {name} ({n} settings not supported)	Εφαρμόστηκε η προεπιλογή {name} ({n} ρυθμίσεις δεν υποστηρίζονται)
+	Auto white balance found nothing to measure in this image	Η αυτόματη ισορροπία λευκού δεν βρήκε τίποτα να μετρήσει σε αυτή την εικόνα
+	Check All	Επιλογή όλων
+	Check None	Αποεπιλογή όλων
+	Choose at least one group of settings	Επιλέξτε τουλάχιστον μία ομάδα ρυθμίσεων
+	Click something light grey or white: that point is too dark or too bright to measure	Κάντε κλικ σε κάτι ανοιχτό γκρι ή λευκό: αυτό το σημείο είναι πολύ σκοτεινό ή πολύ φωτεινό για μέτρηση
+	Copy to My Presets	Αντιγραφή στις προεπιλογές μου
+	Create Preset	Δημιουργία προεπιλογής
+	Create Preset…	Δημιουργία προεπιλογής…
+	Curve region splits	Όρια περιοχών καμπύλης
+	Existing groups	Υπάρχουσες ομάδες
+	How much of the saturation a contrasty curve adds is kept	Πόσο από τον κορεσμό που προσθέτει μια καμπύλη με αντίθεση διατηρείται
+	Lens Vignetting	Βινιετάρισμα φακού
+	Looking for presets…	Αναζήτηση προεπιλογών…
+	My Presets	Οι προεπιλογές μου
+	No presets match.	Καμία προεπιλογή δεν ταιριάζει.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Δεν υπάρχουν ακόμη προεπιλογές. Δημιουργήστε μία με +, ή βάλτε προεπιλογές Camera Raw (.xmp) στον φάκελο προεπιλογών του PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Οι θετικές τιμές διορθώνουν την παραμόρφωση βαρελιού, οι αρνητικές του μαξιλαριού
+	Presets can't be saved here	Οι προεπιλογές δεν μπορούν να αποθηκευτούν εδώ
+	Presets menu	Μενού προεπιλογών
+	Rename Preset	Μετονομασία προεπιλογής
+	Saved preset {name}	Αποθηκεύτηκε η προεπιλογή {name}
+	Search presets	Αναζήτηση προεπιλογών
+	Set the Light sliders from the image's tones	Ρύθμιση των ρυθμιστικών Φωτός από τους τόνους της εικόνας
+	Show Adobe's Presets	Εμφάνιση των προεπιλογών της Adobe
+	Update with Current Settings	Ενημέρωση με τις τρέχουσες ρυθμίσεις
+	User Presets	Προεπιλογές χρήστη
+	White Balance Tool (I): click something that should be neutral grey	Εργαλείο Ισορροπίας λευκού (I): κάντε κλικ σε κάτι που πρέπει να είναι ουδέτερο γκρι
+cameraRaw	3-Way	3 δρόμων
+cameraRaw	As Shot	Ως λήψη
+cameraRaw	B&W Mix	Μίξη Α/Μ
+cameraRaw	Blue Primary	Κύριο μπλε
+cameraRaw	Calibration	Βαθμονόμηση
+cameraRaw	Color Smoothness	Ομαλότητα χρώματος
+cameraRaw	Green Amount	Ποσότητα πράσινου
+cameraRaw	Green Hue	Απόχρωση πράσινου
+cameraRaw	Green Primary	Κύριο πράσινο
+cameraRaw	Luminance Contrast	Αντίθεση φωτεινότητας
+cameraRaw	Optics	Οπτικά
+cameraRaw	Parametric	Παραμετρική
+cameraRaw	Presence	Παρουσία
+cameraRaw	Purple Amount	Ποσότητα μωβ
+cameraRaw	Purple Hue	Απόχρωση μωβ
+cameraRaw	Red Primary	Κύριο κόκκινο
+cameraRaw	Refine Saturation	Βελτίωση κορεσμού
+cameraRaw	Treatment & Profile	Επεξεργασία και προφίλ
+cameraRaw	White Balance	Ισορροπία λευκού

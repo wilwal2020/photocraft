@@ -4851,3 +4851,56 @@ shape	Appearance	Apparence
 	How softly the layer mask's edge fades into the original	Avec quelle douceur le bord du masque de fusion se fond dans l’original
 	Creative shows everything Nano Banana drew: these don't apply.	Le mode Créatif montre tout ce que Nano Banana a dessiné : ces réglages ne s’appliquent pas.
 	How Nano Banana's layer mask meets the original	Comment le masque de fusion de Nano Banana rejoint l’original
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Un paramètre prédéfini doit avoir un nom
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Paramètre prédéfini {name} appliqué
+	Applied preset {name} ({n} settings not supported)	Paramètre prédéfini {name} appliqué ({n} réglages non pris en charge)
+	Auto white balance found nothing to measure in this image	La balance des blancs automatique n’a rien trouvé à mesurer dans cette image
+	Check All	Tout cocher
+	Check None	Tout décocher
+	Choose at least one group of settings	Choisissez au moins un groupe de réglages
+	Click something light grey or white: that point is too dark or too bright to measure	Cliquez sur quelque chose de gris clair ou de blanc : ce point est trop sombre ou trop clair pour être mesuré
+	Copy to My Presets	Copier dans mes paramètres prédéfinis
+	Create Preset	Créer un paramètre prédéfini
+	Create Preset…	Créer un paramètre prédéfini…
+	Curve region splits	Séparations des zones de la courbe
+	Existing groups	Groupes existants
+	How much of the saturation a contrasty curve adds is kept	Part de la saturation qu’ajoute une courbe contrastée qui est conservée
+	Lens Vignetting	Vignettage de l’objectif
+	Looking for presets…	Recherche des paramètres prédéfinis…
+	My Presets	Mes paramètres prédéfinis
+	No presets match.	Aucun paramètre prédéfini ne correspond.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Aucun paramètre prédéfini pour l’instant. Créez-en un avec +, ou placez des paramètres prédéfinis Camera Raw (.xmp) dans le dossier de paramètres prédéfinis de PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Les valeurs positives corrigent la distorsion en barillet, les négatives en coussinet
+	Presets can't be saved here	Impossible d’enregistrer des paramètres prédéfinis ici
+	Presets menu	Menu des paramètres prédéfinis
+	Rename Preset	Renommer le paramètre prédéfini
+	Saved preset {name}	Paramètre prédéfini {name} enregistré
+	Search presets	Rechercher des paramètres prédéfinis
+	Set the Light sliders from the image's tones	Régler les curseurs Lumière d’après les tons de l’image
+	Show Adobe's Presets	Afficher les paramètres prédéfinis d’Adobe
+	Update with Current Settings	Mettre à jour avec les réglages actuels
+	User Presets	Paramètres prédéfinis de l’utilisateur
+	White Balance Tool (I): click something that should be neutral grey	Outil Balance des blancs (I) : cliquez sur ce qui devrait être gris neutre
+cameraRaw	3-Way	3 voies
+cameraRaw	As Shot	Telle quelle
+cameraRaw	B&W Mix	Mélange N&B
+cameraRaw	Blue Primary	Couleur primaire bleue
+cameraRaw	Calibration	Étalonnage
+cameraRaw	Color Smoothness	Couleur Lissage
+cameraRaw	Green Amount	Quantité de vert
+cameraRaw	Green Hue	Teinte du vert
+cameraRaw	Green Primary	Couleur primaire verte
+cameraRaw	Luminance Contrast	Luminance Contraste
+cameraRaw	Optics	Optique
+cameraRaw	Parametric	Paramétrique
+cameraRaw	Presence	Présence
+cameraRaw	Purple Amount	Quantité de violet
+cameraRaw	Purple Hue	Teinte du violet
+cameraRaw	Red Primary	Couleur primaire rouge
+cameraRaw	Refine Saturation	Affiner la saturation
+cameraRaw	Treatment & Profile	Traitement et profil
+cameraRaw	White Balance	Balance des blancs

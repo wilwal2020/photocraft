@@ -327,6 +327,28 @@ pub fn presets_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("Presets"))
 }
 
+/// Camera Raw's preset folders: PhotoCraft's own (`<config dir>/Presets/Camera Raw`) and the
+/// ones Photoshop's Camera Raw keeps presets in, the user's (`%APPDATA%` on Windows, the user's
+/// Library on macOS) and Adobe's installed ones (`%PROGRAMDATA%`, the system Library), where they
+/// exist. `env` reads environment variables (so tests can fake them).
+fn camera_raw_preset_dirs(env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> photocraft_ui_egui::CameraRawPresetDirs {
+    let existing = |paths: Vec<Option<PathBuf>>| -> Vec<String> {
+        paths.into_iter().flatten().filter(|p| p.is_dir()).filter_map(|p| p.to_str().map(str::to_string)).collect()
+    };
+    let settings = |base: PathBuf| base.join("Adobe").join("CameraRaw").join("Settings");
+    photocraft_ui_egui::CameraRawPresetDirs {
+        own: presets_dir().and_then(|d| d.join("Camera Raw").to_str().map(str::to_string)),
+        photoshop: existing(vec![
+            env("APPDATA").filter(|v| !v.is_empty()).map(|a| settings(PathBuf::from(a))),
+            env("HOME").filter(|v| !v.is_empty()).map(|h| settings(PathBuf::from(h).join("Library").join("Application Support"))),
+        ]),
+        adobe: existing(vec![
+            env("PROGRAMDATA").filter(|v| !v.is_empty()).map(|a| settings(PathBuf::from(a))),
+            cfg!(target_os = "macos").then(|| settings(PathBuf::from("/Library/Application Support"))),
+        ]),
+    }
+}
+
 /// Crash-recovery autosaves: under the settings directory, except where that is synced with the
 /// settings: the Windows roaming profile and the Linux config folder (see
 /// [`crate::app_dirs::resolve_recovery`]).
@@ -691,6 +713,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         photoshop_actions: Some(Box::new(|| crate::photoshop_settings::actions_palette(&|k| std::env::var_os(k)))),
+        camera_raw_presets: camera_raw_preset_dirs(&|k| std::env::var_os(k)),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {

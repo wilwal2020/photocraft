@@ -12,6 +12,7 @@
 //! `--hardware-filtering` respects texture samplers; the default predictable renderer forces bilinear filtering.
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--camera-raw-presets DIR` lists DIR's Camera Raw presets as Photoshop's.
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -60,6 +61,7 @@ fn main() {
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
+        camera_raw_presets: photocraft_ui_egui::CameraRawPresetDirs { photoshop: arg(&args, "--camera-raw-presets").into_iter().collect(), ..Default::default() },
         ..Default::default()
     };
     let open = arg(&args, "--open");

@@ -542,3 +542,72 @@ cameraRaw	Yellow	पीला
 	How softly the layer mask's edge fades into the original	लेयर मास्क का किनारा मूल चित्र में कितनी कोमलता से घुलता है
 	Creative shows everything Nano Banana drew: these don't apply.	क्रिएटिव मोड Nano Banana का बनाया सब कुछ दिखाता है: ये सेटिंग लागू नहीं होतीं।
 	How Nano Banana's layer mask meets the original	Nano Banana का लेयर मास्क मूल चित्र से कैसे मिलता है
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	प्रीसेट का एक नाम होना चाहिए
+	Adobe	Adobe
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	प्रीसेट {name} लागू किया गया
+	Applied preset {name} ({n} settings not supported)	प्रीसेट {name} लागू किया गया ({n} सेटिंग समर्थित नहीं)
+	Auto white balance found nothing to measure in this image	ऑटो व्हाइट बैलेंस को इस चित्र में मापने के लिए कुछ नहीं मिला
+	Check All	सभी चुनें
+	Check None	कोई नहीं
+	Choose at least one group of settings	सेटिंग का कम से कम एक समूह चुनें
+	Click something light grey or white: that point is too dark or too bright to measure	किसी हल्की स्लेटी या सफ़ेद चीज़ पर क्लिक करें: वह बिंदु मापने के लिए बहुत गहरा या बहुत चमकीला है
+	Copy to My Presets	मेरे प्रीसेट में कॉपी करें
+	Create Preset	प्रीसेट बनाएँ
+	Create Preset…	प्रीसेट बनाएँ…
+	Curve region splits	वक्र क्षेत्रों की सीमाएँ
+	Defringe	फ्रिंज हटाएँ
+	Distortion	विरूपण
+	Existing groups	मौजूदा समूह
+	Group	समूह
+	How much of the saturation a contrasty curve adds is kept	कंट्रास्ट वाला वक्र जो संतृप्ति जोड़ता है, उसमें से कितनी रखी जाती है
+	Lens Vignetting	लेंस विग्नेटिंग
+	Looking for presets…	प्रीसेट खोजे जा रहे हैं…
+	My Presets	मेरे प्रीसेट
+	Name	नाम
+	No presets match.	कोई प्रीसेट मेल नहीं खाता।
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	अभी कोई प्रीसेट नहीं है। + से एक बनाएँ, या Camera Raw प्रीसेट (.xmp) PhotoCraft के प्रीसेट फ़ोल्डर में रखें।
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	धनात्मक मान बैरल विरूपण ठीक करते हैं, ऋणात्मक मान पिनकुशन
+	Presets can't be saved here	यहाँ प्रीसेट सहेजे नहीं जा सकते
+	Presets menu	प्रीसेट मेनू
+	Profile	प्रोफ़ाइल
+	Refresh	ताज़ा करें
+	Rename	नाम बदलें
+	Rename Preset	प्रीसेट का नाम बदलें
+	Rename…	नाम बदलें…
+	Saved preset {name}	प्रीसेट {name} सहेजा गया
+	Search presets	प्रीसेट खोजें
+	Set the Light sliders from the image's tones	चित्र के टोन से लाइट स्लाइडर सेट करें
+	Show Adobe's Presets	Adobe के प्रीसेट दिखाएँ
+	Update with Current Settings	वर्तमान सेटिंग से अपडेट करें
+	User Presets	उपयोगकर्ता प्रीसेट
+	White Balance Tool (I): click something that should be neutral grey	व्हाइट बैलेंस टूल (I): उस चीज़ पर क्लिक करें जो तटस्थ स्लेटी होनी चाहिए
+cameraRaw	3-Way	3-तरफ़ा
+cameraRaw	As Shot	जैसा खींचा गया
+cameraRaw	B&W Mix	ब्लैक एंड व्हाइट मिश्रण
+cameraRaw	Black & White	ब्लैक एंड व्हाइट
+cameraRaw	Blue Primary	नीला प्राथमिक
+cameraRaw	Calibration	कैलिब्रेशन
+cameraRaw	Color Smoothness	रंग की चिकनाई
+cameraRaw	Custom	कस्टम
+cameraRaw	Demosaic	डिमोज़ेक
+cameraRaw	Distortion	विरूपण
+cameraRaw	Green Amount	हरे की मात्रा
+cameraRaw	Green Hue	हरे का ह्यू
+cameraRaw	Green Primary	हरा प्राथमिक
+cameraRaw	Luminance Contrast	ल्यूमिनेंस कंट्रास्ट
+cameraRaw	Optics	ऑप्टिक्स
+cameraRaw	Parametric	पैरामीट्रिक
+cameraRaw	Point	पॉइंट
+cameraRaw	Presence	उपस्थिति
+cameraRaw	Presets	प्रीसेट
+cameraRaw	Purple Amount	बैंगनी की मात्रा
+cameraRaw	Purple Hue	बैंगनी का ह्यू
+cameraRaw	Red Primary	लाल प्राथमिक
+cameraRaw	Refine Saturation	संतृप्ति परिष्कृत करें
+cameraRaw	Treatment & Profile	उपचार और प्रोफ़ाइल
+cameraRaw	White Balance	व्हाइट बैलेंस
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	कैमरे के रंग फ़िल्टर मोज़ेक को कैसे भरा जाता है। यह फ़ाइल खुलते समय लागू होता है; पूर्वावलोकन वही तरीका दिखाता है जिससे फ़ाइल खोली गई थी।

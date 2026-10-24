@@ -162,7 +162,12 @@ fn preview_leaves_the_document_alone_and_marks_its_layer() {
 fn ineligible_targets_use_the_proxy_preview() {
     let (mut doc, target) = document(ColorMode::Rgb, SampleType::U8, false);
     let clipped = doc.layers[2].id;
-    assert_eq!(unsupported(&doc, clipped), Some("the target is clipped"));
+    assert!(unsupported(&doc, clipped).is_none(), "a clipped target previews wrapped in a group");
+    let mut fx = doc.clone();
+    if let Some(l) = fx.layer_mut(clipped) {
+        l.effects.items.push(photocraft_doc::Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) });
+    }
+    assert_eq!(unsupported(&fx, clipped), Some("the target is clipped and has effects or blending options"));
     assert_eq!(unsupported(&doc, LayerId(u64::MAX - 1)), Some("no target layer"));
     doc.layers.push(Layer::new("adj", LayerContent::Adjustment(photocraft_doc::Adjustment::Invert)));
     let adj = doc.layers[4].id;
@@ -279,12 +284,49 @@ fn dialog_previews_through_the_layer() {
     }
 }
 
+/// User report: the dialogs were "extremely laggy" on a layer clipped to another one, which
+/// previewed on the CPU proxy. Wrapped in a group with its preview, it matches the command for
+/// every kind, and the dialog previews through the layer.
+#[test]
+fn a_clipped_target_previews_through_the_layer_and_matches_the_command() {
+    let tol = 1.0 / 255.0 + 1e-4;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for selection in [false, true] {
+            let (mut doc, _) = document(ColorMode::Rgb, depth, selection);
+            let clipped = doc.layers[2].id;
+            // Its own blend mode, a mask and a fill below 100 %, which the group must carry.
+            if let Some(l) = doc.layer_mut(clipped) {
+                l.blend = BlendMode::Overlay;
+                l.fill_opacity = 0.7;
+                let mut m = LayerMask::reveal_all();
+                m.surface.fill_rect(Rect::from_xywh(20, 10, 6, 6), &[0.4]);
+                l.mask = Some(m);
+            }
+            for kind in KINDS {
+                let params = sample(kind);
+                let want = destructive(&doc, clipped, kind, &params).unwrap();
+                let got = preview_document(&doc, clipped, kind, &params).unwrap();
+                let d = max_diff(&got, &want);
+                assert!(d <= tol, "{kind} {depth:?} selection {selection}: {:.2}/255", d * 255.0);
+            }
+        }
+    }
+    let (doc, _) = document(ColorMode::Rgb, SampleType::U8, false);
+    let clipped = doc.layers[2].id;
+    let mut app = app_with(doc, clipped);
+    crate::adjust_dialog::open(&mut app, "image.adjustments.hueSaturation").unwrap();
+    assert!(on_layer(&mut app, 0) && display_doc(&mut app, 0).is_some());
+}
+
 /// Targets the layer path can't reproduce keep the CPU proxy preview.
 #[test]
 fn ineligible_dialogs_keep_the_proxy_preview() {
-    // A clipped target.
-    let (doc, _) = document(ColorMode::Rgb, SampleType::U8, false);
+    // A clipped target with a layer effect.
+    let (mut doc, _) = document(ColorMode::Rgb, SampleType::U8, false);
     let clipped = doc.layers[2].id;
+    if let Some(l) = doc.layer_mut(clipped) {
+        l.effects.items.push(photocraft_doc::Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) });
+    }
     let mut app = app_with(doc, clipped);
     crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
     assert!(!on_layer(&mut app, 0) && display_doc(&mut app, 0).is_none());

@@ -4924,3 +4924,56 @@ shape	Appearance	Aspetto
 	How softly the layer mask's edge fades into the original	Quanto dolcemente il bordo della maschera di livello sfuma nell’originale
 	Creative shows everything Nano Banana drew: these don't apply.	Creativo mostra tutto ciò che Nano Banana ha disegnato: queste impostazioni non si applicano.
 	How Nano Banana's layer mask meets the original	Come la maschera di livello di Nano Banana si unisce all’originale
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Un predefinito deve avere un nome
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Predefinito {name} applicato
+	Applied preset {name} ({n} settings not supported)	Predefinito {name} applicato ({n} impostazioni non supportate)
+	Auto white balance found nothing to measure in this image	Il bilanciamento del bianco automatico non ha trovato nulla da misurare in questa immagine
+	Check All	Seleziona tutto
+	Check None	Deseleziona tutto
+	Choose at least one group of settings	Scegli almeno un gruppo di impostazioni
+	Click something light grey or white: that point is too dark or too bright to measure	Fai clic su qualcosa di grigio chiaro o bianco: quel punto è troppo scuro o troppo chiaro per misurarlo
+	Copy to My Presets	Copia nei miei predefiniti
+	Create Preset	Crea predefinito
+	Create Preset…	Crea predefinito…
+	Curve region splits	Divisioni delle aree della curva
+	Existing groups	Gruppi esistenti
+	How much of the saturation a contrasty curve adds is kept	Quanta della saturazione aggiunta da una curva contrastata viene mantenuta
+	Lens Vignetting	Vignettatura obiettivo
+	Looking for presets…	Ricerca dei predefiniti…
+	My Presets	I miei predefiniti
+	No presets match.	Nessun predefinito corrisponde.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Ancora nessun predefinito. Creane uno con + oppure metti i predefiniti di Camera Raw (.xmp) nella cartella dei predefiniti di PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	I valori positivi correggono la distorsione a barile, quelli negativi a cuscinetto
+	Presets can't be saved here	Qui non è possibile salvare predefiniti
+	Presets menu	Menu predefiniti
+	Rename Preset	Rinomina predefinito
+	Saved preset {name}	Predefinito {name} salvato
+	Search presets	Cerca predefiniti
+	Set the Light sliders from the image's tones	Imposta i cursori Luce in base ai toni dell’immagine
+	Show Adobe's Presets	Mostra i predefiniti di Adobe
+	Update with Current Settings	Aggiorna con le impostazioni correnti
+	User Presets	Predefiniti utente
+	White Balance Tool (I): click something that should be neutral grey	Strumento Bilanciamento del bianco (I): fai clic su qualcosa che dovrebbe essere grigio neutro
+cameraRaw	3-Way	3 vie
+cameraRaw	As Shot	Come scatto
+cameraRaw	B&W Mix	Miscela B/N
+cameraRaw	Blue Primary	Primario blu
+cameraRaw	Calibration	Calibrazione
+cameraRaw	Color Smoothness	Uniformità colore
+cameraRaw	Green Amount	Fattore verde
+cameraRaw	Green Hue	Tonalità verde
+cameraRaw	Green Primary	Primario verde
+cameraRaw	Luminance Contrast	Contrasto luminanza
+cameraRaw	Optics	Ottica
+cameraRaw	Parametric	Parametrica
+cameraRaw	Presence	Presenza
+cameraRaw	Purple Amount	Fattore viola
+cameraRaw	Purple Hue	Tonalità viola
+cameraRaw	Red Primary	Primario rosso
+cameraRaw	Refine Saturation	Rifinisci saturazione
+cameraRaw	Treatment & Profile	Trattamento e profilo
+cameraRaw	White Balance	Bilanciamento del bianco

@@ -1,19 +1,29 @@
-//! Filter › Camera Raw Filter…: a large dialog like Adobe Camera Raw's (preview on the left,
-//! edit panels on the right: Light, Color, Effects, Curve, Color Mixer, Color Grading, Detail).
+//! Filter › Camera Raw Filter…: a large dialog like Adobe Camera Raw's (preview on the left; on
+//! the right the Edit panels, see `camera_raw_edit_ui`, and the Presets, see
+//! `camera_raw_presets_ui`).
 //!
-//! The preview runs [`photocraft_algo::camera_raw::develop`] on a CPU proxy of the layer
-//! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
-//! control changes: on a worker for the dialog's own controls, so a drag never waits for it, and
-//! on the UI thread for the control channel, so a reply describes its own settings. OK runs `filter.cameraRaw` with the non-default settings, so the result is
-//! one history step (or a smart filter on a smart object) and exactly replayable.
+//! The preview runs [`photocraft_algo::camera_raw::develop_cached`] on a CPU proxy of the layer
+//! (as large as the monitor, 1024–2560 px; `pixel_scale` keeps pixel radii true to the full
+//! image), recomputed when a control changes: on a worker for the dialog's own controls, so a
+//! drag never waits for it, and on the UI thread for the control channel, so a reply describes its
+//! own settings. The cache keeps the image after the stages that look at its surroundings, so a
+//! later slider redoes only the stages after it; while a slider moves, Shadows and Highlights may
+//! reuse maps made for other settings (a draft, redone exactly once it is let go), and the
+//! full-resolution refinement waits for the release. OK runs `filter.cameraRaw` with the
+//! non-default settings, so the result is one history step (or a smart filter on a smart object)
+//! and exactly replayable.
 //!
 //! Control channel: `ui.menu.invoke {"id":"filter.cameraRaw","params":{"ui":{"set":{…},
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
 //! and `{"ui":{"loadSettings":true}}` run Save Settings… / Load Settings… (Camera Raw `.xmp`
-//! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
+//! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog. Also
+//! `"auto": "tone" | "whiteBalance"`, `"whiteBalanceAt": [u, v]` (the White Balance tool at a
+//! point of the image, 0–1), `"tab": "edit" | "presets"`, `"applyPreset": path or name`,
+//! `"presetAmount": 0–200`, `"savePreset": {"name", "group", "sections": [ids]}`,
+//! `"deletePreset": path` and `"showAdobePresets": bool`.
 
-use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use egui::{Align2, Color32, FontId, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
+use photocraft_algo::camera_raw::CameraRaw;
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
@@ -25,7 +35,13 @@ use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::widgets;
 
-const PROXY_SIDE: usize = 900;
+#[path = "camera_raw_edit_ui.rs"]
+mod edit;
+#[path = "camera_raw_presets_ui.rs"]
+mod presets;
+
+/// The proxy's long side lies within these, as large as the monitor (see [`proxy_side`]).
+const PROXY_SIDE: std::ops::RangeInclusive<usize> = 1024..=2560;
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
@@ -79,6 +95,24 @@ pub struct CameraRawDialog {
     redo: Vec<CameraRaw>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// What the develop keeps between frames ([`photocraft_algo::camera_raw::DevelopCache`]).
+    cache: std::sync::Arc<std::sync::Mutex<photocraft_algo::camera_raw::DevelopCache>>,
+    /// Names this dialog's proxy for the cache.
+    source: u64,
+    /// The frame shown is a draft (made while a slider moved): an exact one follows on release.
+    draft_shown: bool,
+    /// The right panel's tab: 0 Edit, 1 Presets.
+    tab: usize,
+    /// The Curve panel's view (see `edit::CURVE_MODES`) and the Color Grading panel's.
+    curve_mode: usize,
+    grading_view: usize,
+    /// The White Balance tool is picking a neutral point on the preview.
+    wb_tool: bool,
+    /// Temperature and Tint Auto white balance gave (the White Balance menu names them Auto).
+    auto_wb: Option<(f32, f32)>,
+    /// Settings previewed instead of [`Self::params`] (a preset the pointer is on).
+    hover_params: Option<CameraRaw>,
+    presets: presets::Presets,
 }
 
 impl CameraRawDialog {
@@ -121,6 +155,12 @@ impl CameraRawDialog {
         result["curveRect"] = json!(self.curve_rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["hoverSample"] = json!(self.hover_sample(view.vectorscope));
         result["vectorscopeRect"] = json!(self.scope.vectorscope_rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
+        result["tab"] = json!(if self.tab == 1 { "presets" } else { "edit" });
+        result["curveMode"] = json!(edit::CURVE_MODES.get(self.curve_mode));
+        result["gradingView"] = json!(edit::GRADING_VIEWS.get(self.grading_view));
+        result["whiteBalanceTool"] = json!(self.wb_tool);
+        result["previewingPreset"] = json!(self.hover_params.is_some());
+        result["presets"] = self.presets.describe(&self.params);
         result["scopeRect"] = json!(self.scope.rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result
     }
@@ -151,22 +191,31 @@ impl CameraRawDialog {
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         // A render still running on the worker has older settings than this one.
         self.pending = None;
-        let frame = self.proxy_job().run();
+        let frame = self.proxy_job(false).run();
         self.publish(ctx, frame);
         self.dirty = false;
     }
 
-    fn proxy_job(&self) -> ProxyJob {
+    fn proxy_job(&self, draft: bool) -> ProxyJob {
         ProxyJob {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
-            params: self.params.clone(),
+            params: self.hover_params.clone().unwrap_or_else(|| self.params.clone()),
             float: self.float,
             size: (self.pw, self.ph),
             full_w: self.full_w,
             display: self.display.clone(),
+            cache: self.cache.clone(),
+            source: self.source,
+            draft,
         }
+    }
+
+    /// A control is being dragged (the pointer went down and has moved a setting since), or a
+    /// preset is previewed: the proxy follows, the full-resolution develop waits.
+    fn editing(&self) -> bool {
+        self.edit_origin.as_ref().is_some_and(|o| *o != self.params) || self.hover_params.is_some()
     }
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
@@ -185,6 +234,7 @@ impl CameraRawDialog {
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;
+        self.draft_shown = !frame.exact;
         self.scope.cache = None;
         self.render_ms = frame.ms;
         self.preview_revision = self.preview_revision.saturating_add(1);
@@ -193,14 +243,15 @@ impl CameraRawDialog {
     /// Starts developing the proxy with the current settings on a worker, unless one is already
     /// running: then [`Self::poll_render`] starts the next one with the settings of that moment.
     /// A slider drag never waits for the develop, which takes hundreds of milliseconds with
-    /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
-    fn request_render(&mut self, ctx: &egui::Context) {
+    /// Shadows or Highlights set (#5964); the preview shows the latest finished frame. `draft`:
+    /// a control is being dragged (see [`ProxyJob::draft`]).
+    fn request_render(&mut self, ctx: &egui::Context, draft: bool) {
         if !self.dirty || self.pending.is_some() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let job = self.proxy_job();
+            let job = self.proxy_job(draft);
             let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
             let repaint = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
@@ -220,7 +271,10 @@ impl CameraRawDialog {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.render(ctx);
+        {
+            let _ = draft;
+            self.render(ctx);
+        }
     }
 
     /// Shows the worker's frame once it is done. `Err` when the develop failed; the preview keeps
@@ -266,11 +320,17 @@ struct ProxyJob {
     size: (usize, usize),
     full_w: usize,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+    cache: std::sync::Arc<std::sync::Mutex<photocraft_algo::camera_raw::DevelopCache>>,
+    source: u64,
+    /// A control is being dragged: Shadows and Highlights may reuse maps made for other settings.
+    draft: bool,
 }
 
 /// A developed proxy, ready to show.
 struct ProxyFrame {
     px: Vec<[f32; 4]>,
+    /// Not a draft (see [`ProxyJob::draft`]).
+    exact: bool,
     histogram: RgbHistogram,
     histogram_ms: f64,
     image: egui::ColorImage,
@@ -282,15 +342,26 @@ impl ProxyJob {
     fn run(self) -> ProxyFrame {
         let t0 = crate::gpu_canvas::now_ms();
         let (pw, ph) = self.size;
-        let mut px = self.proxy.to_vec();
         let mut p = self.params;
         p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        if let Some(curve) = &self.raw_curve {
+        let mut source = self.source;
+        let retoned = self.raw_curve.as_ref().map(|curve| {
             let tone = raw_stage(&p);
+            let mut px = self.proxy.to_vec();
             photocraft_io::raw::retone(&mut px, pw, ph, curve, tone);
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        }
-        photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
+            // The develop's input depends on the raw-stage sliders here.
+            source = [tone.shadows, tone.highlights, tone.clarity, tone.texture, tone.dehaze]
+                .iter()
+                .fold(source, |h, v| (h ^ u64::from(v.to_bits())).wrapping_mul(0x100_0000_01B3));
+            px
+        });
+        let input = retoned.as_deref().unwrap_or(self.proxy.as_slice());
+        let developed = {
+            let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            photocraft_algo::camera_raw::develop_cached(input, pw, ph, &p, self.float, source, &mut cache, self.draft)
+        };
+        let (mut px, exact) = (developed.px, developed.exact);
         if let Some(mask) = &self.selection {
             for ((out, original), coverage) in px.iter_mut().zip(self.proxy.iter()).zip(mask.iter()) {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -302,7 +373,7 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
+        ProxyFrame { px, exact, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
     }
 }
 
@@ -703,32 +774,18 @@ fn open_pixels(
     if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
         return Err("Camera Raw preview bounds are too large".into());
     }
-    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    let mut row = vec![[0.0f32; 4]; w];
-    for py in 0..ph {
-        // Box-average k×k blocks.
-        let mut acc = vec![[0.0f32; 5]; pw];
-        for dy in 0..k {
-            let y = area.y0 + (py * k + dy).min(h - 1) as i32;
-            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-            for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
-                for c in 0..4 {
-                    a[c] += q[c];
-                }
-                a[4] += 1.0;
-            }
-        }
-        for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
-        }
-    }
-    // Coverage at the centre of each proxy block.
+    let (pw, ph) = proxy_size(w, h, proxy_side(ctx));
+    let proxy = proxy_pixels(&surf, area, pw, ph);
+    // Coverage at the centre of each proxy pixel.
+    let (sx, sy) = (w as f64 / pw as f64, h as f64 / ph as f64);
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
-            .flat_map(|y| (0..pw).map(move |x| (area.x0 + (x * k + k / 2).min(w - 1) as i32, area.y0 + (y * k + k / 2).min(h - 1) as i32)))
+            .flat_map(|y| {
+                (0..pw).map(move |x| {
+                    let at = |i: usize, s: f64, n: usize| (((i as f64 + 0.5) * s) as usize).min(n - 1) as i32;
+                    (area.x0 + at(x, sx, w), area.y0 + at(y, sy, h))
+                })
+            })
             .map(|(x, y)| value(x, y).clamp(0.0, 1.0))
             .collect::<Vec<_>>()
     };
@@ -806,10 +863,95 @@ fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        cache: Default::default(),
+        source: next_source(),
+        draft_shown: false,
+        tab: 0,
+        // The point curve first, as the dialog had it; Parametric is a tab away.
+        curve_mode: 1,
+        grading_view: 0,
+        wb_tool: false,
+        auto_wb: None,
+        hover_params: None,
+        presets: Default::default(),
     };
     d.render(ctx);
     app.camera_raw = Some(d);
     Ok(())
+}
+
+/// A new name for a dialog's proxy ([`CameraRawDialog::source`]).
+fn next_source() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The proxy's long side: the monitor's, in pixels, so the preview of a maximized window is as
+/// sharp as the screen, within [`PROXY_SIDE`] (2048 when the monitor isn't known).
+fn proxy_side(ctx: &egui::Context) -> usize {
+    let monitor = ctx.input(|i| i.viewport().monitor_size).map(|s| s.max_elem() * ctx.pixels_per_point());
+    monitor.filter(|v| v.is_finite() && *v > 0.0).map_or(2048, |v| v.round() as usize).clamp(*PROXY_SIDE.start(), *PROXY_SIDE.end())
+}
+
+/// The proxy's size for a `w × h` area: at most `side` on the long side, never larger than it.
+fn proxy_size(w: usize, h: usize, side: usize) -> (usize, usize) {
+    let long = w.max(h);
+    if long <= side || side == 0 {
+        return (w.max(1), h.max(1));
+    }
+    let s = long as f64 / side as f64;
+    (((w as f64 / s).round() as usize).clamp(1, side), ((h as f64 / s).round() as usize).clamp(1, side))
+}
+
+/// `surf` over `area` averaged down to `pw × ph`: each proxy pixel is the mean of the source area
+/// it covers, pixels it covers in part weighted by their share (straight RGBA, as before).
+fn proxy_pixels(surf: &photocraft_raster::Surface, area: Rect, pw: usize, ph: usize) -> Vec<[f32; 4]> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    if w == 0 || h == 0 || pw == 0 || ph == 0 {
+        return vec![[0.0; 4]; pw * ph];
+    }
+    // The source pixels each proxy column (row) covers, with their shares.
+    let spans = |n_out: usize, n_in: usize| -> Vec<Vec<(usize, f32)>> {
+        let s = n_in as f64 / n_out as f64;
+        (0..n_out)
+            .map(|o| {
+                let (a, b) = (o as f64 * s, ((o + 1) as f64 * s).min(n_in as f64));
+                (a.floor() as usize..(b.ceil() as usize).min(n_in))
+                    .filter_map(|i| {
+                        let share = ((i + 1) as f64).min(b) - (i as f64).max(a);
+                        (share > 0.0).then_some((i, share as f32))
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    let (cols, rows) = (spans(pw, w), spans(ph, h));
+    let proxy_row = |py: usize| -> Vec<[f32; 4]> {
+        let mut acc = vec![[0.0f32; 5]; pw];
+        let mut line = vec![[0.0f32; 4]; w];
+        for &(y, wy) in rows.get(py).map_or(&[][..], Vec::as_slice) {
+            let y = area.y0 + y as i32;
+            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut line);
+            for (a, span) in acc.iter_mut().zip(&cols) {
+                for &(x, wx) in span {
+                    let (q, share) = (line[x], wy * wx);
+                    for c in 0..4 {
+                        a[c] += q[c] * share;
+                    }
+                    a[4] += share;
+                }
+            }
+        }
+        acc.iter().map(|a| if a[4] > 0.0 { [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]] } else { [0.0; 4] }).collect()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let out: Vec<Vec<[f32; 4]>> = {
+        use rayon::prelude::*;
+        (0..ph).into_par_iter().map(proxy_row).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let out: Vec<Vec<[f32; 4]>> = (0..ph).map(proxy_row).collect();
+    out.concat()
 }
 
 /// Menu / control-channel entry point. `None` when the call isn't for this dialog.
@@ -843,9 +985,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
+            "set" | "scope" | "view" | "demosaic" | "auto" | "whiteBalanceAt" | "tab" | "applyPreset" | "presetAmount" | "savePreset" | "deletePreset" => {}
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -952,6 +1094,15 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("redo").and_then(Value::as_bool) == Some(true) {
         redo_edit(d);
     }
+    let dirs = app.services.camera_raw_presets.clone();
+    let Some(d) = app.camera_raw.as_mut() else { return Some(Err(tl!("Camera Raw isn't open").into())) };
+    let mut extra = serde_json::Map::new();
+    if let Err(e) = control_requests(d, ui, &dirs, &mut extra) {
+        if d.dirty {
+            d.render(ctx);
+        }
+        return Some(Err(e));
+    }
     if d.dirty {
         d.render(ctx);
     }
@@ -970,7 +1121,76 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("commit").and_then(Value::as_bool) == Some(true) {
         return Some(commit(app));
     }
-    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
+    let mut reply = app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null);
+    if let Value::Object(m) = &mut reply {
+        m.extend(extra);
+    }
+    Some(Ok(reply))
+}
+
+/// The control channel's tools, tabs and presets (see the module docs), after the settings.
+fn control_requests(d: &mut CameraRawDialog, ui: &Value, dirs: &crate::CameraRawPresetDirs, extra: &mut serde_json::Map<String, Value>) -> Result<(), String> {
+    match ui.get("auto") {
+        None => {}
+        Some(v) if v == "tone" => {
+            remember_edit(d);
+            auto_tone(d);
+        }
+        Some(v) if v == "whiteBalance" => {
+            remember_edit(d);
+            auto_white_balance(d)?;
+        }
+        Some(_) => return Err("Camera Raw auto must be \"tone\" or \"whiteBalance\"".into()),
+    }
+    if let Some(v) = ui.get("whiteBalanceAt") {
+        let uv: [f32; 2] = serde_json::from_value(v.clone()).map_err(|_| "whiteBalanceAt must be [u, v]".to_string())?;
+        remember_edit(d);
+        white_balance_at(d, uv)?;
+    }
+    match ui.get("tab").map(|v| v.as_str()) {
+        None => {}
+        Some(Some("edit")) => d.tab = 0,
+        Some(Some("presets")) => d.tab = 1,
+        Some(_) => return Err("Camera Raw tab must be \"edit\" or \"presets\"".into()),
+    }
+    if let Some(v) = ui.get("showAdobePresets").and_then(Value::as_bool) {
+        d.presets.show_adobe = v;
+    }
+    let wants_list = ["tab", "applyPreset", "presetAmount", "savePreset", "deletePreset", "showAdobePresets"].iter().any(|k| ui.get(k).is_some());
+    if wants_list {
+        d.presets.scan_now(presets::folders(dirs, d.presets.show_adobe));
+    }
+    if let Some(key) = ui.get("applyPreset") {
+        let key = key.as_str().ok_or("applyPreset must be a preset's path or name")?;
+        let preset = d.presets.find(key).ok_or_else(|| format!("no Camera Raw preset {key}"))?;
+        extra.insert("preset".into(), presets::apply(d, &preset)?);
+    }
+    if let Some(v) = ui.get("presetAmount") {
+        let amount = v.as_f64().ok_or("presetAmount must be a number 0–200")? as f32;
+        presets::set_amount(d, amount, true)?;
+    }
+    if let Some(v) = ui.get("savePreset") {
+        let name = v.get("name").and_then(Value::as_str).ok_or("savePreset needs a name")?;
+        let group = v.get("group").and_then(Value::as_str).unwrap_or("");
+        let sections = match v.get("sections") {
+            None => photocraft_io::camera_raw_xmp::Section::ALL.to_vec(),
+            Some(list) => list
+                .as_array()
+                .ok_or("savePreset sections must be a list")?
+                .iter()
+                .map(|s| s.as_str().and_then(photocraft_io::camera_raw_xmp::Section::from_id).ok_or_else(|| format!("unknown preset section {s}")))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        let path = presets::save(d, dirs.own.as_deref(), name, group, &sections)?;
+        d.presets.scan_now(presets::folders(dirs, d.presets.show_adobe));
+        extra.insert("savedPreset".into(), json!(path));
+    }
+    if let Some(v) = ui.get("deletePreset") {
+        let path = v.as_str().ok_or("deletePreset must be a preset's path")?;
+        presets::delete(d, dirs.own.as_deref(), path)?;
+        d.presets.scan_now(presets::folders(dirs, d.presets.show_adobe));
+    }
+    Ok(())
 }
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
@@ -1093,106 +1313,47 @@ fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(result)
 }
 
-/// The open-time demosaic choice (at the top of Detail). Photoshop's Camera Raw picks one method
-/// for every file; here it is the user's. Open re-develops with it; the preview keeps the method
-/// the file was opened with (the differences are finer than the preview's pixels).
-fn demosaic_row(ui: &mut egui::Ui, m: &mut photocraft_io::raw::Demosaic) {
-    use photocraft_io::raw::Demosaic;
-    ui.horizontal(|ui| {
-        ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Demosaic")).on_hover_text(tl!(
-            "How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
-        ));
-        let options = [
-            (Demosaic::Ahd, "AHD (adaptive homogeneity)", "Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest."),
-            (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail."),
-            (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with colour fringing on fine detail."),
-        ];
-        widgets::dropdown_with_tooltips(ui, "camera-raw-demosaic", m, &options, 180.0);
-    });
-    ui.add_space(4.0);
+/// Light › Auto: the tone settings measured on the image, as one change.
+fn auto_tone(d: &mut CameraRawDialog) {
+    let a = photocraft_algo::camera_raw::auto_tone(&d.proxy);
+    let p = &mut d.params;
+    (p.exposure, p.contrast, p.highlights, p.shadows, p.whites, p.blacks) = (a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks);
+    d.dirty = true;
 }
 
-fn temp_stops() -> Vec<Color32> {
-    vec![Color32::from_rgb(70, 120, 230), Color32::from_rgb(200, 200, 200), Color32::from_rgb(235, 200, 60)]
-}
-fn tint_stops() -> Vec<Color32> {
-    vec![Color32::from_rgb(70, 190, 80), Color32::from_rgb(200, 200, 200), Color32::from_rgb(210, 80, 200)]
-}
-
-/// One labelled slider; marks the dialog dirty when it moves.
-fn row(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, grad: Option<&[Color32]>) {
-    let _ = slider(ui, dirty, label, v, range, grad);
+/// White Balance › Auto. `Err` when the image has nothing neutral enough to measure.
+fn auto_white_balance(d: &mut CameraRawDialog) -> Result<(), String> {
+    let (t, n) = photocraft_algo::camera_raw::auto_white_balance(&d.proxy).ok_or(tl!("Auto white balance found nothing to measure in this image"))?;
+    (d.params.temperature, d.params.tint) = (t, n);
+    d.auto_wb = Some((t, n));
+    d.dirty = true;
+    Ok(())
 }
 
-fn slider(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, grad: Option<&[Color32]>) -> egui::Response {
-    let r = widgets::slider_row(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label), v, range, "", grad);
-    if r.changed() {
-        *dirty = true;
+/// The White Balance tool at `uv` (0–1 across the image): the original's colour there (a 5×5
+/// average on the proxy) made neutral.
+fn white_balance_at(d: &mut CameraRawDialog, uv: [f32; 2]) -> Result<(), String> {
+    if !uv.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
+        return Err("the White Balance tool's point must be 0–1".into());
     }
-    if r.double_clicked() {
-        *v = 0.0;
-        *dirty = true;
-    }
-    r
-}
-
-/// A Light tone slider; Alt-dragging it shows that zone's channel clipping on the preview.
-fn tone_row(ui: &mut egui::Ui, dirty: &mut bool, alt: &mut Option<ToneZone>, zone: ToneZone, v: &mut f32) {
-    let r = slider(ui, dirty, zone.name(), v, -zone.limit()..=zone.limit(), None);
-    if r.dragged() && ui.input(|i| i.modifiers.alt) {
-        *alt = Some(zone);
-    }
-}
-
-fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title)).font(FontId::proportional(13.0)))
-        .id_salt(("camera-raw-section", title))
-        .default_open(open)
-        .show(ui, body);
-}
-
-fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
-    widgets::section_label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title));
-    let hs = widgets::hue_stops();
-    row(ui, dirty, "Hue", &mut w.hue, 0.0..=360.0, Some(&hs));
-    row(ui, dirty, "Saturation", &mut w.sat, 0.0..=100.0, None);
-    row(ui, dirty, "Luminance", &mut w.lum, -100.0..=100.0, None);
-}
-
-// The shared Curve editor must never produce a curve `CameraRaw::validate` rejects.
-const _: () = assert!(crate::point_curve::MAX_POINTS == photocraft_algo::camera_raw::MAX_CURVE_POINTS && crate::point_curve::MIN_GAP >= 1.0);
-
-/// Small point-curve editor (master channel): click to add, drag to move, right-click to delete.
-fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &mut crate::state::PointCurveState) -> ERect {
-    let t = Tokens::get(ui.ctx());
-    let side = ui.available_width().min(260.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, t.radius_sm, t.field);
-    for i in 1..4 {
-        let f = i as f32 / 4.0;
-        painter.line_segment([pos2(rect.left() + f * side, rect.top()), pos2(rect.left() + f * side, rect.bottom())], Stroke::new(1.0, t.separator));
-        painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], Stroke::new(1.0, t.separator));
-    }
-    let to_screen = |x: f32, y: f32| pos2(rect.left() + x / 255.0 * side, rect.bottom() - y / 255.0 * side);
-    // The identity handles are presentation until a gesture actually edits them.
-    let mut points = if p.point_curve.is_empty() { vec![[0.0, 0.0], [255.0, 255.0]] } else { p.point_curve.clone() };
-    if crate::point_curve::interact(ui, &resp, rect, &mut points, state).changed {
-        p.point_curve = points.clone();
-        *dirty = true;
-    }
-    // Curve (point curve after the parametric one).
-    let lut = curve_lut(&points, 256);
-    let pts: Vec<Pos2> = lut.iter().enumerate().map(|(i, value)| to_screen(i as f32, value * 255.0)).collect();
-    painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.text)));
-    for (i, c) in points.iter().enumerate() {
-        let center = to_screen(c[0], c[1]);
-        if state.selected == Some(i) {
-            painter.circle_filled(center, 3.0, t.accent);
+    let (cx, cy) = (((uv[0] * d.pw as f32) as usize).min(d.pw.saturating_sub(1)), ((uv[1] * d.ph as f32) as usize).min(d.ph.saturating_sub(1)));
+    let mut sum = [0.0f32; 3];
+    let mut n = 0.0;
+    for y in cy.saturating_sub(2)..=(cy + 2).min(d.ph.saturating_sub(1)) {
+        for x in cx.saturating_sub(2)..=(cx + 2).min(d.pw.saturating_sub(1)) {
+            if let Some(q) = d.proxy.get(y * d.pw + x).filter(|q| q[3] > 0.0) {
+                for c in 0..3 {
+                    sum[c] += q[c];
+                }
+                n += 1.0;
+            }
         }
-        painter.circle_stroke(center, 4.0, Stroke::new(1.5, t.accent));
     }
-    rect
+    let colour = sum.map(|v| v / f32::max(n, 1.0));
+    let (t, tint) = photocraft_algo::camera_raw::neutralize(colour).filter(|_| n > 0.0).ok_or(tl!("Click something light grey or white: that point is too dark or too bright to measure"))?;
+    (d.params.temperature, d.params.tint) = (t, tint);
+    d.dirty = true;
+    Ok(())
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -1270,7 +1431,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
-        d.request_render(ctx);
+        let editing = d.editing();
+        if d.draft_shown && !editing && d.pending.is_none() {
+            // The drag is over: the draft's settings, exactly.
+            d.dirty = true;
+        }
+        d.request_render(ctx, editing);
         d.clear_recovered_error(&mut app.ui);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
@@ -1298,20 +1464,45 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
-        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool);
+        // The White Balance tool clicks like the colour sampler: a click picks, never zooms.
+        let mut picking = scope.sampler_tool || d.wb_tool;
+        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut picking);
+        if !picking {
+            // H or Z took the Hand or Zoom tool.
+            (scope.sampler_tool, d.wb_tool) = (false, false);
+        }
+        let mut wb_error = None;
+        if d.wb_tool && !panning {
+            if response.hovered() {
+                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            if response.clicked()
+                && let Some(at) = response.interact_pointer_pos().filter(|at| r.contains(*at))
+            {
+                let uv = (at - r.min) / r.size();
+                if let Err(e) = white_balance_at(d, [uv.x, uv.y]) {
+                    wb_error = Some(e);
+                }
+            }
+        }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
-            let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
+            // While a control is dragged the proxy follows it; the full-resolution develop starts
+            // once it is let go instead of competing with the proxy for every step.
+            let detail_needed =
+                !raw_tone && !editing && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
             d.scope.preview_rect = Some(r);
-            super::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            if !d.wb_tool {
+                super::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            }
         }
         if let Some(region) = zoom_box {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
@@ -1336,110 +1527,50 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         super::camera_raw_scope_ui::header(&mut props, d, scope);
         d.scope.alt_tone = None;
         let mut dirty = false;
-        egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            let p = &mut d.params;
-            let alt = &mut d.scope.alt_tone;
-            let (ts, tn) = (temp_stops(), tint_stops());
-            section(ui, "Light", true, |ui| {
-                tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
-                row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
-                tone_row(ui, &mut dirty, alt, ToneZone::Highlights, &mut p.highlights);
-                tone_row(ui, &mut dirty, alt, ToneZone::Shadows, &mut p.shadows);
-                tone_row(ui, &mut dirty, alt, ToneZone::Whites, &mut p.whites);
-                tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
-            });
-            section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
-                row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
-                row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
-                row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Saturation", &mut p.saturation, -100.0..=100.0, None);
-            });
-            section(ui, "Effects", false, |ui| {
-                row(ui, &mut dirty, "Texture", &mut p.texture, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Clarity", &mut p.clarity, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Dehaze", &mut p.dehaze, -100.0..=100.0, None);
-                widgets::section_label(ui, tl!("Vignetting"));
-                let mut style = p.vignette_style.clone();
-                if widgets::dropdown(
-                    ui,
-                    "cr-vig-style",
-                    &mut style,
-                    &[
-                        ("highlightPriority".to_string(), tl!("Highlight Priority")),
-                        ("colorPriority".to_string(), tl!("Color Priority")),
-                        ("paintOverlay".to_string(), tl!("Paint Overlay")),
-                    ],
-                    200.0,
-                ) {
-                    p.vignette_style = style;
-                    dirty = true;
-                }
-                row(ui, &mut dirty, "Amount", &mut p.vignette_amount, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Midpoint", &mut p.vignette_midpoint, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Roundness", &mut p.vignette_roundness, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Feather", &mut p.vignette_feather, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Highlights", &mut p.vignette_highlights, 0.0..=100.0, None);
-                widgets::section_label(ui, tl!("Grain"));
-                row(ui, &mut dirty, "Amount", &mut p.grain_amount, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Size", &mut p.grain_size, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Roughness", &mut p.grain_roughness, 0.0..=100.0, None);
-            });
-            section(ui, "Curve", false, |ui| {
-                d.curve_rect = Some(curve_editor(ui, p, &mut dirty, &mut d.curve_state));
-                row(ui, &mut dirty, "Highlights", &mut p.curve_highlights, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Lights", &mut p.curve_lights, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Darks", &mut p.curve_darks, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Shadows", &mut p.curve_shadows, -100.0..=100.0, None);
-            });
-            section(ui, "Color Mixer", false, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (i, source) in ["Hue", "Saturation", "Luminance"].iter().enumerate() {
-                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", source);
-                        let response = widgets::pill_tab(ui, name, d.mixer_tab == i);
-                        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), d.mixer_tab == i, name));
-                        if response.clicked() {
-                            d.mixer_tab = i;
-                        }
+        // Edit and Presets, as Camera Raw's right-hand toolbar switches them.
+        props.horizontal(|ui| {
+            for (k, label) in ["Edit", "Presets"].into_iter().enumerate() {
+                let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label);
+                let response = widgets::pill_tab(ui, name, d.tab == k);
+                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, d.tab == k, name));
+                if response.clicked() && d.tab != k {
+                    d.tab = k;
+                    if d.hover_params.take().is_some() {
+                        d.dirty = true;
                     }
-                });
-                let arr = match d.mixer_tab {
-                    0 => &mut p.hsl_hue,
-                    1 => &mut p.hsl_sat,
-                    _ => &mut p.hsl_lum,
-                };
-                for (k, name) in BANDS.iter().enumerate() {
-                    let c = photocraft_algo::camera_raw::HSL_BANDS[k];
-                    let base = widgets::hue_color(c);
-                    let grad = [Color32::from_gray(128), base];
-                    row(ui, &mut dirty, name, &mut arr[k], -100.0..=100.0, Some(&grad));
                 }
-            });
-            section(ui, "Color Grading", false, |ui| {
-                wheel(ui, &mut dirty, "Shadows", &mut p.grade_shadows);
-                wheel(ui, &mut dirty, "Midtones", &mut p.grade_midtones);
-                wheel(ui, &mut dirty, "Highlights", &mut p.grade_highlights);
-                wheel(ui, &mut dirty, "Global", &mut p.grade_global);
-                row(ui, &mut dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, None);
-            });
-            section(ui, "Detail", false, |ui| {
-                if let Some(raw) = d.raw_open.as_mut() {
-                    demosaic_row(ui, &mut raw.demosaic);
-                }
-                widgets::section_label(ui, tl!("Sharpening"));
-                row(ui, &mut dirty, "Amount", &mut p.sharpen_amount, 0.0..=150.0, None);
-                row(ui, &mut dirty, "Radius", &mut p.sharpen_radius, 0.5..=3.0, None);
-                row(ui, &mut dirty, "Detail", &mut p.sharpen_detail, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Masking", &mut p.sharpen_masking, 0.0..=100.0, None);
-                widgets::section_label(ui, tl!("Noise Reduction"));
-                row(ui, &mut dirty, "Luminance", &mut p.noise_luminance, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Luminance Detail", &mut p.noise_luminance_detail, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Color", &mut p.noise_color, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Color Detail", &mut p.noise_color_detail, 0.0..=100.0, None);
-            });
+            }
         });
+        props.add_space(2.0);
+        let mut requests = edit::Requests::default();
+        let mut panel_status: presets::Status = None;
+        let preset_dirs = app.services.camera_raw_presets.clone();
+        egui::ScrollArea::vertical().id_salt(("camera-raw-props", d.tab)).show(&mut props, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().indent = 10.0;
+            if d.tab == 1 {
+                panel_status = presets::panel(ui, d, &preset_dirs);
+            } else {
+                let mut alt = None;
+                requests = edit::panel(ui, d, &mut alt, &mut dirty);
+                d.scope.alt_tone = alt;
+            }
+        });
+        if requests.auto_tone {
+            auto_tone(d);
+        }
+        if requests.auto_white_balance
+            && let Err(e) = auto_white_balance(d)
+        {
+            panel_status = Some((e, true));
+        }
+        if let Some(e) = wb_error {
+            panel_status = Some((e, true));
+        }
+        if let Some((text, error)) = panel_status {
+            app.ui.status = text;
+            app.ui.status_error = error;
+        }
         super::camera_raw_scope_ui::floating(ctx, d, scope, right);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
         d.dirty |= dirty;
@@ -1488,6 +1619,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         && let Some(d) = app.camera_raw.as_mut()
     {
         d.show_before = !d.show_before;
+    }
+    if !ctx.text_edit_focused()
+        && ctx.input(|i| i.key_pressed(egui::Key::I))
+        && let Some(d) = app.camera_raw.as_mut()
+    {
+        d.wb_tool = !d.wb_tool;
+        app.ui.camera_raw_scope.sampler_tool = false;
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = Some("cancel");
@@ -1620,17 +1758,17 @@ mod tests {
         let revision = d.preview_revision;
         d.params.exposure = 1.0;
         d.dirty = true;
-        d.request_render(&ctx);
+        d.request_render(&ctx, false);
         assert!(d.render_pending() && !d.dirty);
         // A drag moves on while the first develop runs; the request waits for it.
         d.params.highlights = -60.0;
         d.params.shadows = 45.0;
         d.dirty = true;
-        d.request_render(&ctx);
+        d.request_render(&ctx, false);
         finish_worker(d, &ctx);
         assert_eq!(d.preview_revision, revision + 1);
         assert!(d.dirty, "the newer settings are still to be developed");
-        d.request_render(&ctx);
+        d.request_render(&ctx, false);
         finish_worker(d, &ctx);
         assert_eq!(d.preview_revision, revision + 2);
         let (from_worker, histogram) = (d.processed.clone(), d.after_histogram.channels);
@@ -1648,7 +1786,7 @@ mod tests {
         let d = app.camera_raw.as_mut().unwrap();
         d.params.highlights = -80.0;
         d.dirty = true;
-        d.request_render(&ctx);
+        d.request_render(&ctx, false);
         assert!(d.render_pending());
         let reply = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
         assert_eq!(reply["previewPending"], false);
@@ -1785,6 +1923,89 @@ mod tests {
         menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"smartFilter": {"layer": layer.0, "index": 7}})).unwrap().is_err());
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"smartFilter": {"layer": "x"}})).unwrap().is_err());
+    }
+
+    /// Presets (user request): Photoshop's are listed but never written, applying one is an undo
+    /// step and its Amount mixes it, and Create Preset saves only the chosen groups of settings
+    /// into PhotoCraft's own folder, where it can be deleted again.
+    #[test]
+    fn presets_are_listed_applied_mixed_saved_and_deleted() {
+        use photocraft_io::camera_raw_xmp::{Section, save_preset};
+        let base = std::env::temp_dir().join(format!("photocraft-cr-ui-presets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (own, ps) = (base.join("own"), base.join("photoshop"));
+        std::fs::create_dir_all(&ps).unwrap();
+        let punch = CameraRaw { contrast: 40.0, vibrance: 20.0, ..CameraRaw::default() };
+        let foreign = ps.join("Punch.xmp");
+        std::fs::write(&foreign, save_preset(&punch, "Punch", "Film", "1", &[Section::Light, Section::Presence])).unwrap();
+        let services = crate::Services {
+            camera_raw_presets: crate::CameraRawPresetDirs { own: Some(own.to_str().unwrap().into()), photoshop: vec![ps.to_str().unwrap().into()], adobe: vec![] },
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        let ui = |app: &mut PhotocraftApp, v: Value| menu(app, &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap();
+        ui(&mut app, json!({})).unwrap();
+        let r = ui(&mut app, json!({"tab": "presets"})).unwrap();
+        assert_eq!((r["tab"].as_str(), r["presets"]["count"].as_u64()), (Some("presets"), Some(1)));
+        assert_eq!((r["presets"]["items"][0]["name"].as_str(), r["presets"]["items"][0]["source"].as_str()), (Some("Punch"), Some("photoshop")));
+        let r = ui(&mut app, json!({"applyPreset": "Punch"})).unwrap();
+        assert_eq!((r["params"]["contrast"].as_f64(), r["params"]["vibrance"].as_f64()), (Some(40.0), Some(20.0)));
+        assert!(r["preset"]["ignored"].as_array().unwrap().is_empty());
+        let r = ui(&mut app, json!({"presetAmount": 50})).unwrap();
+        assert_eq!((r["params"]["contrast"].as_f64(), r["presets"]["applied"]["amount"].as_f64()), (Some(20.0), Some(50.0)));
+        assert!(ui(&mut app, json!({"presetAmount": 500})).is_err());
+        ui(&mut app, json!({"undo": true})).unwrap();
+        let r = ui(&mut app, json!({"undo": true})).unwrap();
+        assert_eq!(r["params"]["contrast"].as_f64(), Some(0.0), "applying and its Amount are undo steps");
+        // Create Preset: only the Light group.
+        ui(&mut app, json!({"set": {"exposure": 0.5, "contrast": 15, "clarity": 30}})).unwrap();
+        let r = ui(&mut app, json!({"savePreset": {"name": "Mine", "group": "G", "sections": ["light"]}})).unwrap();
+        let saved = r["savedPreset"].as_str().unwrap().to_string();
+        assert!(std::path::Path::new(&saved).starts_with(&own));
+        assert_eq!(r["presets"]["count"].as_u64(), Some(2));
+        assert_eq!(r["presets"]["items"][0]["source"].as_str(), Some("own"), "PhotoCraft's own presets come first");
+        ui(&mut app, json!({"set": {"exposure": 0.0, "contrast": 0, "clarity": 0}})).unwrap();
+        let r = ui(&mut app, json!({"applyPreset": saved})).unwrap();
+        assert_eq!((r["params"]["exposure"].as_f64(), r["params"]["contrast"].as_f64(), r["params"]["clarity"].as_f64()), (Some(0.5), Some(15.0), Some(0.0)));
+        // Errors leave things alone; Photoshop's presets are never deleted.
+        assert!(ui(&mut app, json!({"applyPreset": "Nope"})).is_err());
+        assert!(ui(&mut app, json!({"savePreset": {"name": " "}})).is_err());
+        assert!(ui(&mut app, json!({"savePreset": {"name": "x", "sections": ["bogus"]}})).is_err());
+        assert!(ui(&mut app, json!({"deletePreset": foreign.to_str().unwrap()})).is_err());
+        assert!(foreign.exists());
+        let r = ui(&mut app, json!({"deletePreset": saved})).unwrap();
+        assert_eq!(r["presets"]["count"].as_u64(), Some(1));
+        assert!(ui(&mut app, json!({"tab": "nowhere"})).is_err());
+        ui(&mut app, json!({"cancel": true})).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Auto tone, Auto white balance and the White Balance tool set the settings from the image;
+    /// a previewed preset changes the preview, not the settings.
+    #[test]
+    fn auto_settings_the_white_balance_tool_and_previews() {
+        let (mut app, ctx) = worker_app();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": "whiteBalance"}})).unwrap().unwrap();
+        assert!(r["params"]["temperature"].as_f64().unwrap() > 0.0, "a blue image warms: {}", r["params"]);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"temperature": 0, "tint": 0}}})).unwrap().unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"whiteBalanceAt": [0.5, 0.5]}})).unwrap().unwrap();
+        assert!(r["params"]["temperature"].as_f64().unwrap() > 0.0);
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"whiteBalanceAt": [2.0, 0.5]}})).unwrap().is_err());
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": "everything"}})).unwrap().is_err());
+        let before = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {}})).unwrap().unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": "tone"}})).unwrap().unwrap();
+        assert_ne!(r["params"], before["params"], "Auto sets the Light sliders");
+        let d = app.camera_raw.as_mut().unwrap();
+        let (params, shown) = (d.params.clone(), d.processed.clone());
+        d.hover_params = Some(CameraRaw { exposure: 2.0, ..params.clone() });
+        d.render(&ctx);
+        assert_ne!(d.processed, shown, "the previewed settings are shown");
+        assert_eq!(d.params, params, "and the settings stay");
+        assert_eq!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["previewingPreset"], true);
     }
 
     #[test]
@@ -2069,7 +2290,7 @@ mod tests {
         let written: Written = Arc::default();
         let w = written.clone();
         let foreign = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Clarity2012="+25" crs:RedHue="-5"/>
+            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Clarity2012="+25" crs:PerspectiveVertical="-5"/>
             </rdf:RDF></x:xmpmeta>"#;
         let answers = vec![
             Some(FileDialogAnswer::SaveTo("/out/Look.xmp".into())),

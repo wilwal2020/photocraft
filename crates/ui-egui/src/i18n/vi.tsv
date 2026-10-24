@@ -4305,3 +4305,56 @@ curves	Smooth	Làm mượt
 	How softly the layer mask's edge fades into the original	Mép mặt nạ lớp hòa vào ảnh gốc mềm đến mức nào
 	Creative shows everything Nano Banana drew: these don't apply.	Chế độ Sáng tạo hiển thị mọi thứ Nano Banana đã vẽ: các thiết lập này không áp dụng.
 	How Nano Banana's layer mask meets the original	Cách mặt nạ lớp của Nano Banana nối với ảnh gốc
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Thiết lập sẵn cần có tên
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Đã áp dụng thiết lập sẵn {name}
+	Applied preset {name} ({n} settings not supported)	Đã áp dụng thiết lập sẵn {name} ({n} thiết lập không được hỗ trợ)
+	Auto white balance found nothing to measure in this image	Cân bằng trắng tự động không tìm thấy gì để đo trong ảnh này
+	Check All	Chọn tất cả
+	Check None	Bỏ chọn tất cả
+	Choose at least one group of settings	Hãy chọn ít nhất một nhóm thiết lập
+	Click something light grey or white: that point is too dark or too bright to measure	Hãy nhấp vào thứ màu xám nhạt hoặc trắng: điểm đó quá tối hoặc quá sáng để đo
+	Copy to My Presets	Sao chép vào thiết lập sẵn của tôi
+	Create Preset	Tạo thiết lập sẵn
+	Create Preset…	Tạo thiết lập sẵn…
+	Curve region splits	Ranh giới các vùng đường cong
+	Existing groups	Các nhóm hiện có
+	How much of the saturation a contrasty curve adds is kept	Lượng độ bão hòa do đường cong tương phản thêm vào được giữ lại
+	Lens Vignetting	Làm tối góc ống kính
+	Looking for presets…	Đang tìm thiết lập sẵn…
+	My Presets	Thiết lập sẵn của tôi
+	No presets match.	Không có thiết lập sẵn nào khớp.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Chưa có thiết lập sẵn. Tạo một cái bằng +, hoặc đặt thiết lập sẵn Camera Raw (.xmp) vào thư mục thiết lập sẵn của PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Giá trị dương sửa méo thùng, giá trị âm sửa méo gối
+	Presets can't be saved here	Không thể lưu thiết lập sẵn ở đây
+	Presets menu	Menu thiết lập sẵn
+	Rename Preset	Đổi tên thiết lập sẵn
+	Saved preset {name}	Đã lưu thiết lập sẵn {name}
+	Search presets	Tìm thiết lập sẵn
+	Set the Light sliders from the image's tones	Đặt các thanh trượt Ánh sáng theo các tông của ảnh
+	Show Adobe's Presets	Hiện thiết lập sẵn của Adobe
+	Update with Current Settings	Cập nhật bằng thiết lập hiện tại
+	User Presets	Thiết lập sẵn của người dùng
+	White Balance Tool (I): click something that should be neutral grey	Công cụ Cân bằng trắng (I): nhấp vào thứ lẽ ra phải là xám trung tính
+cameraRaw	3-Way	3 chiều
+cameraRaw	As Shot	Như khi chụp
+cameraRaw	B&W Mix	Trộn đen trắng
+cameraRaw	Blue Primary	Màu cơ bản lam
+cameraRaw	Calibration	Hiệu chuẩn
+cameraRaw	Color Smoothness	Độ mượt màu
+cameraRaw	Green Amount	Lượng lục
+cameraRaw	Green Hue	Sắc độ lục
+cameraRaw	Green Primary	Màu cơ bản lục
+cameraRaw	Luminance Contrast	Tương phản độ chói
+cameraRaw	Optics	Quang học
+cameraRaw	Parametric	Tham số
+cameraRaw	Presence	Hiện diện
+cameraRaw	Purple Amount	Lượng tím
+cameraRaw	Purple Hue	Sắc độ tím
+cameraRaw	Red Primary	Màu cơ bản đỏ
+cameraRaw	Refine Saturation	Tinh chỉnh độ bão hòa
+cameraRaw	Treatment & Profile	Xử lý và cấu hình
+cameraRaw	White Balance	Cân bằng trắng

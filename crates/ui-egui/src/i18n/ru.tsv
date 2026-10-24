@@ -5011,3 +5011,56 @@ shape	Appearance	Оформление
 	How softly the layer mask's edge fades into the original	Насколько мягко край маски слоя переходит в оригинал
 	Creative shows everything Nano Banana drew: these don't apply.	В творческом режиме видно всё, что нарисовала Nano Banana: эти настройки не применяются.
 	How Nano Banana's layer mask meets the original	Как маска слоя Nano Banana стыкуется с оригиналом
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	У набора настроек должно быть имя
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Применён набор настроек {name}
+	Applied preset {name} ({n} settings not supported)	Применён набор настроек {name} (не поддерживается настроек: {n})
+	Auto white balance found nothing to measure in this image	Автоматический баланс белого не нашёл на этом изображении ничего для измерения
+	Check All	Отметить все
+	Check None	Снять все
+	Choose at least one group of settings	Выберите хотя бы одну группу настроек
+	Click something light grey or white: that point is too dark or too bright to measure	Щёлкните по чему-то светло-серому или белому: эта точка слишком тёмная или слишком светлая для измерения
+	Copy to My Presets	Копировать в мои наборы
+	Create Preset	Создать набор настроек
+	Create Preset…	Создать набор настроек…
+	Curve region splits	Границы областей кривой
+	Existing groups	Существующие группы
+	How much of the saturation a contrasty curve adds is kept	Сколько насыщенности, добавленной контрастной кривой, сохраняется
+	Lens Vignetting	Виньетирование объектива
+	Looking for presets…	Поиск наборов настроек…
+	My Presets	Мои наборы
+	No presets match.	Нет подходящих наборов.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Наборов настроек пока нет. Создайте набор кнопкой + или поместите наборы Camera Raw (.xmp) в папку наборов PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Положительные значения исправляют бочкообразную дисторсию, отрицательные — подушкообразную
+	Presets can't be saved here	Здесь нельзя сохранять наборы настроек
+	Presets menu	Меню наборов настроек
+	Rename Preset	Переименовать набор
+	Saved preset {name}	Набор настроек {name} сохранён
+	Search presets	Поиск наборов настроек
+	Set the Light sliders from the image's tones	Установить ползунки «Свет» по тонам изображения
+	Show Adobe's Presets	Показывать наборы Adobe
+	Update with Current Settings	Обновить текущими настройками
+	User Presets	Пользовательские наборы
+	White Balance Tool (I): click something that should be neutral grey	Инструмент «Баланс белого» (I): щёлкните по тому, что должно быть нейтрально-серым
+cameraRaw	3-Way	3 зоны
+cameraRaw	As Shot	Как снято
+cameraRaw	B&W Mix	Смешение Ч/Б
+cameraRaw	Blue Primary	Основной синий
+cameraRaw	Calibration	Калибровка
+cameraRaw	Color Smoothness	Гладкость цвета
+cameraRaw	Green Amount	Степень для зелёного
+cameraRaw	Green Hue	Тон зелёного
+cameraRaw	Green Primary	Основной зелёный
+cameraRaw	Luminance Contrast	Контраст яркости
+cameraRaw	Optics	Оптика
+cameraRaw	Parametric	Параметрическая
+cameraRaw	Presence	Присутствие
+cameraRaw	Purple Amount	Степень для пурпурного
+cameraRaw	Purple Hue	Тон пурпурного
+cameraRaw	Red Primary	Основной красный
+cameraRaw	Refine Saturation	Уточнить насыщенность
+cameraRaw	Treatment & Profile	Обработка и профиль
+cameraRaw	White Balance	Баланс белого

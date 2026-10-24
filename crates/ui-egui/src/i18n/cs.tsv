@@ -4554,3 +4554,56 @@ cameraRaw	Dehaze	Odstranění oparu
 	How softly the layer mask's edge fades into the original	Jak jemně okraj masky vrstvy přechází do originálu
 	Creative shows everything Nano Banana drew: these don't apply.	Kreativní režim ukazuje vše, co Nano Banana nakreslila: tato nastavení neplatí.
 	How Nano Banana's layer mask meets the original	Jak se maska vrstvy Nano Banana napojuje na originál
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Přednastavení potřebuje název
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Použito přednastavení {name}
+	Applied preset {name} ({n} settings not supported)	Použito přednastavení {name} ({n} nastavení není podporováno)
+	Auto white balance found nothing to measure in this image	Automatické vyvážení bílé v tomto obrazu nenašlo nic k měření
+	Check All	Zaškrtnout vše
+	Check None	Zrušit vše
+	Choose at least one group of settings	Vyberte alespoň jednu skupinu nastavení
+	Click something light grey or white: that point is too dark or too bright to measure	Klikněte na něco světle šedého nebo bílého: tento bod je příliš tmavý nebo příliš světlý pro měření
+	Copy to My Presets	Kopírovat do mých přednastavení
+	Create Preset	Vytvořit přednastavení
+	Create Preset…	Vytvořit přednastavení…
+	Curve region splits	Hranice oblastí křivky
+	Existing groups	Existující skupiny
+	How much of the saturation a contrasty curve adds is kept	Kolik sytosti, kterou přidá kontrastní křivka, se zachová
+	Lens Vignetting	Vinětace objektivu
+	Looking for presets…	Hledání přednastavení…
+	My Presets	Moje přednastavení
+	No presets match.	Žádné přednastavení neodpovídá.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Zatím žádná přednastavení. Vytvořte jedno tlačítkem + nebo vložte přednastavení Camera Raw (.xmp) do složky přednastavení aplikace PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Kladné hodnoty opravují soudkovité zkreslení, záporné poduškovité
+	Presets can't be saved here	Přednastavení zde nelze uložit
+	Presets menu	Nabídka přednastavení
+	Rename Preset	Přejmenovat přednastavení
+	Saved preset {name}	Přednastavení {name} uloženo
+	Search presets	Hledat přednastavení
+	Set the Light sliders from the image's tones	Nastavit posuvníky Světlo podle tónů obrazu
+	Show Adobe's Presets	Zobrazit přednastavení Adobe
+	Update with Current Settings	Aktualizovat aktuálním nastavením
+	User Presets	Uživatelská přednastavení
+	White Balance Tool (I): click something that should be neutral grey	Nástroj Vyvážení bílé (I): klikněte na něco, co má být neutrálně šedé
+cameraRaw	3-Way	3 cesty
+cameraRaw	As Shot	Jako snímek
+cameraRaw	B&W Mix	Č/B směs
+cameraRaw	Blue Primary	Primární modrá
+cameraRaw	Calibration	Kalibrace
+cameraRaw	Color Smoothness	Hladkost barev
+cameraRaw	Green Amount	Míra zelené
+cameraRaw	Green Hue	Odstín zelené
+cameraRaw	Green Primary	Primární zelená
+cameraRaw	Luminance Contrast	Kontrast jasu
+cameraRaw	Optics	Optika
+cameraRaw	Parametric	Parametrická
+cameraRaw	Presence	Přítomnost
+cameraRaw	Purple Amount	Míra fialové
+cameraRaw	Purple Hue	Odstín fialové
+cameraRaw	Red Primary	Primární červená
+cameraRaw	Refine Saturation	Zpřesnit sytost
+cameraRaw	Treatment & Profile	Zpracování a profil
+cameraRaw	White Balance	Vyvážení bílé

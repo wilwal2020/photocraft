@@ -20,8 +20,12 @@
 //! would not be cheap, keep the CPU proxy preview (`canvas::ensure_filter_preview`), see
 //! [`unsupported`]:
 //! - the target is not a plain pixel layer (smart object, type, shape, group: the command edits
-//!   a smart object's filters or refuses), or is itself clipped (a clipped adjustment would act on
-//!   the whole clipping group, not just the target);
+//!   a smart object's filters or refuses);
+//! - the target is itself clipped and has layer effects, Advanced Blending or channel
+//!   restrictions. A clipped target is otherwise wrapped with the preview layer in a temporary
+//!   group that takes its place in the clipping group, carrying its blend mode and opacity (an
+//!   adjustment clipped to a clipped layer would act on the whole clipping group, not just the
+//!   target; user report: on a clipped layer the dialogs were "extremely laggy");
 //! - the target uses Blend If (its "This Layer" ranges test the layer's adjusted colour);
 //! - the target's untouched area is visible (a surface without alpha whose content doesn't cover
 //!   the canvas: the command only edits content);
@@ -47,6 +51,8 @@ use crate::PhotocraftApp;
 /// Id of the temporary preview layer. Fixed so the GPU compositor keeps its mask (the selection)
 /// resident from one change to the next. Never reaches a committed document.
 pub const PREVIEW_LAYER: LayerId = LayerId(u64::MAX - 77);
+/// Id of the temporary group a clipped target is wrapped in (see [`base_document`]).
+pub const PREVIEW_GROUP: LayerId = LayerId(u64::MAX - 78);
 
 /// Tag of the preview keys handed to the canvas (`canvas::display_doc`).
 const TAG: u64 = 1 << 59;
@@ -61,8 +67,8 @@ pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
     }
     let Some(l) = doc.layer(target) else { return Some("no target layer") };
     let LayerContent::Raster(s) = &l.content else { return Some("not a pixel layer") };
-    if l.clipped {
-        return Some("the target is clipped");
+    if l.clipped && !wrappable(l) {
+        return Some("the target is clipped and has effects or blending options");
     }
     if photocraft_compose::blend_if_active(l, doc.mode) {
         return Some(tl!("Blend If"));
@@ -72,6 +78,32 @@ pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
         return Some("untouched area is visible");
     }
     None
+}
+
+/// Whether a clipped `layer` composites the same wrapped in a group (see [`base_document`]): no
+/// layer effects (they would move to the group), Advanced Blending or channel restrictions.
+fn wrappable(layer: &Layer) -> bool {
+    !photocraft_compose::effects::has_effects(layer) && layer.advanced.is_default() && layer.excluded_channels == 0
+}
+
+/// Replaces `target` in `layers` (searched recursively) by a group holding it and `preview`
+/// clipped to it. The group takes the target's place, clipping, visibility, blend mode and
+/// opacity; inside it the target composites plainly, so the group's content is the target's
+/// pixels with the adjustment applied, and the group then blends as the target did.
+fn wrap(layers: &mut [Layer], target: LayerId, preview: &Layer) -> bool {
+    if let Some(slot) = layers.iter_mut().find(|l| l.id == target) {
+        let mut inner = slot.clone();
+        let mut group = Layer::group(tl!("Adjustment Preview"), Vec::new());
+        group.id = PREVIEW_GROUP;
+        (group.clipped, group.visible, group.blend, group.opacity) = (inner.clipped, inner.visible, inner.blend, inner.opacity * inner.fill_opacity);
+        (inner.clipped, inner.visible, inner.blend, inner.opacity, inner.fill_opacity) = (false, true, photocraft_color::BlendMode::Normal, 1.0, 1.0);
+        if let Some(children) = group.children_mut() {
+            children.extend([inner, preview.clone()]);
+        }
+        *slot = group;
+        return true;
+    }
+    layers.iter_mut().filter_map(Layer::children_mut).any(|c| wrap(c, target, preview))
 }
 
 /// Whether `adj` maps gray to gray. Others make colour in a grayscale document, which the command
@@ -104,7 +136,13 @@ pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String
         l.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0 });
     }
     let mut out = doc.clone();
-    out.insert_above(Some(target), l);
+    if doc.layer(target).is_some_and(|t| t.clipped) {
+        if !wrap(&mut out.layers, target, &l) {
+            return Err("no target layer".into());
+        }
+    } else {
+        out.insert_above(Some(target), l);
+    }
     Ok(out)
 }
 

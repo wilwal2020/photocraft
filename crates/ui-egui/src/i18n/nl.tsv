@@ -4567,3 +4567,56 @@ curves	Smooth	Vloeiend maken
 	How softly the layer mask's edge fades into the original	Hoe zacht de rand van het laagmasker overgaat in het origineel
 	Creative shows everything Nano Banana drew: these don't apply.	Creatief toont alles wat Nano Banana tekende: deze instellingen gelden dan niet.
 	How Nano Banana's layer mask meets the original	Hoe het laagmasker van Nano Banana aansluit op het origineel
+# Camera Raw presets, Black & White, Optics, Calibration (2026-10-25)
+	A preset needs a name	Een voorinstelling heeft een naam nodig
+	Adobe Color	Adobe Color
+	Adobe Monochrome	Adobe Monochrome
+	Applied preset {name}	Voorinstelling {name} toegepast
+	Applied preset {name} ({n} settings not supported)	Voorinstelling {name} toegepast ({n} instellingen niet ondersteund)
+	Auto white balance found nothing to measure in this image	Automatische witbalans vond niets om te meten in deze afbeelding
+	Check All	Alles selecteren
+	Check None	Niets selecteren
+	Choose at least one group of settings	Kies ten minste één groep instellingen
+	Click something light grey or white: that point is too dark or too bright to measure	Klik op iets lichtgrijs of wit: dat punt is te donker of te licht om te meten
+	Copy to My Presets	Kopiëren naar mijn voorinstellingen
+	Create Preset	Voorinstelling maken
+	Create Preset…	Voorinstelling maken…
+	Curve region splits	Grenzen van de curvegebieden
+	Existing groups	Bestaande groepen
+	How much of the saturation a contrasty curve adds is kept	Hoeveel van de verzadiging die een contrastrijke curve toevoegt behouden blijft
+	Lens Vignetting	Lensvignettering
+	Looking for presets…	Voorinstellingen zoeken…
+	My Presets	Mijn voorinstellingen
+	No presets match.	Geen voorinstelling komt overeen.
+	No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.	Nog geen voorinstellingen. Maak er een met +, of zet Camera Raw-voorinstellingen (.xmp) in de map met voorinstellingen van PhotoCraft.
+	Photoshop	Photoshop
+	Positive values straighten barrel distortion, negative values pincushion	Positieve waarden corrigeren tonvervorming, negatieve kussenvervorming
+	Presets can't be saved here	Voorinstellingen kunnen hier niet worden opgeslagen
+	Presets menu	Menu Voorinstellingen
+	Rename Preset	Naam van voorinstelling wijzigen
+	Saved preset {name}	Voorinstelling {name} opgeslagen
+	Search presets	Voorinstellingen zoeken
+	Set the Light sliders from the image's tones	De schuifregelaars voor Licht instellen op de tonen van de afbeelding
+	Show Adobe's Presets	Voorinstellingen van Adobe tonen
+	Update with Current Settings	Bijwerken met huidige instellingen
+	User Presets	Gebruikersvoorinstellingen
+	White Balance Tool (I): click something that should be neutral grey	Gereedschap Witbalans (I): klik op iets dat neutraal grijs hoort te zijn
+cameraRaw	3-Way	3-weg
+cameraRaw	As Shot	Zoals opname
+cameraRaw	B&W Mix	Z&W-mix
+cameraRaw	Blue Primary	Primaire kleur blauw
+cameraRaw	Calibration	Kalibratie
+cameraRaw	Color Smoothness	Kleur vloeiendheid
+cameraRaw	Green Amount	Hoeveelheid groen
+cameraRaw	Green Hue	Kleurtoon groen
+cameraRaw	Green Primary	Primaire kleur groen
+cameraRaw	Luminance Contrast	Luminantie contrast
+cameraRaw	Optics	Optiek
+cameraRaw	Parametric	Parametrisch
+cameraRaw	Presence	Aanwezigheid
+cameraRaw	Purple Amount	Hoeveelheid paars
+cameraRaw	Purple Hue	Kleurtoon paars
+cameraRaw	Red Primary	Primaire kleur rood
+cameraRaw	Refine Saturation	Verzadiging verfijnen
+cameraRaw	Treatment & Profile	Behandeling en profiel
+cameraRaw	White Balance	Witbalans
