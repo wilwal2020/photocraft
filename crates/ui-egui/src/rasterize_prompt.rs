@@ -106,6 +106,16 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
         return false;
     }
     let Some((kind, layer)) = needed(app) else { return false };
+    // A fill layer with a mask: paint the mask instead of asking to rasterize (user request: a
+    // stroke with a Solid Color's colour square targeted gave the warning). The tool sees the
+    // press, now on the mask.
+    if kind == Kind::Fill && app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.mask.is_some()) {
+        app.ui.mask_target = true;
+        app.ui.second_mask_target = false;
+        app.ui.vector_mask_target = false;
+        app.sync_mask_targets();
+        return false;
+    }
     if !app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
         open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     }

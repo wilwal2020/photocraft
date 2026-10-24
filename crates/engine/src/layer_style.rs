@@ -52,21 +52,20 @@ fn color(p: &Value, k: &str, d: [f32; 3]) -> Color {
     let c = color_of(p, k).map_or(d, |c| c.to_rgb());
     Color::rgb(c[0], c[1], c[2])
 }
-/// The stops of a two-colour gradient, baked with Photoshop's interpolation when `method` names
-/// one (`classic`, `perceptual`, `linear`, `smooth`; `smoothness` 0..=100, default 100 as in
-/// Photoshop): the compositors interpolate stops linearly, so the curve becomes dense stops, as on
-/// PSD import. Photoshop 27.11's Classic Gradient Overlay eases (t + smoothstep(t)) / 2 between the
-/// colours: a straight ramp was up to 12 levels off.
-fn gradient_stops(p: &Value, from: Color, to: Color) -> Vec<(f32, Color)> {
-    let stops = vec![(0.0, from), (1.0, to)];
-    match p.get("method").and_then(Value::as_str).and_then(photocraft_io::GradientMethod::from_name) {
-        Some(m) => photocraft_io::bake_gradient(stops, &[0.5], (f(p, "smoothness", 100.0) / 100.0).clamp(0.0, 1.0), m),
-        None => stops,
+/// A gradient's blend when `method` names one (`classic`, `perceptual`, `linear`, `smooth`;
+/// `smoothness` 0..=100, default 100 as in Photoshop), else `base`. The renderers follow
+/// Photoshop's curve and the stops stay as they are (Photoshop 27.11's Classic Gradient Overlay
+/// eases (t + smoothstep(t)) / 2 between the colours: a straight ramp was up to 12 levels off).
+fn blend_param(p: &Value, base: photocraft_doc::effects::GradientBlend) -> photocraft_doc::effects::GradientBlend {
+    match p.get("method").and_then(Value::as_str).and_then(photocraft_doc::effects::GradientMethod::from_name) {
+        Some(method) => photocraft_doc::effects::GradientBlend { method, smoothness: (f(p, "smoothness", 100.0) / 100.0).clamp(0.0, 1.0) },
+        None => base,
     }
 }
 fn gradient(p: &Value) -> Gradient {
     Gradient {
-        stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
+        stops: vec![(0.0, color(p, "from", [0.0; 3])), (1.0, color(p, "to", [1.0; 3]))],
+        blend: blend_param(p, Default::default()),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
         scale: (f(p, "scale", 100.0) / 100.0).clamp(0.1, 1.5),
@@ -571,13 +570,8 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
 /// Edits an existing gradient in place: only the end colours and geometry.
 /// Intermediate stops, opacity stops, alignment and offset survive a round trip.
 fn overlay_gradient(g: &mut Gradient, p: &Value) {
-    // A method rebuilds the gradient from its end colours (the stops between are the old curve).
-    if p.get("method").and_then(Value::as_str).is_some_and(|m| photocraft_io::GradientMethod::from_name(m).is_some()) {
-        let ends = (g.stops.first().map(|s| s.1), g.stops.last().map(|s| s.1));
-        let from = color_of(p, "from").or(ends.0).unwrap_or(Color::BLACK);
-        let to = color_of(p, "to").or(ends.1).unwrap_or(Color::WHITE);
-        g.stops = gradient_stops(p, from, to);
-    }
+    // A method changes how the stops blend; the stops stay.
+    g.blend = blend_param(p, g.blend);
     if let Some(c) = color_of(p, "from")
         && let Some(first) = g.stops.first_mut()
     {
@@ -1581,17 +1575,20 @@ mod tests {
         let mut s = session();
         s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "method": "classic"})).unwrap();
         let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+        // The overlay keeps its two stops; what renders follows the method.
+        assert_eq!(gradient.stops.len(), 2);
+        let stops = gradient.render_stops();
         let at = |t: f32| {
-            let w = gradient.stops.windows(2).find(|w| t >= w[0].0 && t <= w[1].0).unwrap();
+            let w = stops.windows(2).find(|w| t >= w[0].0 && t <= w[1].0).unwrap();
             let u = (t - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
             w[0].1.to_rgb()[0] + (w[1].1.to_rgb()[0] - w[0].1.to_rgb()[0]) * u
         };
         assert!((at(1.0 / 16.0) - 0.037).abs() < 0.004, "{}", at(1.0 / 16.0));
         assert!((at(0.5) - 0.5).abs() < 0.004, "{}", at(0.5));
-        // Without a method the two stops stay as they are.
+        // Without a method the two stops blend plainly; with one they stay two stops too.
         s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "add": true})).unwrap();
-        let plain = effects(&s).iter().filter(|e| matches!(e, Effect::GradientOverlay { gradient, .. } if gradient.stops.len() == 2)).count();
-        assert_eq!(plain, 1, "the added overlay keeps its two stops");
+        let plain = effects(&s).iter().filter(|e| matches!(e, Effect::GradientOverlay { gradient, .. } if gradient.stops.len() == 2 && gradient.blend.is_plain())).count();
+        assert_eq!(plain, 1, "the added overlay blends plainly");
     }
 
     #[test]

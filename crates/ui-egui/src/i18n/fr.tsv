@@ -4835,3 +4835,11 @@ shape	Appearance	Apparence
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Étendre par IA
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Prolonger l’image dans la sélection avec Nano Banana, au-delà du bord de la case
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Exporter le timelapse de ce document
+	Export timelapse	Exporter le timelapse
+	Nothing recorded for this document yet.	Rien n’a encore été enregistré pour ce document.
+	Paused: click to resume recording	En pause : cliquez pour reprendre l’enregistrement
+	Recording: click to pause	Enregistrement : cliquez pour mettre en pause
+	Start recording a timelapse	Démarrer l’enregistrement d’un timelapse
+	Timelapse recording	Enregistrement du timelapse

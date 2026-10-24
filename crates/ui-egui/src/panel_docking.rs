@@ -441,7 +441,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
         style.text = t.text;
         style.inactive_text = t.text_dim;
         style.border = egui::Stroke::new(1.0, t.card_border);
-        style.accent = t.accent;
+        // The accent marks dividers, drop targets and a focused tab. Hovering a divider painted it
+        // blue (user request: only while it is dragged), so the accent shows only while something
+        // is being dragged (a divider, a panel) or keyboard focus is somewhere.
+        let busy = ui.ctx().dragged_id().is_some() || ui.ctx().memory(|m| m.focused().is_some());
+        style.accent = if busy { t.accent } else { egui::Color32::TRANSPARENT };
         style.float_label = tl!("Float Panel").to_string();
         style.close_label = tl!("Close Panel").to_string();
         style.move_label = tl!("Group with").to_string();

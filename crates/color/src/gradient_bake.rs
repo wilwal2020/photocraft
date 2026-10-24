@@ -12,11 +12,13 @@
 //! pairs: the same curve for each pair, and Smoothness doesn't change it). The curve fits no simple
 //! formula, so it is kept as the measured table [`SMOOTH_EASE`].
 
-use photocraft_color::{Color, ColorMode};
+use crate::{Color, ColorMode};
 
 /// Photoshop's gradient interpolation methods.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Method {
+    #[default]
     Classic,
     Perceptual,
     Linear,
@@ -34,7 +36,25 @@ impl Method {
             _ => None,
         }
     }
-    pub(crate) fn from_code(code: Option<&[u8]>) -> Method {
+    /// Its name in commands (`classic`, `perceptual`, `linear`, `smooth`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Method::Classic => "classic",
+            Method::Perceptual => "perceptual",
+            Method::Linear => "linear",
+            Method::Smooth => "smooth",
+        }
+    }
+    /// Photoshop's `gradientsInterpolationMethod` code for it.
+    pub fn code(self) -> &'static [u8; 4] {
+        match self {
+            Method::Classic => b"Gcls",
+            Method::Perceptual => b"Perc",
+            Method::Linear => b"Lnr ",
+            Method::Smooth => b"Smoo",
+        }
+    }
+    pub fn from_code(code: Option<&[u8]>) -> Method {
         match code {
             Some(b"Perc") => Method::Perceptual,
             Some(b"Lnr ") => Method::Linear,

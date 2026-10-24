@@ -1251,6 +1251,132 @@ fn settings_view(ui: &mut Ui, t: &Tokens, settings: &Settings, ask: &mut Option<
     });
 }
 
+// ---- the title bar's quick buttons -----------------------------------------------------------
+
+/// The title bar's timelapse buttons, beside the appearance button (user request), for the active
+/// document: Record (idle, recording or paused; a click starts, pauses or resumes, as the panel's
+/// big button does) and Export (a small box under it with the length, the estimate and Export,
+/// as the panel's export box). Added to a right-to-left row: Export first, then Record left of it.
+pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let status = app.session.timelapse_status();
+    if status.get("available").and_then(Value::as_bool) == Some(false) {
+        return;
+    }
+    let has_doc = app.session.active().is_some();
+    let rec = status.get("recording").filter(|v| !v.is_null()).cloned();
+    let flag = |k: &str| rec.as_ref().and_then(|r| r.get(k)).and_then(Value::as_bool).unwrap_or(false);
+    let frames = rec.as_ref().and_then(|r| r.get("frames")).and_then(Value::as_u64).unwrap_or(0);
+    let (recording, paused) = (flag("recording"), rec.is_some() && !flag("recording"));
+    let mut ask: Option<Ask> = None;
+
+    // Export, with its box.
+    let job = app.session.jobs().into_iter().find(|j| j.command == tc::EXPORT && j.state == "running").map(|j| (j.id, j.progress));
+    let export = crate::icons::button(ui, "play", 28.0, false, tl!("Export timelapse"));
+    let export = export.on_hover_text(tl!("Export the timelapse of this document"));
+    let settings = app.session.timelapse_settings();
+    let estimate = estimate(app, &settings, &settings.export);
+    let doc = app.session.active().map(|d| d.doc.name.clone()).unwrap_or_default();
+    let mut advanced = false;
+    egui::Popup::menu(&export).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_width(230.0);
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        ui.label(heading(&t, tl!("Export timelapse")));
+        if !has_doc {
+            desc(ui, &t, tl!("Open a document to record it."));
+            return;
+        }
+        desc(ui, &t, &doc);
+        if frames == 0 {
+            desc(ui, &t, tl!("Nothing recorded for this document yet."));
+            return;
+        }
+        let mut o = settings.export.clone();
+        let mut len = o.length_sec.map(|v| v.round() as u32);
+        if labelled_dropdown(ui, &t, "timelapse-length-title", tl!("Length"), &mut len, &LENGTHS) {
+            o.length_sec = len.map(f64::from);
+            ask = Some(Ask::Settings(json!({"export": {"lengthSec": len.map_or(json!("auto"), |v| json!(v))}})));
+        }
+        if let Some((secs, frames, ..)) = estimate {
+            let line = crate::i18n::fmt(tl!("≈ {seconds} video from {frames}."), &[("seconds", &seconds_text(secs)), ("frames", &frames_text(frames as u64))]);
+            desc(ui, &t, &line);
+        }
+        if let Some((id, progress)) = job {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());
+            ui.painter().rect_filled(rect, 3.0, t.field);
+            let mut bar = rect;
+            bar.set_width(rect.width() * progress.clamp(0.0, 1.0));
+            ui.painter().rect_filled(bar, 3.0, t.accent);
+            if button(ui, &t, tl!("Cancel export"), Look::Cancel, Icon::None, None, 26.0, true).clicked() {
+                ask = Some(Ask::CancelJob(id));
+            }
+            return;
+        }
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 6.0) / 2.0;
+            if button(ui, &t, tl!("Advanced settings"), Look::Plain, Icon::None, Some(w), 28.0, true).clicked() {
+                advanced = true;
+            }
+            if button(ui, &t, tl!("Export video"), Look::Primary, Icon::None, Some(w), 28.0, estimate.is_some()).clicked() {
+                ask = Some(Ask::Export(o.clone()));
+                egui::Popup::close_all(ui.ctx());
+            }
+        });
+    });
+    if advanced {
+        egui::Popup::close_all(ui.ctx());
+        show_panel(app);
+        app.timelapse.view = View::Export;
+    }
+
+    // Record / Pause / Resume.
+    let tip = if !has_doc {
+        tl!("Open a document to record it.")
+    } else if recording {
+        tl!("Recording: click to pause")
+    } else if paused {
+        tl!("Paused: click to resume recording")
+    } else {
+        tl!("Start recording a timelapse")
+    };
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), if has_doc { Sense::click() } else { Sense::hover() });
+    let resp = resp.on_hover_text(tip);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, has_doc, tl!("Timelapse recording")));
+    crate::icons::button_chrome(ui, rect, recording, has_doc && resp.hovered());
+    let c = rect.center();
+    let red = Color32::from_rgb(232, 64, 64);
+    let p = ui.painter();
+    if !has_doc {
+        p.circle_stroke(c, 6.0, Stroke::new(1.5, t.text_faint));
+    } else if recording {
+        // Recording: a solid red dot that breathes.
+        let time = ui.input(|i| i.time);
+        let a = 0.75 + 0.25 * (time * 3.0).sin() as f32;
+        p.circle_filled(c, 6.5, red.gamma_multiply(a));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    } else if paused {
+        // Paused: two amber bars.
+        for dx in [-3.0, 3.0] {
+            p.rect_filled(Rect::from_center_size(c + vec2(dx, 0.0), vec2(3.0, 11.0)), 1.0, t.warning);
+        }
+    } else {
+        // Not recording: a red ring around a small dot.
+        p.circle_stroke(c, 7.0, Stroke::new(1.5, red));
+        p.circle_filled(c, 3.5, red);
+    }
+    apply(app, ask);
+    // Through the menu command, so the first recording asks for the recordings folder.
+    if resp.clicked() {
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, if recording { tc::PAUSE } else { tc::RECORD }, json!({}))
+            && e != crate::file_dialog::CANCELLED
+        {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
 fn apply(app: &mut PhotocraftApp, ask: Option<Ask>) {
     let r = match ask {
         None => return,
@@ -1368,6 +1494,45 @@ mod tests {
         assert_eq!(st.ui.status, "Frames deleted.");
         assert!(st.session.timelapse.track(st.session.active().unwrap().doc.id).unwrap().rec.meta.frames.is_empty());
         assert!(h.query_by_label("Delete folder").is_some(), "now the recording itself can go");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// User request: quick timelapse buttons beside the appearance button. Record starts, pauses
+    /// and resumes the active document's recording and shows which; Export opens a small box with
+    /// the length and Export for this document.
+    #[test]
+    fn the_title_bar_records_pauses_and_opens_the_export_box() {
+        let dir = std::env::temp_dir().join(format!("photocraft-timelapse-ui-title-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        s.execute(tc::SETTINGS, json!({"folder": dir.to_string_lossy()})).unwrap();
+        let mut h = harness(s, View::Record);
+        h.state_mut().ui.panels.timelapse = false;
+        h.run_steps(4);
+        let recording = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            let st = h.state();
+            st.session.timelapse.track(st.session.active().unwrap().doc.id).map(|t| t.recording)
+        };
+        assert_eq!(recording(&h), None, "not recording");
+        h.get_by_label("Timelapse recording").click();
+        h.run_steps(3);
+        assert_eq!(recording(&h), Some(true), "started");
+        h.get_by_label("Timelapse recording").click();
+        h.run_steps(3);
+        assert_eq!(recording(&h), Some(false), "paused");
+        h.get_by_label("Timelapse recording").click();
+        h.run_steps(3);
+        assert_eq!(recording(&h), Some(true), "resumed");
+        // The export box: this document's export, once a frame is recorded.
+        h.state_mut().session.execute(tc::CAPTURE, json!({})).unwrap();
+        h.get_by_label("Export timelapse").click();
+        h.run_steps(3);
+        assert!(h.query_by_label("Length").is_some(), "the length to export");
+        assert!(h.query_by_label("Export video").is_some());
+        if let Ok(path) = std::env::var("PHOTOCRAFT_TIMELAPSE_TITLE_SCREENSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

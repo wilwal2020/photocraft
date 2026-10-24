@@ -1098,7 +1098,9 @@ struct PreparedGradient {
 
 impl PreparedGradient {
     fn new(g: &Gradient) -> Self {
-        Self { color: g.stops.iter().map(|(p, c)| (*p, rgb(c))).collect(), opacity: g.opacity_stops.iter().map(|(p, a)| (*p, [*a; 3])).collect() }
+        // Midpoints and the blend method become dense stops here, for this render only.
+        let opacity = g.blend.bake_opacity(g.opacity_stops.clone(), &g.opacity_midpoints);
+        Self { color: g.render_stops().iter().map(|(p, c)| (*p, rgb(c))).collect(), opacity: opacity.iter().map(|(p, a)| (*p, [*a; 3])).collect() }
     }
 
     fn sample(&self, t: f32) -> [f32; 4] {

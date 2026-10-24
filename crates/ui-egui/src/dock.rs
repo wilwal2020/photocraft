@@ -699,6 +699,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             let sresp = ui.interact(gap, ui.id().with(("dock-splitter", g.key())), Sense::drag());
             if sresp.hovered() || sresp.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+            // The line only while dragged (user request: hovering showed it too).
+            if sresp.dragged() {
                 ui.painter().line_segment([gap.left_center(), gap.right_center()], Stroke::new(2.0, t.accent.gamma_multiply(0.7)));
             }
             if sresp.dragged() {

@@ -4863,3 +4863,11 @@ shape	Appearance	Izgled
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	AI proširenje
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Nastavi sliku u izabrano pomoću Nano Banana, preko ivice panela
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Izvezi timelapse ovog dokumenta
+	Export timelapse	Izvezi timelapse
+	Nothing recorded for this document yet.	Za ovaj dokument još ništa nije snimljeno.
+	Paused: click to resume recording	Pauzirano: kliknite da nastavite snimanje
+	Recording: click to pause	Snima se: kliknite za pauzu
+	Start recording a timelapse	Pokreni snimanje timelapsea
+	Timelapse recording	Snimanje timelapsea

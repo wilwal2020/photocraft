@@ -277,3 +277,43 @@ fn the_wand_closes_gaps_and_drags_on_like_the_fill() {
     assert!(sel(&app, 20, 20) > 0.5 && sel(&app, 1, 1) > 0.5, "the drag added the outside");
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
 }
+
+/// User report: with a layer mask shown on its own (⌥-click), the fill still sampled the other
+/// layers with All Layers on. In that view the Fill tool and the Paint Bucket see the mask, as on
+/// screen: a click in an all-white mask fills all of it, past the lines of the layer below.
+#[test]
+fn with_the_mask_shown_alone_the_fill_sees_the_mask() {
+    for tool in [Tool::Fill, Tool::PaintBucket] {
+        let (mut app, colour) = inked();
+        // Close the box's gap, so sampling the lines would stop the fill at them.
+        let lines = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == "Lines").map(|(_, _, l)| l.id).unwrap();
+        app.session
+            .edit("close", |doc, _| {
+                doc.layer_mut(lines).unwrap().surface_mut().unwrap().fill_rect(Rect::new(18, 5, 21, 6), &[0.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.ui.mask_target = true;
+        app.sync_mask_targets();
+        app.run(photocraft_engine::mask_view_cmds::ID, json!({"layer": colour.0})).unwrap();
+        assert!(app.paste_goes_to_mask(), "the mask is shown alone");
+        app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+        app.ui.tool = tool;
+        for sub in [SubTool::Click, SubTool::Enclose, SubTool::Unfilled] {
+            app.ui.tool_options.fill_tool.of_mut(sub).reference = "all".into();
+        }
+        app.ui.tool_options.sample_all.paint_bucket = true;
+        if tool == Tool::Fill {
+            assert_eq!(params(&app)["reference"], json!("layer"), "the mask, not all layers");
+        }
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, egui::Modifiers::NONE);
+        let st = app.session.active().unwrap();
+        let mask = st.doc.layer(colour).unwrap().mask.as_ref().unwrap();
+        for (x, y) in [(20, 20), (2, 2), (38, 38)] {
+            assert!(mask.value(x, y) < 0.01, "{tool:?}: ({x}, {y}) filled inside and outside the lines: {}", mask.value(x, y));
+        }
+    }
+}
+

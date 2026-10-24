@@ -113,6 +113,11 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// Whether `mode` is one of the dialog's Selection Preview modes.
+pub(crate) fn is_preview(mode: &str) -> bool {
+    PREVIEWS.iter().any(|(id, _)| *id == mode)
+}
+
 /// The Selection Preview the dialog last had (a known mode, else None).
 fn remembered_preview(app: &PhotocraftApp) -> &'static str {
     PREVIEWS.iter().map(|(id, _)| *id).find(|id| *id == app.ui.color_range.selection_preview).unwrap_or("none")

@@ -17,7 +17,8 @@ fn app_with(kind: Kind) -> PhotocraftApp {
             app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
             app.run("layer.smartObjects.convertToSmartObject", json!({})).map(|_| ())
         }
-        Kind::Fill => app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).map(|_| ()),
+        // Without a mask: a fill layer with one paints the mask instead (see below).
+        Kind::Fill => app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).and_then(|_| app.run("layer.layerMask.delete", json!({}))).map(|_| ()),
     }
     .unwrap();
     // A new fill layer targets its mask (Photoshop); painting its content means targeting the
@@ -402,3 +403,27 @@ fn vanishing_point_offers_only_rasterize() {
     assert_eq!(active_content(h.state()), "Pixel");
     assert!(h.state().distort.vanishing.is_some(), "Vanishing Point opens");
 }
+
+/// User request: a stroke with a Solid Color's colour square targeted gave the rasterize warning.
+/// A fill layer with a mask paints its mask instead, with no prompt; the colour stays a fill.
+#[test]
+fn painting_a_fill_layer_with_a_mask_paints_the_mask() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 120, "height": 80})).unwrap();
+    app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
+    // The mask's own colours (targeting a mask brings back its pair): black to paint with.
+    app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+    app.ui.mask_target = false;
+    app.sync_mask_targets();
+    app.ui.tool = Tool::Brush;
+    let before = past(&app);
+    click(&mut app, 30.0, 20.0);
+    assert!(prompt(&app).is_none(), "no rasterize prompt");
+    assert!(app.ui.mask_target, "the mask is targeted");
+    assert_eq!(active_content(&app), "Fill");
+    assert!(past(&app) > before, "the stroke painted");
+    let st = app.session.active().unwrap();
+    let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
+    assert!(mask.value(30, 20) < 0.5, "black painted into the mask: {}", mask.value(30, 20));
+}
+

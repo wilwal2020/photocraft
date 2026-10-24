@@ -1424,11 +1424,12 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
             let scope = if selected_adjustments { "selected" } else { "all" };
             dialog(app, json!({"path": format!("{dir}/{stem}.cube"), "size": 33, "title": stem, "scope": scope}), json!({"scope": ["all", "selected"]}))
         }
-        // Generative Fill: what should be there (empty: the model's guess) and the model. Nano
-        // Banana (online, not on the web) gets the prompt as typed.
+        // Generative Fill: what should be there (empty: the model's guess) and the model, the one
+        // last used (user report: it wasn't remembered). Nano Banana (online, not on the web) gets
+        // the prompt as typed.
         "edit.generativeFill" => {
-            let models = if cfg!(target_arch = "wasm32") { json!(["diffusion", "lama"]) } else { json!(["diffusion", "lama", "nanoBanana"]) };
-            dialog(app, json!({"prompt": "", "model": "diffusion"}), json!({"model": models}))
+            let model = crate::dialog_memory::generative_model(app);
+            dialog(app, json!({"prompt": "", "model": model}), json!({"model": crate::dialog_memory::generative_models()}))
         }
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app)}))),
         // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).

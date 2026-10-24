@@ -4730,3 +4730,11 @@ layerLabel	No Color	Sem cor
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Expandir com IA
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Continuar a imagem na seleção com o Nano Banana, além da borda do quadro
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Exportar o timelapse deste documento
+	Export timelapse	Exportar timelapse
+	Nothing recorded for this document yet.	Nada gravado para este documento ainda.
+	Paused: click to resume recording	Pausado: clique para retomar a gravação
+	Recording: click to pause	Gravando: clique para pausar
+	Start recording a timelapse	Começar a gravar um timelapse
+	Timelapse recording	Gravação de timelapse

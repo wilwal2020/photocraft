@@ -4551,3 +4551,11 @@ curves	Smooth	Vloeiend maken
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	AI-uitbreiden
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Het beeld met Nano Banana voortzetten in de selectie, voorbij de paneelrand
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	De timelapse van dit document exporteren
+	Export timelapse	Timelapse exporteren
+	Nothing recorded for this document yet.	Voor dit document is nog niets opgenomen.
+	Paused: click to resume recording	Gepauzeerd: klik om de opname te hervatten
+	Recording: click to pause	Opname loopt: klik om te pauzeren
+	Start recording a timelapse	Een timelapse-opname starten
+	Timelapse recording	Timelapse-opname

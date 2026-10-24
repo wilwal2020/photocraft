@@ -36,12 +36,16 @@ impl Ramp {
 
 impl<const N: usize> Ramp<N> {
     fn with_colors(f: &Fill, convert: impl Fn(photocraft_doc::Color) -> [f32; N]) -> Option<Self> {
-        let Fill::Gradient { stops, opacity_stops, midpoints, .. } = f else { return None };
+        let Fill::Gradient { stops, opacity_stops, midpoints, blend, opacity_midpoints, .. } = f else { return None };
+        // Photoshop's method and Smoothness become dense stops (midpoints folded in), for this
+        // render only: the layer keeps its own stops.
+        let (stops, mids) = if blend.is_plain() { (std::borrow::Cow::Borrowed(stops), midpoints.clone()) } else { (std::borrow::Cow::Owned(blend.bake(stops.clone(), midpoints)), Vec::new()) };
         let mut color: Vec<_> = stops.iter().map(|(p, c)| (*p, convert(*c))).collect();
         color.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut opacity = opacity_stops.clone();
         opacity.sort_by(|a, b| a.0.total_cmp(&b.0));
-        Some(Ramp { color, mids: midpoints.clone(), opacity })
+        let opacity = blend.bake_opacity(opacity, opacity_midpoints);
+        Some(Ramp { color, mids, opacity })
     }
 
     /// Colour and alpha at `t` (`0..=1`).
@@ -315,6 +319,8 @@ mod tests {
             offset: (0.0, 0.0),
             dither: false,
             align: true,
+            blend: Default::default(),
+            opacity_midpoints: Vec::new(),
         };
         let r = Ramp::new(&f).unwrap();
         // Unsorted stops are sorted; the midpoint puts 50 % gray at t = 0.25.

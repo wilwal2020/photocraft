@@ -254,11 +254,56 @@ fn zoom_with(ctx: &egui::Context, out: bool, bitmap: bool) -> CursorIcon {
     if out { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn }
 }
 
+/// A cursor bitmap wider than this (physical pixels) is only made once its shape holds still for
+/// [`SETTLE_S`]: zooming changes a brush cursor's size every frame, and making and handing the OS
+/// a 2048 px bitmap each frame made zooming lag once the brush outline neared the screen's size
+/// (user report). Until then its outline is painted, as for a tip too big for a bitmap.
+const SETTLE_SIDE: f32 = 512.0;
+const SETTLE_S: f64 = 0.15;
+
+/// A large shape waiting to hold still before it becomes a bitmap.
+#[derive(Clone)]
+struct Pending {
+    shape: Shape,
+    scale: f32,
+    since: f64,
+}
+
+/// Whether `shape` would be a large bitmap that has changed within [`SETTLE_S`] (it is painted
+/// instead this frame).
+fn still_changing(ctx: &egui::Context, shape: &Shape, scale: f32) -> bool {
+    let large = extent(shape).is_some_and(|e| (e + 1.5) * scale * 2.0 > SETTLE_SIDE);
+    let cached = ctx.data(|d| d.get_temp::<Cached>(egui::Id::new("photocraft-tool-cursor"))).is_some_and(|c| c.shape == *shape && c.scale == scale);
+    if !large || cached {
+        return false;
+    }
+    let id = egui::Id::new("photocraft-tool-cursor-pending");
+    let now = ctx.input(|i| i.time);
+    let pending = ctx.data(|d| d.get_temp::<Pending>(id));
+    if let Some(p) = pending.filter(|p| p.shape == *shape && p.scale == scale) {
+        if now - p.since >= SETTLE_S {
+            return false;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(SETTLE_S - (now - p.since)));
+        return true;
+    }
+    ctx.data_mut(|d| d.insert_temp(id, Pending { shape: shape.clone(), scale, since: now }));
+    ctx.request_repaint_after(std::time::Duration::from_secs_f64(SETTLE_S));
+    true
+}
+
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     // Where cursor images can't be uploaded (immediate viewports, the web), paint the shape.
     if native(ctx) {
         let scale = native_scale(ctx);
+        if still_changing(ctx, &shape, scale) {
+            paint(painter, at, &shape);
+            if let Some(image) = cached_image(ctx, &Shape::Crosshair { length: 6.0, gap: 2.0 }, scale) {
+                ctx.set_cursor_image(Some(image));
+            }
+            return CursorIcon::None;
+        }
         if let Some(image) = cached_image(ctx, &shape, scale) {
             ctx.set_cursor_image(Some(image));
             return CursorIcon::None;

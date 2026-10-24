@@ -361,6 +361,13 @@ pub enum Fill {
         /// "Align with layer": lay out in the layer's frame (its masks' bounds), else the canvas.
         #[serde(default = "effects::yes")]
         align: bool,
+        /// How the colours (and the opacity) blend between the stops (Photoshop's method and
+        /// Smoothness).
+        #[serde(default, skip_serializing_if = "effects::GradientBlend::is_plain")]
+        blend: effects::GradientBlend,
+        /// Opacity midpoints, one per segment between consecutive (sorted) opacity stops.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        opacity_midpoints: Vec<f32>,
     },
     /// A pattern from [`Document::patterns`] (looked up by `id`, then `name`).
     Pattern {
@@ -384,7 +391,20 @@ impl Fill {
     /// A gradient fill with the classic settings: opaque stops at their alpha, 50 % midpoints,
     /// centred, no dither, aligned with the layer.
     pub fn gradient(stops: Vec<(f32, Color)>, angle: f32, scale: f32, style: GradientStyle, reverse: bool) -> Fill {
-        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops: Vec::new(), midpoints: Vec::new(), offset: (0.0, 0.0), dither: false, align: true }
+        Fill::Gradient {
+            stops,
+            angle,
+            scale,
+            style,
+            reverse,
+            opacity_stops: Vec::new(),
+            midpoints: Vec::new(),
+            offset: (0.0, 0.0),
+            dither: false,
+            align: true,
+            blend: effects::GradientBlend::default(),
+            opacity_midpoints: Vec::new(),
+        }
     }
 
     /// This fill with its colours in `mode`'s model (see [`Color::in_mode`]): a fill layer's

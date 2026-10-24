@@ -1697,14 +1697,15 @@ mod tests {
         let id = st.active_layer.unwrap();
         let layer = st.doc.layer(id).unwrap();
         let Effect::GradientOverlay { gradient, .. } = &layer.effects.items[0] else { panic!() };
-        assert!(gradient.stops.len() > 2, "classic bakes intermediate stops");
+        assert_eq!(gradient.stops.len(), 2, "the stops stay; the method blends them");
+        assert!(!gradient.blend.is_plain());
         let f = initial_fields(layer, Some("gradientOverlay"), st.doc.global_light.angle);
         let params = &effects_of(&f)[0]["params"];
         assert_eq!(params["from"], json!("#ff0000"));
         assert_eq!(params["to"], json!("#0000ff"));
         apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
         let Effect::GradientOverlay { gradient, .. } = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0] else { panic!() };
-        assert!(gradient.stops.len() > 2);
+        assert!(!gradient.blend.is_plain(), "the method survives the dialog");
         assert_eq!(gradient.stops.first().unwrap().1, photocraft_color::Color::rgb(1.0, 0.0, 0.0));
         assert_eq!(gradient.stops.last().unwrap().1, photocraft_color::Color::rgb(0.0, 0.0, 1.0));
     }

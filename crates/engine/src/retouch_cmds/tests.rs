@@ -2527,6 +2527,28 @@ fn remove_selection_removes_what_is_selected_and_nothing_else() {
     assert_eq!(s.active().unwrap().history.past_len(), past + 1);
 }
 
+/// User report: AI Remove refused a layer without pixels even with Create a new layer on. On an
+/// adjustment layer (no pixels) the removal now works from what is visible, onto a new layer
+/// above it; without a new layer it still has nothing to change.
+#[test]
+fn remove_to_a_new_layer_works_from_a_layer_without_pixels() {
+    let mut s = square_session(8, "rgb");
+    let bg = rgba(&s, 10, 10);
+    s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+    let adj = s.active().unwrap().active_layer.unwrap();
+    s.execute("select.rect", json!({"x": 36, "y": 20, "width": 20, "height": 20})).unwrap();
+    assert!(s.execute("paint.remove", json!({"selection": true, "generative": "off"})).is_err(), "no pixels to change in place");
+    let r = s.execute("paint.remove", json!({"selection": true, "generative": "off", "newLayer": true})).unwrap();
+    let layer = photocraft_doc::LayerId(r["layer"].as_u64().unwrap_or_else(|| panic!("a new layer: {r}")));
+    let d = s.active().unwrap();
+    assert_ne!(layer, adj);
+    let ids: Vec<_> = d.doc.layers.iter().map(|l| l.id).collect();
+    assert_eq!(ids.iter().position(|id| *id == layer), ids.iter().position(|id| *id == adj).map(|i| i + 1), "right above the adjustment");
+    for (x, y) in [(46, 30), (40, 24)] {
+        assert!(near(rgba(&s, x, y), bg, 0.03), "({x}, {y}) removed: {:?}", rgba(&s, x, y));
+    }
+}
+
 #[test]
 fn nano_banana_without_a_key_says_so_or_uses_lama() {
     assert_eq!(remove::AiModel::parse(&json!({"model": "nanoBanana"}), "paint.remove").unwrap(), remove::AiModel::NanoBanana);

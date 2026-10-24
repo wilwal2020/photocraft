@@ -3810,3 +3810,11 @@ curves	Smooth	Glätten
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	KI-Erweitern
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Das Bild mit Nano Banana in die Auswahl fortsetzen, auch über den Panelrand hinaus
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Zeitraffer dieses Dokuments exportieren
+	Export timelapse	Zeitraffer exportieren
+	Nothing recorded for this document yet.	Für dieses Dokument wurde noch nichts aufgezeichnet.
+	Paused: click to resume recording	Pausiert: Klicken, um die Aufnahme fortzusetzen
+	Recording: click to pause	Aufnahme läuft: Klicken zum Pausieren
+	Start recording a timelapse	Zeitrafferaufnahme starten
+	Timelapse recording	Zeitrafferaufnahme

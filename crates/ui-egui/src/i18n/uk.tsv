@@ -4505,3 +4505,11 @@ curves	Smooth	Згладити
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Розширення ШІ
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Продовжити зображення у виділене за допомогою Nano Banana, за межу панелі
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Експортувати таймлапс цього документа
+	Export timelapse	Експорт таймлапсу
+	Nothing recorded for this document yet.	Для цього документа ще нічого не записано.
+	Paused: click to resume recording	Призупинено: клацніть, щоб продовжити запис
+	Recording: click to pause	Іде запис: клацніть, щоб призупинити
+	Start recording a timelapse	Почати запис таймлапсу
+	Timelapse recording	Запис таймлапсу

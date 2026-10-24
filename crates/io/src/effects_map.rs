@@ -12,7 +12,7 @@ use photocraft_doc::{
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 
 use crate::blocks::{
-    bool_of, color_from_desc, color_to_desc, enum_of, get_desc, gradient_desc, gradient_style, gradient_style_value, num, pattern_placement, pattern_ref,
+    bool_of, color_from_desc, color_to_desc, enum_of, get_desc, gradient_style, gradient_style_value, num, pattern_placement, pattern_ref,
     pattern_ref_desc, with_pattern_placement,
 };
 
@@ -144,7 +144,12 @@ fn common(d: &Descriptor, blend: BlendMode, opacity: f32) -> FxCommon {
 }
 
 fn gradient_from(d: &Descriptor) -> Gradient {
-    let (stops, opacity_stops) = get_desc(d, "Grad").map(|g| crate::blocks::gradient_stops_with(g, crate::blocks::gradient_method(d))).unwrap_or_default();
+    // The stops as they are, with their midpoints and Photoshop's blend, which the renderers
+    // follow for the colours and the opacity alike.
+    let method = crate::blocks::gradient_method(d);
+    let raw = get_desc(d, "Grad").map(|g| crate::blocks::gradient_stops_editable(g, method));
+    let (stops, midpoints, blend) = raw.map(|r| (r.stops, r.mids, r.blend)).unwrap_or_default();
+    let (opacity_stops, opacity_midpoints) = get_desc(d, "Grad").map(|g| crate::blocks::opacity_stops(g, method, &blend)).unwrap_or_default();
     let off = get_desc(d, "Ofst");
     Gradient {
         stops: if stops.is_empty() { Gradient::default().stops } else { stops },
@@ -155,6 +160,9 @@ fn gradient_from(d: &Descriptor) -> Gradient {
         reverse: bool_of(d, "Rvrs"),
         align: !matches!(d.get("Algn"), Some(Value::Boolean(false))),
         offset: off.map_or((0.0, 0.0), |o| (pct(o, "Hrzn", 0.0), pct(o, "Vrtc", 0.0))),
+        midpoints,
+        opacity_midpoints,
+        blend,
     }
 }
 
@@ -344,12 +352,13 @@ fn with_common(d: Descriptor, c: &FxCommon) -> Descriptor {
 
 fn gradient_keys(mut d: Descriptor, g: &Gradient) -> Descriptor {
     d = d
-        .with("Grad", Value::Descriptor(gradient_desc(&g.stops, &g.opacity_stops)))
+        .with("Grad", Value::Descriptor(crate::blocks::gradient_desc_smooth(&g.stops, &g.opacity_stops, &g.midpoints, &g.opacity_midpoints, g.blend.smooth())))
         .with("Angl", unit(b"#Ang", g.angle))
         .with("Type", gradient_style_value(g.style))
         .with("Rvrs", Value::Boolean(g.reverse))
         .with("Algn", Value::Boolean(g.align))
         .with("Scl ", unit(b"#Prc", g.scale * 100.0));
+    d = crate::blocks::with_gradient_method(d, &g.blend);
     d.with("Ofst", Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", unit(b"#Prc", g.offset.0 * 100.0)).with("Vrtc", unit(b"#Prc", g.offset.1 * 100.0))))
 }
 
@@ -887,7 +896,8 @@ mod tests {
     fn overlay_opacity(data: &[u8]) -> Vec<(f32, f32)> {
         let (_, fx) = parse_lfx2(data).unwrap();
         let Some(Effect::GradientOverlay { gradient, .. }) = fx.first() else { panic!("overlay: {fx:?}") };
-        gradient.opacity_stops.clone()
+        // What renders: the stored opacity with the gradient's blend applied.
+        gradient.blend.bake_opacity(gradient.opacity_stops.clone(), &gradient.opacity_midpoints)
     }
 
     fn opacity_at(o: &[(f32, f32)], t: f32) -> f32 {

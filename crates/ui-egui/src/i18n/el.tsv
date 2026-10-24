@@ -4492,3 +4492,11 @@ curves	Smooth	Εξομάλυνση
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Επέκταση με AI
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Συνέχιση της εικόνας στην επιλογή με το Nano Banana, πέρα από το περίγραμμα του καρέ
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Εξαγωγή του timelapse αυτού του εγγράφου
+	Export timelapse	Εξαγωγή timelapse
+	Nothing recorded for this document yet.	Δεν έχει καταγραφεί τίποτα για αυτό το έγγραφο ακόμα.
+	Paused: click to resume recording	Σε παύση: κάντε κλικ για συνέχιση της εγγραφής
+	Recording: click to pause	Εγγραφή: κάντε κλικ για παύση
+	Start recording a timelapse	Έναρξη εγγραφής timelapse
+	Timelapse recording	Εγγραφή timelapse

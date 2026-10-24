@@ -73,6 +73,52 @@ pub fn default_for(kind: &str, mode: ColorMode) -> Result<Adjustment> {
     from_params(kind, &json!({}), None, mode)
 }
 
+/// A gradient's `"method"` (`classic`, `perceptual`, `linear`, `smooth`) and `"smoothness"`
+/// (0..=100 %), Photoshop's interpolation, over `base` (what the gradient had).
+pub(crate) fn gradient_blend(cmd: &str, p: &Value, base: photocraft_doc::effects::GradientBlend) -> Result<photocraft_doc::effects::GradientBlend> {
+    let mut b = base;
+    match p.get("method") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(m)) => {
+            b.method = photocraft_doc::effects::GradientMethod::from_name(m).ok_or_else(|| bad(cmd, format!("`method` is classic, perceptual, linear or smooth, not {m:?}")))?;
+        }
+        Some(v) => return Err(bad(cmd, format!("`method` is a string, not {v}"))),
+    }
+    match p.get("smoothness") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            let n = v.as_f64().filter(|n| n.is_finite()).ok_or_else(|| bad(cmd, format!("`smoothness` is a number (0..100), not {v}")))?;
+            b.smoothness = (n / 100.0).clamp(0.0, 1.0) as f32;
+        }
+    }
+    Ok(b)
+}
+
+/// A gradient's `"midpoints"`: one per segment between the sorted colour stops (0..=1 of the
+/// segment), else `base`.
+pub(crate) fn gradient_midpoints(cmd: &str, p: &Value, base: Vec<f32>) -> Result<Vec<f32>> {
+    match p.get("midpoints") {
+        None | Some(Value::Null) => Ok(base),
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(1024)
+            .map(|v| v.as_f64().filter(|n| n.is_finite()).map(|n| n.clamp(0.0, 1.0) as f32).ok_or_else(|| bad(cmd, format!("`midpoints` are numbers (0..1), not {v}"))))
+            .collect(),
+        Some(v) => Err(bad(cmd, format!("`midpoints` is a list of numbers, not {v}"))),
+    }
+}
+
+/// `v` with a gradient's midpoints and blend, when they aren't the plain defaults.
+pub(crate) fn blend_json(v: &mut Value, midpoints: &[f32], blend: &photocraft_doc::effects::GradientBlend) {
+    if !blend.is_plain() {
+        v["method"] = json!(blend.method.name());
+        v["smoothness"] = json!((blend.smooth() * 100.0).round());
+    }
+    if midpoints.iter().any(|m| (m - 0.5).abs() > 1e-3) {
+        v["midpoints"] = json!(midpoints);
+    }
+}
+
 /// Reads the adjustment of `kind` from `p` over `base` (or the kind's defaults when `base` is
 /// None or of another kind). `mode` picks the Levels/Curves channel space when neither the params
 /// nor the base name one.
@@ -197,15 +243,19 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             Adjustment::ChannelMixer { matrix, monochrome }
         }
         "gradientMap" => {
-            let (stops0, rev0, dither0) = match base {
-                Some(Adjustment::GradientMap { stops, reverse, dither }) => (stops.clone(), *reverse, *dither),
-                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false),
+            let (stops0, rev0, dither0, mids0, blend0) = match base {
+                Some(Adjustment::GradientMap { stops, reverse, dither, midpoints, blend }) => (stops.clone(), *reverse, *dither, midpoints.clone(), *blend),
+                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false, Vec::new(), Default::default()),
             };
+            let count0 = stops0.len();
             let stops = match p.get("stops") {
                 None | Some(Value::Null) => stops0,
                 Some(v) => gradient_stops(&cmd, v)?,
             };
-            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)? }
+            // A Photoshop gradient keeps its midpoints and blend while its stops are edited.
+            let midpoints = gradient_midpoints(&cmd, p, if stops.len() == count0 { mids0 } else { Vec::new() })?;
+            let blend = gradient_blend(&cmd, p, blend0)?;
+            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)?, midpoints, blend }
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
@@ -284,8 +334,10 @@ pub fn to_params(adj: &Adjustment) -> Value {
             }
             v
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
-            json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither})
+        Adjustment::GradientMap { stops, reverse, dither, midpoints, blend } => {
+            let mut v = json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither});
+            blend_json(&mut v, midpoints, blend);
+            v
         }
         Adjustment::SelectiveColor { relative, adjustments } => {
             let mut v = json!({"method": if *relative { "relative" } else { "absolute" }});

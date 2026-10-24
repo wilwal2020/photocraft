@@ -3426,3 +3426,11 @@ curves	Smooth	平滑
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	AI 擴展
 	Continue the picture into what is selected with Nano Banana, past a panel's border	用 Nano Banana 將畫面延續到所選區域（越過分格邊框）
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	匯出此文件的縮時錄影
+	Export timelapse	匯出縮時錄影
+	Nothing recorded for this document yet.	此文件尚未錄製任何內容。
+	Paused: click to resume recording	已暫停：按一下以繼續錄製
+	Recording: click to pause	正在錄製：按一下以暫停
+	Start recording a timelapse	開始錄製縮時錄影
+	Timelapse recording	縮時錄製

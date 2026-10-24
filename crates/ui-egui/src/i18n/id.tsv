@@ -3813,3 +3813,11 @@ curves	Smooth	Haluskan
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Perluas AI
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Lanjutkan gambar ke area yang dipilih dengan Nano Banana, melewati batas panel
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Ekspor timelapse dokumen ini
+	Export timelapse	Ekspor timelapse
+	Nothing recorded for this document yet.	Belum ada yang direkam untuk dokumen ini.
+	Paused: click to resume recording	Dijeda: klik untuk melanjutkan perekaman
+	Recording: click to pause	Merekam: klik untuk menjeda
+	Start recording a timelapse	Mulai merekam timelapse
+	Timelapse recording	Perekaman timelapse

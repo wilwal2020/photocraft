@@ -270,7 +270,7 @@ impl Paint {
             Fill::Solid(c) => Paint::Solid(rgba(c)),
             // No `..` here on purpose: a new gradient field must fail to compile until the
             // shape renderer honours it (the same sentinel the document/compositor pair uses).
-            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, .. } => {
                 let frame = if *align { bounds } else { canvas };
                 let mut stops: Vec<(f32, [f32; 4])> = stops.iter().map(|(p, c)| (*p, rgba(c))).collect();
                 stops.sort_by(|a, b| a.0.total_cmp(&b.0));

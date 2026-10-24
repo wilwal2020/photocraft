@@ -4412,3 +4412,11 @@ curves	Smooth	Wygładź
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Rozszerz AI
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Kontynuuj obraz w zaznaczeniu za pomocą Nano Banana, poza krawędź kadru
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Eksportuj timelapse tego dokumentu
+	Export timelapse	Eksportuj timelapse
+	Nothing recorded for this document yet.	Dla tego dokumentu nic jeszcze nie nagrano.
+	Paused: click to resume recording	Wstrzymano: kliknij, aby wznowić nagrywanie
+	Recording: click to pause	Nagrywanie: kliknij, aby wstrzymać
+	Start recording a timelapse	Rozpocznij nagrywanie timelapse
+	Timelapse recording	Nagrywanie timelapse

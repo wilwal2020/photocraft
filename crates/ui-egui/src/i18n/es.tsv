@@ -4753,3 +4753,11 @@ navigator	Zoom	Zoom
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Ampliar con IA
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Continuar la imagen en lo seleccionado con Nano Banana, más allá del borde de la viñeta
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Exportar el timelapse de este documento
+	Export timelapse	Exportar timelapse
+	Nothing recorded for this document yet.	Todavía no se ha grabado nada de este documento.
+	Paused: click to resume recording	En pausa: haz clic para reanudar la grabación
+	Recording: click to pause	Grabando: haz clic para pausar
+	Start recording a timelapse	Empezar a grabar un timelapse
+	Timelapse recording	Grabación de timelapse

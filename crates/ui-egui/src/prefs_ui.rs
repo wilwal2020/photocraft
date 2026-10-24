@@ -255,6 +255,7 @@ pub fn load(app: &mut PhotocraftApp) {
     sync_rulers(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
+    crate::dialog_memory::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
@@ -3594,6 +3595,7 @@ mod tests {
         app.ui.brushes_panel.tile = 150.0;
         app.ui.brushes_panel.show_tip = true;
         app.ui.brushes_panel.filter = "ink".into();
+        app.ui.brushes_panel.pinned = Some("Inking".into());
         crate::brush_panel::persist_panel(&mut app, &ctx);
         tick(&mut app, &ctx);
         assert_eq!(stored(&store)["brushesPanel"]["tile"], json!(150.0));
@@ -3604,16 +3606,19 @@ mod tests {
         assert_eq!(st.collapsed, vec!["General".to_string(), "jojos/old".to_string()]);
         assert!((st.tile - 150.0).abs() < 1e-6);
         assert!(st.show_tip && st.show_name && st.show_stroke);
+        // User report: the pinned group came back unpinned.
+        assert_eq!(st.pinned.as_deref(), Some("Inking"));
         // The search is per session.
         assert!(st.filter.is_empty());
         // A hand-edited file: the size is clamped, junk entries dropped, a tile never empty.
-        let bad = json!({"brushesPanel": {"collapsed": ["A", 3, null], "tile": 1e9, "showName": false, "showStroke": false, "showTip": false}}).to_string();
+        let bad = json!({"brushesPanel": {"collapsed": ["A", 3, null], "tile": 1e9, "showName": false, "showStroke": false, "showTip": false, "pinned": 7}}).to_string();
         let (mut app3, _) = app_with_saved(Some(bad));
         tick(&mut app3, &ctx);
         let st = &app3.ui.brushes_panel;
         assert_eq!(st.collapsed, vec!["A".to_string()]);
         assert_eq!(st.tile, *crate::brushes_tab::TILE_RANGE.end());
         assert!(st.show_name || st.show_stroke || st.show_tip);
+        assert!(st.pinned.is_none());
     }
 
     #[test]

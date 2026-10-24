@@ -486,11 +486,14 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
         s.edit("Change Gradient Fill", |doc, _| {
             let mode = doc.mode;
             if let Some(l) = doc.layer_mut(id)
-                && let LayerContent::Fill(Fill::Gradient { stops, opacity_stops, midpoints, .. }) = &mut l.content
+                && let LayerContent::Fill(Fill::Gradient { stops, opacity_stops, midpoints, opacity_midpoints, blend, .. }) = &mut l.content
             {
+                // The preset's own gradient: its stops, blending plainly.
                 *stops = stops_new.into_iter().map(|(t, c)| (t, c.in_mode(mode))).collect();
                 *opacity_stops = opacity_new;
                 midpoints.clear();
+                opacity_midpoints.clear();
+                *blend = Default::default();
             }
             Ok(())
         })?;

@@ -1089,6 +1089,9 @@ pub struct Preferences {
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.
     pub view_extras: Value,
+    /// Small dialog choices remembered across restarts: Select › Color Range's Selection Preview,
+    /// Edit › Generative Fill's model. JSON owned by the shell (`dialog_memory`).
+    pub dialog_choices: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.

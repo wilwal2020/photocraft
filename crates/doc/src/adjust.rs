@@ -274,6 +274,12 @@ pub enum Adjustment {
         /// Ordered dither of ±½ an 8-bit step to hide banding.
         #[serde(default)]
         dither: bool,
+        /// Colour midpoints, one per segment between consecutive stops (missing entries 0.5).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        midpoints: Vec<f32>,
+        /// How the colours blend between the stops (Photoshop's method and Smoothness).
+        #[serde(default, skip_serializing_if = "crate::effects::GradientBlend::is_plain")]
+        blend: crate::effects::GradientBlend,
     },
     /// Per range (reds, yellows, greens, cyans, blues, magentas, whites, neutrals, blacks) the
     /// cyan, magenta, yellow and black change in percent (-100..=100), as in Photoshop.
@@ -293,6 +299,16 @@ pub enum Adjustment {
         psd_key: String,
         raw: Vec<u8>,
     },
+}
+
+/// A Gradient Map's stops to render: as stored, or dense stops following its midpoints and
+/// blend (Photoshop's method and Smoothness).
+pub fn gradient_map_stops<'a>(stops: &'a [(f32, [f32; 3])], midpoints: &[f32], blend: &crate::effects::GradientBlend) -> std::borrow::Cow<'a, [(f32, [f32; 3])]> {
+    if blend.is_plain() && midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3) {
+        return std::borrow::Cow::Borrowed(stops);
+    }
+    let colors = stops.iter().map(|(t, c)| (*t, photocraft_color::Color::rgb(c[0], c[1], c[2]))).collect();
+    std::borrow::Cow::Owned(blend.bake(colors, midpoints).into_iter().map(|(t, c)| (t, c.to_rgb())).collect())
 }
 
 impl Adjustment {

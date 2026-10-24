@@ -284,8 +284,9 @@ fn be32(d: &[u8], at: usize) -> Option<u32> {
 /// `grdm` (Adobe spec, "Gradient settings"): version (1, or 3 with an interpolation method
 /// key), reverse, dither, [method], name, colour stops (location /4096, midpoint %, colour
 /// space + four u16 components, 2 bytes), transparency stops, then smoothness (/4096) among
-/// noise-gradient fields. Smoothness, midpoints and the method are baked into dense stops like
-/// gradient fills. Stops may be in any plain colour space Photoshop writes (RGB, HSB, CMYK, Lab,
+/// noise-gradient fields. The stops stay as they are, with their midpoints, Smoothness and method
+/// (user report: a 10-stop gradient came back as about 100), which the renderers follow; only
+/// Classic Lab stops are baked (they blend in L*a*b*). Stops may be in any plain colour space Photoshop writes (RGB, HSB, CMYK, Lab,
 /// Grayscale: a CMYK or Lab document stores them in its own space); they are converted to RGB
 /// through the colour-managed conversions (the document's CMYK profile when one is in scope).
 /// Noise gradients (no colour stops) and stops in other spaces (book colours) stay unsupported.
@@ -323,10 +324,18 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
     let mut order: Vec<usize> = (0..stops.len()).collect();
     order.sort_by(|a, b| stops[*a].0.total_cmp(&stops[*b].0));
     let mids: Vec<f32> = order.iter().skip(1).map(|i| mids[*i]).collect();
-    let baked = crate::gradient_bake::bake(stops, &mids, smooth, crate::gradient_bake::Method::from_code(method));
-    let mut stops: Vec<(f32, [f32; 3])> = baked.iter().map(|(t, c)| (*t, c.to_rgb())).collect();
-    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    Some(Adjustment::GradientMap { stops, reverse, dither })
+    let method = crate::gradient_bake::Method::from_code(method);
+    let lab = method == crate::gradient_bake::Method::Classic && stops.iter().all(|(_, c)| c.mode == photocraft_color::ColorMode::Lab);
+    if lab {
+        let baked = crate::gradient_bake::bake(stops, &mids, smooth, method);
+        let mut stops: Vec<(f32, [f32; 3])> = baked.iter().map(|(t, c)| (*t, c.to_rgb())).collect();
+        stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+        return Some(Adjustment::GradientMap { stops, reverse, dither, blend: Default::default(), midpoints: Vec::new() });
+    }
+    let stops: Vec<(f32, [f32; 3])> = order.iter().filter_map(|i| stops.get(*i)).map(|(t, c)| (*t, c.to_rgb())).collect();
+    let midpoints = if mids.iter().all(|m| (m - 0.5).abs() < 1e-3) { Vec::new() } else { mids };
+    let blend = photocraft_doc::effects::GradientBlend { method, smoothness: smooth.clamp(0.0, 1.0) };
+    Some(Adjustment::GradientMap { stops, reverse, dither, midpoints, blend })
 }
 
 /// Points an imported `grdm` block at `target` when only Reverse and/or Dither differ (the
@@ -334,7 +343,7 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
 /// (in whatever colour space it stored them), smoothness and method survive the save. `false`
 /// leaves `data` untouched.
 pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channels: Channels) -> bool {
-    let Adjustment::GradientMap { stops, reverse, dither } = target else { return false };
+    let Adjustment::GradientMap { stops, reverse, dither, .. } = target else { return false };
     let same_stops = matches!(parse(b"grdm", data, None, channels), Adjustment::GradientMap { stops: s, .. } if s == *stops);
     match (same_stops, data.get_mut(2..4)) {
         (true, Some(flags)) => {
@@ -354,7 +363,7 @@ pub(crate) fn is_unpadded_photocraft_gradient_map(data: &[u8]) -> bool {
         return false;
     }
     match parse_gradient_map(data) {
-        Some(Adjustment::GradientMap { stops, reverse, dither }) => {
+        Some(Adjustment::GradientMap { stops, reverse, dither, .. }) => {
             let padded = write_gradient_map(&stops, reverse, dither);
             padded.len() == data.len() + 2 && padded.starts_with(data)
         }
@@ -365,19 +374,33 @@ pub(crate) fn is_unpadded_photocraft_gradient_map(data: &[u8]) -> bool {
 /// `grdm` version 1 for [`Adjustment::GradientMap`] (Classic interpolation, Smoothness 0, so
 /// the stops are reproduced exactly).
 fn write_gradient_map(stops: &[(f32, [f32; 3])], reverse: bool, dither: bool) -> Vec<u8> {
+    write_gradient_map_with(stops, &[], &photocraft_doc::effects::GradientBlend::default(), reverse, dither)
+}
+
+/// `grdm` with the stops' midpoints and Smoothness, and the interpolation method (version 3,
+/// when it isn't Classic), as Photoshop wrote them.
+fn write_gradient_map_with(stops: &[(f32, [f32; 3])], mids: &[f32], blend: &photocraft_doc::effects::GradientBlend, reverse: bool, dither: bool) -> Vec<u8> {
     let mut v = Vec::new();
-    put16(&mut v, 1);
+    let method = blend.method != crate::gradient_bake::Method::Classic;
+    put16(&mut v, if method { 3 } else { 1 });
     v.push(u8::from(reverse));
     v.push(u8::from(dither));
+    if method {
+        v.extend_from_slice(blend.method.code());
+    }
+    let mut stops = stops.to_vec();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     let name: Vec<u16> = "Custom".encode_utf16().chain(std::iter::once(0)).collect();
     v.extend_from_slice(&(name.len() as u32).to_be_bytes());
     for u in name {
         put16(&mut v, u);
     }
     put16(&mut v, stops.len().min(usize::from(u16::MAX)) as u16);
-    for (t, c) in stops.iter().take(usize::from(u16::MAX)) {
+    for (k, (t, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
         v.extend_from_slice(&((t.clamp(0.0, 1.0) * 4096.0).round() as u32).to_be_bytes());
-        v.extend_from_slice(&50u32.to_be_bytes());
+        // Stop k's midpoint is for the segment after it.
+        let mid = mids.get(k).copied().filter(|m| m.is_finite()).unwrap_or(0.5).clamp(0.05, 0.95);
+        v.extend_from_slice(&((mid * 100.0).round() as u32).to_be_bytes());
         put16(&mut v, 0);
         for x in c {
             put16(&mut v, (x.clamp(0.0, 1.0) * 65535.0).round() as u16);
@@ -392,7 +415,7 @@ fn write_gradient_map(stops: &[(f32, [f32; 3])], reverse: bool, dither: bool) ->
         put16(&mut v, 255);
     }
     put16(&mut v, 2); // expansion count
-    put16(&mut v, 0); // smoothness
+    put16(&mut v, (blend.smooth() * 4096.0).round() as u16); // smoothness
     put16(&mut v, 32); // length
     put16(&mut v, 0); // mode
     v.extend_from_slice(&0u32.to_be_bytes()); // random seed
@@ -759,7 +782,7 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             v.extend_from_slice(&VersionedDescriptor::new(d).to_bytes());
             return vec![(*b"clrL", v)];
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, midpoints, blend } => {
             // Photoshop needs two stops; fewer are written as the gradient they render as
             // (none: black to white, i.e. the gray value itself; one: that colour throughout).
             let stops = match stops.as_slice() {
@@ -767,7 +790,7 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
                 [(_, c)] => vec![(0.0, *c), (1.0, *c)],
                 s => s.to_vec(),
             };
-            return vec![(*b"grdm", write_gradient_map(&stops, *reverse, *dither))];
+            return vec![(*b"grdm", write_gradient_map_with(&stops, midpoints, blend, *reverse, *dither))];
         }
         Adjustment::Vibrance { vibrance, saturation } => {
             let d = Descriptor::new("null")
@@ -860,7 +883,9 @@ mod tests {
             v
         };
         let at_t = |data: &[u8], t: f32| match parse(b"grdm", data, None, Channels::Rgb) {
-            Adjustment::GradientMap { stops, .. } => {
+            Adjustment::GradientMap { stops, midpoints, blend, .. } => {
+                // What renders: the stored stops with their midpoints and blend.
+                let stops = photocraft_doc::adjust::gradient_map_stops(&stops, &midpoints, &blend).into_owned();
                 let i = stops.windows(2).position(|w| w[0].0 <= t && t <= w[1].0).unwrap();
                 let (x, y) = (stops[i], stops[i + 1]);
                 let u = (t - x.0) / (y.0 - x.0).max(1e-6);
@@ -883,6 +908,19 @@ mod tests {
         assert!((0..3).any(|k| (a[k] - b[k]).abs() > 1e-3), "{a:?} {b:?}");
         // Noise gradients (no colour stops) stay unsupported.
         assert!(matches!(parse(b"grdm", &[0, 1, 0, 0, 0, 0, 0, 0, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
+        // User report: the stops stay as Photoshop made them (not ~100 baked ones), with the
+        // method and Smoothness, and save back as they came.
+        let Adjustment::GradientMap { stops, blend, .. } = parse(b"grdm", &v3(b"Perc"), None, Channels::Rgb) else { panic!() };
+        assert_eq!(stops.len(), 2);
+        assert_eq!(blend.method, crate::gradient_bake::Method::Perceptual);
+        let Adjustment::GradientMap { stops, blend, .. } = parse(b"grdm", &smooth, None, Channels::Rgb) else { panic!() };
+        assert_eq!((stops.len(), blend.smooth()), (4, 1.0));
+        let again = write(&parse(b"grdm", &smooth, None, Channels::Rgb));
+        let Adjustment::GradientMap { stops: s2, blend: b2, .. } = parse(b"grdm", &again[0].1, None, Channels::Rgb) else { panic!() };
+        assert_eq!((s2.len(), b2), (4, blend));
+        let perc = write(&parse(b"grdm", &v3(b"Perc"), None, Channels::Rgb));
+        let Adjustment::GradientMap { blend: b3, .. } = parse(b"grdm", &perc[0].1, None, Channels::Rgb) else { panic!() };
+        assert_eq!(b3.method, crate::gradient_bake::Method::Perceptual, "the method is written back");
     }
 
     #[test]
@@ -974,7 +1012,7 @@ mod tests {
         let original = grdm_with((2, [65535, 65535, 65535, 0]), (7, [10000, 0, 0, 0]));
         let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &original, None, Channels::Cmyk) else { panic!() };
         let mut data = original.clone();
-        let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true };
+        let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true, blend: Default::default(), midpoints: Vec::new() };
         assert!(retarget_gradient_map(&mut data, &target, Channels::Cmyk));
         assert_eq!(&data[2..4], &[1, 1]);
         assert_eq!(data[4..], original[4..], "the stops keep their colour spaces");
@@ -983,7 +1021,7 @@ mod tests {
         let mut edited = stops;
         edited[0].1 = [0.5; 3];
         let mut data2 = original.clone();
-        let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false };
+        let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false, blend: Default::default(), midpoints: Vec::new() };
         assert!(!retarget_gradient_map(&mut data2, &target, Channels::Cmyk));
         assert_eq!(data2, original);
         assert!(!retarget_gradient_map(&mut [], &target, Channels::Cmyk));
@@ -1058,8 +1096,8 @@ mod tests {
         rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3] });
         rt(Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 });
         rt(Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0 });
-        rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false });
-        rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true });
+        rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false, blend: Default::default(), midpoints: Vec::new() });
+        rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true, blend: Default::default(), midpoints: Vec::new() });
         rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
         rt(Adjustment::SelectiveColor { relative: false, adjustments: [[0.0; 4]; 9] });
         rt(Adjustment::Vibrance { vibrance: 35.0, saturation: -12.0 });
@@ -1362,7 +1400,7 @@ mod tests {
         for (stops, want) in
             [(vec![], vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])]), (vec![(0.3, [0.2, 0.4, 0.6])], vec![(0.0, [0.2, 0.4, 0.6]), (1.0, [0.2, 0.4, 0.6])])]
         {
-            let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false });
+            let b = write(&Adjustment::GradientMap { stops, reverse: true, dither: false, blend: Default::default(), midpoints: Vec::new() });
             let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
             let Adjustment::GradientMap { stops, reverse: true, .. } = back else { panic!("{back:?}") };
             assert_eq!(stops.len(), want.len());

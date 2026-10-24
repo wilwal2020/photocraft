@@ -21,6 +21,45 @@ pub enum GradientStyle {
     Diamond,
 }
 
+pub use photocraft_color::gradient_bake::Method as GradientMethod;
+
+/// How a gradient blends between its colour stops: Photoshop's interpolation method and its
+/// Smoothness (`0..=1`). The stops stay as they were made (a Photoshop gradient with 10 stops
+/// keeps 10); renderers follow the method's curve (`photocraft_color::gradient_bake`). The
+/// default, Classic without smoothness, is plain linear blending: what documents made before
+/// this had, so they look the same.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GradientBlend {
+    pub method: GradientMethod,
+    pub smoothness: f32,
+}
+
+impl GradientBlend {
+    /// Plain linear blending: nothing to follow.
+    pub fn is_plain(&self) -> bool {
+        self.method == GradientMethod::Classic && self.smooth() == 0.0
+    }
+
+    /// The smoothness, `0..=1` (non-finite counts as 0).
+    pub fn smooth(&self) -> f32 {
+        if self.smoothness.is_finite() { self.smoothness.clamp(0.0, 1.0) } else { 0.0 }
+    }
+
+    /// Opacity stops (with their segment `midpoints`) as dense linear stops following this blend
+    /// (Photoshop bends a gradient's transparency by its method and Smoothness too), or unchanged
+    /// when plain with 50 % midpoints.
+    pub fn bake_opacity(&self, stops: Vec<(f32, f32)>, midpoints: &[f32]) -> Vec<(f32, f32)> {
+        photocraft_color::gradient_bake::bake_opacity(stops, midpoints, self.smooth(), self.method)
+    }
+
+    /// `stops` (with their segment `midpoints`) as dense linear stops following this blend, or
+    /// unchanged when plain with 50 % midpoints.
+    pub fn bake(&self, stops: Vec<(f32, Color)>, midpoints: &[f32]) -> Vec<(f32, Color)> {
+        photocraft_color::gradient_bake::bake(stops, midpoints, self.smooth(), self.method)
+    }
+}
+
 /// A gradient: colour stops plus transparency stops (both at `0..=1`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Gradient {
@@ -35,6 +74,27 @@ pub struct Gradient {
     pub align: bool,
     /// Centre offset as a fraction of the bounds.
     pub offset: (f32, f32),
+    /// Colour midpoints, one per segment between consecutive (sorted) colour stops (`0..=1` of
+    /// the segment, missing entries 0.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midpoints: Vec<f32>,
+    /// Opacity midpoints, one per segment between consecutive (sorted) opacity stops.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opacity_midpoints: Vec<f32>,
+    /// How the colours (and the opacity) blend between the stops.
+    #[serde(default, skip_serializing_if = "GradientBlend::is_plain")]
+    pub blend: GradientBlend,
+}
+
+impl Gradient {
+    /// The colour stops to render: as stored, or dense stops following the midpoints and
+    /// [`Gradient::blend`].
+    pub fn render_stops(&self) -> std::borrow::Cow<'_, [(f32, Color)]> {
+        if self.blend.is_plain() && self.midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3) {
+            return std::borrow::Cow::Borrowed(&self.stops);
+        }
+        std::borrow::Cow::Owned(self.blend.bake(self.stops.clone(), &self.midpoints))
+    }
 }
 
 impl Default for Gradient {
@@ -48,6 +108,9 @@ impl Default for Gradient {
             reverse: false,
             align: true,
             offset: (0.0, 0.0),
+            midpoints: Vec::new(),
+            opacity_midpoints: Vec::new(),
+            blend: GradientBlend::default(),
         }
     }
 }

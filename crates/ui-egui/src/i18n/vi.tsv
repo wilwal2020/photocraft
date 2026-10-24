@@ -4289,3 +4289,11 @@ curves	Smooth	Làm mượt
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Mở rộng bằng AI
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Vẽ tiếp hình vào vùng chọn bằng Nano Banana, vượt qua viền khung
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Xuất timelapse của tài liệu này
+	Export timelapse	Xuất timelapse
+	Nothing recorded for this document yet.	Chưa ghi lại gì cho tài liệu này.
+	Paused: click to resume recording	Đã tạm dừng: bấm để tiếp tục ghi
+	Recording: click to pause	Đang ghi: bấm để tạm dừng
+	Start recording a timelapse	Bắt đầu ghi timelapse
+	Timelapse recording	Ghi timelapse

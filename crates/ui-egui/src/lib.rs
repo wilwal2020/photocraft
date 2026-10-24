@@ -243,6 +243,7 @@ pub mod tone;
 mod tool_cursor;
 pub mod tool_feedback;
 pub(crate) mod tool_memory;
+pub(crate) mod dialog_memory;
 mod tool_reset;
 mod tool_shortcuts;
 pub mod touch_twins;
@@ -1348,9 +1349,13 @@ impl PhotocraftApp {
         }
         let work_before = self.session.active().map(|st| (st.doc.id, st.doc.work_path.clone()));
         let undone = matches!(id, "edit.undo" | "edit.stepBackward").then(|| self.session.active().and_then(|st| st.history.undo_label().map(str::to_string))).flatten();
+        let generative = (id == "edit.generativeFill").then(|| params.clone());
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if let (Ok(_), Some(p)) = (&result, &generative) {
+            dialog_memory::used_generative_fill(self, p);
         }
         if result.is_ok() && undone.is_some() {
             fill_tool_ui::after_undo(self, undone.as_deref());
@@ -2636,8 +2641,9 @@ impl PhotocraftApp {
         self.perf.span("ui: timelapse", gpu_canvas::now_ms() - t);
         // Tool options are remembered between launches the same way (#2814).
         tool_memory::persist(self, &ctx);
-        // So are View › Extras, Show and Snap To (#3762).
+        // So are View › Extras, Show and Snap To (#3762), and a few dialog choices.
         view_cmds::persist(self, &ctx);
+        dialog_memory::persist(self);
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);
@@ -2766,7 +2772,7 @@ impl PhotocraftApp {
     /// on its own (⌥-click on its thumbnail, or the Channels panel's mask with every colour
     /// channel hidden). Targeted only, through the Channels panel or ⌘\ as through its
     /// thumbnail, it doesn't.
-    fn paste_goes_to_mask(&self) -> bool {
+    pub(crate) fn paste_goes_to_mask(&self) -> bool {
         self.session.active().is_some_and(|st| {
             let alone = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
                 && st.channel_view.visible_colors(photocraft_engine::channel_cmds::color_count(&st.doc)) == 0;

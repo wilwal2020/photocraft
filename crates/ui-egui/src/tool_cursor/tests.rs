@@ -589,3 +589,34 @@ fn resize_follows_the_view() {
         assert_eq!(got, want, "view turned {rotation}°, flip {flip}");
     }
 }
+
+/// User report: zooming in lagged once the brush outline neared the screen's size: every frame
+/// made (and handed the OS) a new cursor bitmap up to 2048 px. A large outline whose size keeps
+/// changing is painted instead, and becomes a bitmap once it holds still; small ones stay bitmaps.
+#[test]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn a_large_cursor_becomes_a_bitmap_only_once_it_holds_still() {
+    let ctx = egui::Context::default();
+    let run = |ctx: &egui::Context, time: f64, radius: f32| {
+        let input = egui::RawInput { time: Some(time), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            circle(ui.painter(), pos2(200.0, 200.0), radius, false);
+        });
+        out.textures_delta.clear();
+        out.platform_output.cursor_image.map(|i| i.size[0])
+    };
+    // Zooming: a new large size every frame, never a large bitmap (the small crosshair only).
+    for (k, radius) in [600.0, 640.0, 690.0, 750.0].into_iter().enumerate() {
+        let side = run(&ctx, k as f64 * 0.016, radius);
+        assert!(side.is_some_and(|s| s < 64), "frame {k}: the painted outline with a small crosshair, not a {side:?} px bitmap");
+    }
+    // Held still past the settle time: the bitmap, as before.
+    run(&ctx, 0.1, 750.0);
+    let side = run(&ctx, 0.3, 750.0);
+    assert!(side.is_some_and(|s| s > 1400), "the steady outline is a bitmap again: {side:?}");
+    // A small tip is a bitmap right away, however it changes.
+    for (k, radius) in [20.0, 24.0, 30.0].into_iter().enumerate() {
+        assert!(run(&ctx, 1.0 + k as f64 * 0.016, radius).is_some_and(|s| s > 40));
+    }
+}
+

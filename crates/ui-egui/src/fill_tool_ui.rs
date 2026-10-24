@@ -185,8 +185,11 @@ impl Default for FillSettings {
 pub fn params(app: &PhotocraftApp) -> Value {
     let o = app.ui.tool_options.fill_tool.current();
     let exclude: Vec<&str> = [(o.exclude_layer, "layer"), (o.exclude_text, "text"), (o.exclude_locked, "locked")].into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect();
+    // With the mask shown on its own (⌥-click), the fill sees the mask, as on screen: All Layers
+    // sampled the hidden layers (user report).
+    let reference = if app.paste_goes_to_mask() { "layer" } else { o.reference.as_str() };
     json!({
-        "reference": o.reference,
+        "reference": reference,
         "exclude": exclude,
         "tolerance": o.tolerance,
         "contiguous": o.contiguous,

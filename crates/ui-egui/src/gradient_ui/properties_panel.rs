@@ -35,7 +35,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 }
 
 fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
-    let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
+    let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, blend, .. }) = fill_of(layer).cloned() else { return };
     if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
         ui.horizontal(|ui| {
             row_label(ui, "Style");
@@ -57,6 +57,20 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let range = if pct.is_finite() { min.min(pct)..=max.max(pct) } else { min..=max };
         if let Some(value) = numeric_row(ui, "scale", "Scale", pct, range, "%") {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
+        }
+        // Photoshop's interpolation: how the colours blend between the stops (a gradient from
+        // Photoshop keeps its stops and its method, user report).
+        ui.horizontal(|ui| {
+            row_label(ui, "Method");
+            use photocraft_doc::effects::GradientMethod as M;
+            let mut method = blend.method;
+            let opts = [(M::Classic, tl!("Classic")), (M::Perceptual, tl!("Perceptual")), (M::Linear, tl!("Linear")), (M::Smooth, tl!("Smooth"))];
+            if widgets::dropdown(ui, "gradient-fill-method", &mut method, &opts, ui.available_width().min(120.0)) {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "method": method.name()}));
+            }
+        });
+        if let Some(value) = numeric_row(ui, "smoothness", "Smoothness", blend.smooth() * 100.0, 0.0..=100.0, "%") {
+            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "smoothness": value}));
         }
         ui.horizontal_wrapped(|ui| {
             let mut value = reverse;
@@ -258,6 +272,26 @@ mod tests {
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(3);
+    }
+
+    /// A Photoshop gradient keeps its method: the panel shows it and changes it in one step.
+    #[test]
+    fn method_and_smoothness_edit_the_gradient() {
+        let mut app = app();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.run(cmds::SET, json!({"layer": id.0, "method": "perceptual", "smoothness": 40})).unwrap();
+        let Fill::Gradient { blend, stops, .. } = fill(&app) else { panic!() };
+        assert_eq!(blend.method, photocraft_doc::effects::GradientMethod::Perceptual);
+        assert!((blend.smoothness - 0.4).abs() < 1e-6);
+        let n = stops.len();
+        // Editing a stop keeps the method; the stops stay the user's own.
+        app.run(cmds::SET, json!({"layer": id.0, "reverse": true})).unwrap();
+        let Fill::Gradient { blend, stops, .. } = fill(&app) else { panic!() };
+        assert_eq!((blend.method, stops.len()), (photocraft_doc::effects::GradientMethod::Perceptual, n));
+        assert!(app.run(cmds::SET, json!({"layer": id.0, "method": "wavy"})).is_err());
+        let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(panel, app);
+        h.run_steps(3);
+        assert!(h.query_by_label("Method").is_some() && h.query_by_label("Smoothness").is_some());
     }
 
     #[test]

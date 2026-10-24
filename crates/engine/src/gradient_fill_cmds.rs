@@ -184,9 +184,11 @@ fn frame_with_align(layer: &Layer, f: &Fill, canvas: Rect) -> Rect {
 pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fill> {
     const CMD: &str = SET;
     let mut out = f.clone();
-    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } = &mut out else {
+    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, blend, opacity_midpoints } = &mut out else {
         return Err(bad(CMD, "not a gradient fill"));
     };
+    // Photoshop's method and Smoothness: kept unless given.
+    *blend = crate::adjust_params::gradient_blend(CMD, p, *blend)?;
     let old_frame = frame_with_align(layer, f, canvas);
     let old_handles = gf::handles(*style, *angle, *scale, *offset, old_frame);
     if let Some(v) = p.get("align") {
@@ -225,6 +227,8 @@ pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4],
             offset: *offset,
             dither: *dither,
             align: *align,
+            blend: Default::default(),
+            opacity_midpoints: Vec::new(),
         };
         frame_with_align(layer, &tmp, canvas)
     };
@@ -280,6 +284,9 @@ pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4],
         *stops = new;
     }
     if let Some(new) = transparency_param(p, CMD)? {
+        if new.len() != opacity_stops.len() {
+            opacity_midpoints.clear();
+        }
         *opacity_stops = new;
     }
     if let Some(v) = p.get("midpoints") {
@@ -317,7 +324,20 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
     }
     let (angle, scale, offset) = gf::from_handles(style, from, to, canvas, 0.0);
     let fill =
-        Fill::Gradient { stops, angle, scale: clamp_handle_scale(scale), style, reverse, opacity_stops, midpoints: Vec::new(), offset, dither, align: false }
+        Fill::Gradient {
+            stops,
+            angle,
+            scale: clamp_handle_scale(scale),
+            style,
+            reverse,
+            opacity_stops,
+            midpoints: Vec::new(),
+            offset,
+            dither,
+            align: false,
+            blend: crate::adjust_params::gradient_blend(CMD, p, Default::default())?,
+            opacity_midpoints: Vec::new(),
+        }
             .in_mode(doc.mode);
     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
     l.opacity = opacity;
@@ -392,7 +412,7 @@ fn unpair(v: Vec<(f32, Color, f32)>) -> (Vec<(f32, Color)>, Vec<f32>) {
 pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fill> {
     const CMD: &str = STOP;
     let mut out = f.clone();
-    let Fill::Gradient { stops, opacity_stops, midpoints, .. } = &mut out else { return Err(bad(CMD, "not a gradient fill")) };
+    let Fill::Gradient { stops, opacity_stops, midpoints, opacity_midpoints, .. } = &mut out else { return Err(bad(CMD, "not a gradient fill")) };
     let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `action` (add|move|delete|color|opacity|midpoint)"))?;
     let opacity_kind = match p.get("kind").and_then(Value::as_str).unwrap_or("color") {
         "color" => false,
@@ -448,6 +468,10 @@ pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fil
         os.sort_by(|a, b| a.0.total_cmp(&b.0));
         if os.len() > 1024 {
             return Err(bad(CMD, "too many opacity stops (max 1024)"));
+        }
+        // Segments added or removed: the opacity midpoints no longer match them.
+        if os.len() != opacity_stops.len() {
+            opacity_midpoints.clear();
         }
         *opacity_stops = os;
         return Ok(out);
@@ -518,6 +542,8 @@ fn ramp_color_alpha(f: &Fill, t: f32) -> f32 {
         offset: (0.0, 0.0),
         dither: false,
         align: true,
+        blend: Default::default(),
+        opacity_midpoints: Vec::new(),
     };
     gf::Ramp::new(&bare).map_or(1.0, |r| r.sample(t)[3]).max(1e-6)
 }
@@ -534,7 +560,7 @@ fn stop(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A gradient fill layer's settings as JSON (`gradient.fill.get`).
 pub fn describe_fill(f: &Fill, frame: Rect) -> Value {
-    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } = f else { return Value::Null };
+    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, blend, .. } = f else { return Value::Null };
     let (from, to) = gf::handles(*style, *angle, *scale, *offset, frame);
     json!({
         "style": style_name(*style),
@@ -549,6 +575,8 @@ pub fn describe_fill(f: &Fill, frame: Rect) -> Value {
         "stops": stops.iter().map(|(t, c)| json!([t, hex(c)])).collect::<Vec<_>>(),
         "transparency": opacity_stops.iter().map(|(t, a)| json!([t, a * 100.0])).collect::<Vec<_>>(),
         "midpoints": midpoints,
+        "method": blend.method.name(),
+        "smoothness": (blend.smooth() * 100.0).round(),
     })
 }
 
@@ -571,7 +599,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Gradient (Live)",
             menu: &[],
             shortcut: None,
-            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient),"reverse":bool=false,"dither":bool=true,"opacity":0..100=100,"mode":"normal|multiply|…"="normal"} → {"layer":id}; a Gradient Fill layer above the active layer, masked by the selection"##,
+            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient),"reverse":bool=false,"dither":bool=true,"method":"classic|perceptual|linear|smooth"="classic","smoothness":0..100=0 (Photoshop's interpolation),"opacity":0..100=100,"mode":"normal|multiply|…"="normal"} → {"layer":id}; a Gradient Fill layer above the active layer, masked by the selection"##,
             enabled: has_doc,
             run: create,
             journal: true,
@@ -581,7 +609,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Fill",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?} → the gradient (see gradient.fill.get)"##,
+            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?,"method":"classic|perceptual|linear|smooth"?,"smoothness":0..100? (Photoshop's interpolation, kept unless given)} → the gradient (see gradient.fill.get)"##,
             enabled: has_gradient_fill,
             run: set,
             journal: true,
@@ -601,7 +629,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Gradient Fill Settings",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?} → {"style","angle","scale":%,"offset":[%,%],"reverse","dither","align","from":[x,y],"to":[x,y],"stops":[[t,"#hex"]],"transparency":[[t,%]],"midpoints":[…]}"##,
+            params: r##"{"layer":id?} → {"style","angle","scale":%,"offset":[%,%],"reverse","dither","align","from":[x,y],"to":[x,y],"stops":[[t,"#hex"]],"transparency":[[t,%]],"midpoints":[…],"method","smoothness":%}"##,
             enabled: has_gradient_fill,
             run: get,
             journal: false,

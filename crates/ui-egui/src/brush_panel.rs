@@ -533,7 +533,7 @@ const MAX_REMEMBERED_COLLAPSED: usize = 10_000;
 /// and a rename in progress belong to the session.
 fn panel_view(app: &PhotocraftApp) -> Value {
     let st = &app.ui.brushes_panel;
-    json!({"collapsed": st.collapsed, "tile": st.tile, "showName": st.show_name, "showStroke": st.show_stroke, "showTip": st.show_tip})
+    json!({"collapsed": st.collapsed, "tile": st.tile, "showName": st.show_name, "showStroke": st.show_stroke, "showTip": st.show_tip, "pinned": st.pinned})
 }
 
 /// Remember the Brushes panel's view in the preferences once the user lets go of the pointer
@@ -572,6 +572,8 @@ pub fn restore_panel(app: &mut PhotocraftApp) {
     if ![st.show_name, st.show_stroke, st.show_tip].into_iter().any(|b| b) {
         (st.show_name, st.show_stroke) = (true, true);
     }
+    // The pinned group (user report: it didn't survive a restart). A group's name, capped.
+    st.pinned = saved.get("pinned").and_then(Value::as_str).map(|g| g.chars().take(256).collect());
 }
 
 pub fn show_brushes_panel(app: &mut PhotocraftApp) {

@@ -717,8 +717,8 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::PhotoFilter { color: [0.2, 0.6, 0.9], density: 0.3, preserve_luminosity: false },
         Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None },
         Adjustment::BlackWhite { weights: [70.0, 20.0, 50.0, 10.0, 90.0, 30.0], tint: Some([0.9, 0.7, 0.5]) },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])], reverse: false, dither: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])], reverse: false, dither: false, blend: Default::default(), midpoints: Vec::new() },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true, blend: Default::default(), midpoints: Vec::new() },
         Adjustment::ColorBalance { shadows: [20.0, -10.0, 5.0], midtones: [-15.0, 10.0, 30.0], highlights: [0.0, 5.0, -20.0], preserve_luminosity: true },
         Adjustment::ColorBalance { shadows: [10.0, 0.0, 0.0], midtones: [0.0, 0.0, 0.0], highlights: [0.0, 0.0, 10.0], preserve_luminosity: false },
         Adjustment::SelectiveColor { relative: true, adjustments: selective() },
@@ -1028,6 +1028,7 @@ fn hard_stop_effects_and_gradient_maps_request_cpu() {
             stops: vec![(0.0, [0.0; 3]), (0.5, [1.0; 3]), (0.5, [0.0; 3]), (1.0, [1.0; 3])],
             reverse: false,
             dither: false,
+            blend: Default::default(), midpoints: Vec::new(),
         }),
     ));
     assert_gradient_fallback(&d);
@@ -1068,6 +1069,8 @@ fn fills_and_dissolve() {
             offset: (0.15, -0.1),
             dither: true,
             align: false,
+            blend: Default::default(),
+            opacity_midpoints: Vec::new(),
         };
         let mut l = Layer::new("live", LayerContent::Fill(fill));
         l.mask = Some(mask(Rect::new(8, 4, 40, 40), 13, 0.0));
@@ -1547,6 +1550,8 @@ fn gradient() -> Gradient {
         reverse: false,
         align: true,
         offset: (0.1, -0.05),
+        blend: Default::default(), midpoints: Vec::new(),
+        opacity_midpoints: Vec::new(),
     }
 }
 

@@ -46,7 +46,7 @@ pub mod doc_path;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;
-mod gradient_bake;
+use photocraft_color::gradient_bake;
 pub mod guides_map;
 mod second_mask_psd;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};

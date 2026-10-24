@@ -4908,3 +4908,11 @@ shape	Appearance	Aspetto
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Estensione IA
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Continua l’immagine nella selezione con Nano Banana, oltre il bordo della vignetta
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Esporta il timelapse di questo documento
+	Export timelapse	Esporta timelapse
+	Nothing recorded for this document yet.	Ancora nessuna registrazione per questo documento.
+	Paused: click to resume recording	In pausa: fai clic per riprendere la registrazione
+	Recording: click to pause	Registrazione: fai clic per mettere in pausa
+	Start recording a timelapse	Avvia la registrazione di un timelapse
+	Timelapse recording	Registrazione timelapse

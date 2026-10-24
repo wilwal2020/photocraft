@@ -4707,3 +4707,11 @@ cameraRaw	Yellow	Sárga
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	MI-kiterjesztés
 	Continue the picture into what is selected with Nano Banana, past a panel's border	A kép folytatása a kijelölésbe a Nano Bananával, a panel szélén túl is
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	A dokumentum időzített felvételének exportálása
+	Export timelapse	Időzített felvétel exportálása
+	Nothing recorded for this document yet.	Ehhez a dokumentumhoz még nincs felvétel.
+	Paused: click to resume recording	Szüneteltetve: kattintson a felvétel folytatásához
+	Recording: click to pause	Felvétel: kattintson a szüneteltetéshez
+	Start recording a timelapse	Időzített felvétel indítása
+	Timelapse recording	Időzített felvétel

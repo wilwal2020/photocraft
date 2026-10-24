@@ -4538,3 +4538,11 @@ cameraRaw	Dehaze	Odstranění oparu
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	AI rozšíření
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Pokračovat v obrazu do vybrané oblasti pomocí Nano Banana, i za okraj panelu
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Exportovat časosběr tohoto dokumentu
+	Export timelapse	Exportovat časosběr
+	Nothing recorded for this document yet.	Pro tento dokument zatím nic nebylo nahráno.
+	Paused: click to resume recording	Pozastaveno: klepnutím pokračujte v nahrávání
+	Recording: click to pause	Nahrává se: klepnutím pozastavíte
+	Start recording a timelapse	Spustit nahrávání časosběru
+	Timelapse recording	Nahrávání časosběru

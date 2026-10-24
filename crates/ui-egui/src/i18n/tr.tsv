@@ -4521,3 +4521,11 @@ cameraData	Lens	Lens
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	YZ ile Genişlet
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Resmi Nano Banana ile seçili alana, panel kenarının ötesine devam ettir
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Bu belgenin hızlandırılmış videosunu dışa aktar
+	Export timelapse	Hızlandırılmış videoyu dışa aktar
+	Nothing recorded for this document yet.	Bu belge için henüz bir şey kaydedilmedi.
+	Paused: click to resume recording	Duraklatıldı: kayda devam etmek için tıklayın
+	Recording: click to pause	Kaydediliyor: duraklatmak için tıklayın
+	Start recording a timelapse	Hızlandırılmış kayda başla
+	Timelapse recording	Hızlandırılmış kayıt

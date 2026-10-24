@@ -405,7 +405,9 @@ pub(super) fn fill_generative(
     fill: &mut Filler<'_>,
 ) -> std::result::Result<Vec<f32>, MlError> {
     let canvas = doc.bounds();
-    let (fmt, source) = {
+    let (fmt, source) = if let Some(fmt) = layerless_format(doc, plan, p) {
+        (fmt, None)
+    } else {
         let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p).map_err(|e| MlError::BadInput(e.to_string()))?;
         (surf.format(), (!plan.all_layers).then(|| surf.clone()))
     };
@@ -437,6 +439,19 @@ type Removal = (Region, Vec<bool>, Filled, Option<Vec<Region>>);
 /// The filled window and the hole it fills, computed on `doc` (a snapshot), and which fill made
 /// it. `None` when the layer's own window is fully transparent: nothing to remove and nothing to
 /// fill from.
+/// The format to read what is visible in when the target layer has no pixels but the fill goes to
+/// a layer of its own (Create a new layer, or Nano Banana's): on a fill, adjustment, type or group
+/// layer the removal works from the composite (user report: AI Remove refused anything but a
+/// pixel layer). `None`: read the target as usual.
+fn layerless_format(doc: &Document, plan: &Plan, p: &Value) -> Option<PixelFormat> {
+    let own_layer = plan.new_layer || (plan.model == AiModel::NanoBanana && plan.generative != Generative::Off);
+    let no_pixels = targets_pixels(p) && plan.id.is_some_and(|id| doc.layer(id).is_some_and(|l| l.surface().is_none()));
+    (own_layer && no_pixels).then(|| {
+        let base = doc.pixel_format();
+        PixelFormat::new(base.mode, base.sample, true)
+    })
+}
+
 fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<Option<Removal>> {
     let hole = hole(plan, doc.selection.as_ref())?;
     if !hole.iter().any(|m| *m) {
@@ -448,14 +463,18 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
     }
     ctx.check()?;
     let win = plan.window;
-    let (img, fmt) = {
+    let layerless = layerless_format(doc, plan, p);
+    let composite = plan.all_layers || layerless.is_some();
+    let (img, fmt) = if let Some(fmt) = layerless {
+        (composite_region(doc, None, SampleLayers::All, win, fmt), fmt)
+    } else {
         let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
         let fmt = surf.format();
         let img = if plan.all_layers { composite_region(doc, None, SampleLayers::All, win, fmt) } else { Region::read(surf, win) };
         (img, fmt)
     };
     // A no-op without the fill or a history step, as the other retouch tools on an empty layer.
-    if !plan.all_layers && alpha_index(&fmt).is_some_and(|a| img.data.chunks_exact(img.ch).all(|px| px.get(a).is_none_or(|v| *v <= 0.0))) {
+    if !composite && alpha_index(&fmt).is_some_and(|a| img.data.chunks_exact(img.ch).all(|px| px.get(a).is_none_or(|v| *v <= 0.0))) {
         return Ok(None);
     }
     let mut note = None;

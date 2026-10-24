@@ -4995,3 +4995,11 @@ shape	Appearance	Оформление
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	Расширение ИИ
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Продолжить изображение в выделенную область с помощью Nano Banana, за рамку панели
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	Экспортировать таймлапс этого документа
+	Export timelapse	Экспорт таймлапса
+	Nothing recorded for this document yet.	Для этого документа ещё ничего не записано.
+	Paused: click to resume recording	Пауза: нажмите, чтобы продолжить запись
+	Recording: click to pause	Идёт запись: нажмите для паузы
+	Start recording a timelapse	Начать запись таймлапса
+	Timelapse recording	Запись таймлапса

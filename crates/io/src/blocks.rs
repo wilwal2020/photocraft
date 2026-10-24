@@ -238,6 +238,16 @@ pub(crate) fn enum_of<'a>(d: &'a Descriptor, key: &str) -> Option<&'a [u8]> {
 /// A gradient's interpolation method code. Photoshop (27.11, checked by saving gradient fill
 /// layers) stores it as the enum `gradientsInterpolationMethod` (`Perc`, `Lnr `, `Smoo`, `Gcls`);
 /// `gs99` is kept as a fallback.
+/// `d` with `blend`'s interpolation method (`gradientsInterpolationMethod`), when it isn't
+/// Classic (what a descriptor without one means).
+pub(crate) fn with_gradient_method(d: Descriptor, blend: &photocraft_doc::effects::GradientBlend) -> Descriptor {
+    if blend.method == crate::gradient_bake::Method::Classic {
+        return d;
+    }
+    let code = std::str::from_utf8(blend.method.code()).unwrap_or("Perc");
+    d.with("gradientsInterpolationMethod", Value::Enumerated { type_id: Id::new("gradientInterpolationMethodType"), value: Id::new(code) })
+}
+
 pub(crate) fn gradient_method(d: &Descriptor) -> Option<&[u8]> {
     enum_of(d, "gradientsInterpolationMethod").or_else(|| enum_of(d, "gs99"))
 }
@@ -268,23 +278,6 @@ pub(crate) fn gradient_style_value(s: GradientStyle) -> Value {
     Value::Enumerated { type_id: Id::new("GrdT"), value: Id::new(v) }
 }
 
-/// Colour and opacity stops of a `Grdn` descriptor (locations 0..4096 → 0..1).
-/// Colour stops and opacity stops of a gradient.
-pub(crate) type Stops = (Vec<(f32, Color)>, Vec<(f32, f32)>);
-
-/// Stops of a `Grdn` descriptor, baked to Photoshop's interpolation (smoothness `Intr`, stop
-/// midpoints, and the parent's interpolation method when given, see [`gradient_method`]); the
-/// opacity stops as [`baked_opacity_stops`].
-pub(crate) fn gradient_stops_with(grad: &Descriptor, method: Option<&[u8]>) -> Stops {
-    let raw = gradient_stops_raw(grad);
-    let stops = if raw.stops.len() >= 2 {
-        crate::gradient_bake::bake(raw.stops, &raw.mids, raw.smooth, crate::gradient_bake::Method::from_code(method))
-    } else {
-        raw.stops
-    };
-    (stops, baked_opacity_stops(grad, method))
-}
-
 /// A `Grdn` descriptor's stops as stored: colour stops (sorted), the midpoint of each segment
 /// between them, opacity stops and the smoothness (`Intr`, `0..=1`).
 pub(crate) struct RawStops {
@@ -292,20 +285,25 @@ pub(crate) struct RawStops {
     pub mids: Vec<f32>,
     pub opacity: Vec<(f32, f32)>,
     pub smooth: f32,
+    /// How the colours blend (the parent descriptor's method and the smoothness): what the
+    /// renderers follow ([`photocraft_doc::effects::GradientBlend`]).
+    pub blend: photocraft_doc::effects::GradientBlend,
 }
 
-/// Stops of a gradient fill layer, kept editable: when Photoshop's interpolation is plain
-/// (no smoothness, Classic method) the stops stay as they are with their midpoints, else they
-/// are baked like [`gradient_stops_with`] (midpoints folded in). Opacity stops that are all
-/// 100 % come back empty.
+/// Stops of a gradient, kept editable: the stops as they are with their midpoints, and
+/// Photoshop's Smoothness and method in [`RawStops::blend`], which the renderers follow (user
+/// report: a 10-stop gradient came back as about 100 baked ones). Only Lab stops are baked (Lab
+/// documents blend in L*a*b*, which only baking reproduces). Opacity stops that are all 100 %
+/// come back empty.
 pub(crate) fn gradient_stops_editable(grad: &Descriptor, method: Option<&[u8]>) -> RawStops {
     let mut raw = gradient_stops_raw(grad);
     let m = crate::gradient_bake::Method::from_code(method);
-    // Lab stops (Lab documents) interpolate in L*a*b*, which only baking reproduces.
     let lab = raw.stops.iter().all(|(_, c)| c.mode == photocraft_color::ColorMode::Lab);
-    if raw.stops.len() >= 2 && (raw.smooth > 0.0 || m != crate::gradient_bake::Method::Classic || lab) {
+    if raw.stops.len() >= 2 && lab {
         raw.stops = crate::gradient_bake::bake(std::mem::take(&mut raw.stops), &raw.mids, raw.smooth, m);
         raw.mids.clear();
+    } else {
+        raw.blend = photocraft_doc::effects::GradientBlend { method: m, smoothness: raw.smooth.clamp(0.0, 1.0) };
     }
     if raw.mids.iter().all(|m| (m - 0.5).abs() < 1e-3) {
         raw.mids.clear();
@@ -371,17 +369,14 @@ fn gradient_stops_raw(grad: &Descriptor) -> RawStops {
             }
         }
     }
-    RawStops { stops: sorted, mids, opacity, smooth }
+    RawStops { stops: sorted, mids, opacity, smooth, blend: Default::default() }
 }
 
-/// A `Grdn` descriptor for colour and opacity stops.
-pub(crate) fn gradient_desc(stops: &[(f32, Color)], opacity: &[(f32, f32)]) -> Descriptor {
-    gradient_desc_with(stops, opacity, &[])
-}
-
-/// [`gradient_desc`] with colour midpoints (one per segment between the sorted stops; each is
-/// stored on the stop that ends its segment, as [`gradient_stops_with`] reads it).
-pub(crate) fn gradient_desc_with(stops: &[(f32, Color)], opacity: &[(f32, f32)], mids: &[f32]) -> Descriptor {
+/// A `Grdn` descriptor for colour and opacity stops, with colour midpoints (one per segment
+/// between the sorted stops; each is stored on the stop that ends its segment, as
+/// [`gradient_stops_editable`] reads it) and Photoshop's Smoothness (`Intr`, `0..=1`). The method
+/// goes on the parent descriptor ([`with_gradient_method`]).
+pub(crate) fn gradient_desc_smooth(stops: &[(f32, Color)], opacity: &[(f32, f32)], mids: &[f32], opacity_mids: &[f32], smooth: f32) -> Descriptor {
     let mut stops = stops.to_vec();
     if !mids.is_empty() {
         stops.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -401,31 +396,45 @@ pub(crate) fn gradient_desc_with(stops: &[(f32, Color)], opacity: &[(f32, f32)],
         })
         .collect();
     let op: Vec<(f32, f32)> = if opacity.is_empty() { stops.iter().map(|(t, c)| (*t, c.alpha)).collect() } else { opacity.to_vec() };
+    let mut op = op;
+    if !opacity_mids.is_empty() {
+        op.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
     let trns = op
         .iter()
-        .map(|(t, a)| {
+        .enumerate()
+        .map(|(i, (t, a))| {
+            // Like the colour midpoints: stored on the stop that ends the segment.
+            let mid = i.checked_sub(1).and_then(|k| opacity_mids.get(k)).copied().unwrap_or(0.5);
             Value::Descriptor(
                 Descriptor::new("TrnS")
                     .with("Opct", Value::UnitFloat { unit: *b"#Prc", value: f64::from(a * 100.0) })
                     .with("Lctn", Value::Integer((t * 4096.0).round() as i32))
-                    .with("Mdpn", Value::Integer(50)),
+                    .with("Mdpn", Value::Integer((mid.clamp(0.05, 0.95) * 100.0).round() as i32)),
             )
         })
         .collect();
     Descriptor::new("Grdn")
         .with("Nm  ", Value::Text(UnicodeString::new_nul("Custom")))
         .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("CstS") })
-        // Our stops interpolate linearly (Photoshop smoothness is baked into them on import).
-        .with("Intr", Value::Double(0.0))
+        // Photoshop's Smoothness, 0..4096 (the renderers follow it: `GradientBlend`).
+        .with("Intr", Value::Double(f64::from(if smooth.is_finite() { smooth.clamp(0.0, 1.0) } else { 0.0 }) * 4096.0))
         .with("Clrs", Value::List(clrs))
         .with("Trns", Value::List(trns))
 }
 
-/// Opacity stops of a `Grdn` descriptor with Photoshop's smoothness, opacity midpoints and
-/// interpolation method applied (densely sampled; as stored when the interpolation is plain).
-/// Gradient fill layers and the gradient layer effects share it: Photoshop renders their
-/// transparency identically.
-fn baked_opacity_stops(grad: &Descriptor, method: Option<&[u8]>) -> Vec<(f32, f32)> {
+/// Opacity stops of a `Grdn` descriptor, and their midpoints. Gradient fill layers and the
+/// gradient layer effects share it: Photoshop renders their transparency identically. When the
+/// colours keep their blend (`blend` not plain), the stops and midpoints come back as stored: the
+/// renderers apply the method and Smoothness to the opacity as to the colours (applying them here
+/// too would bend them twice after a save). Otherwise (Lab stops, baked whole) Photoshop's
+/// smoothness, opacity midpoints and method are applied here (densely sampled; as stored when
+/// plain), with no midpoints left.
+pub(crate) fn opacity_stops(grad: &Descriptor, method: Option<&[u8]>, blend: &photocraft_doc::effects::GradientBlend) -> (Vec<(f32, f32)>, Vec<f32>) {
+    opacity_stops_with(grad, method, !blend.is_plain())
+}
+
+fn opacity_stops_with(grad: &Descriptor, method: Option<&[u8]>, raw: bool) -> (Vec<(f32, f32)>, Vec<f32>) {
     let mut stops = Vec::new();
     let mut mids = Vec::new();
     if let Some(Value::List(items)) = grad.get("Trns") {
@@ -440,8 +449,13 @@ fn baked_opacity_stops(grad: &Descriptor, method: Option<&[u8]>) -> Vec<(f32, f3
     let mut order: Vec<usize> = (0..stops.len()).collect();
     order.sort_by(|a, b| stops[*a].0.total_cmp(&stops[*b].0));
     let mids: Vec<f32> = order.iter().skip(1).filter_map(|i| mids.get(*i).copied()).collect();
+    if raw {
+        let sorted: Vec<(f32, f32)> = order.iter().filter_map(|i| stops.get(*i).copied()).collect();
+        let mids = if mids.iter().all(|m| (m - 0.5).abs() < 1e-3) { Vec::new() } else { mids };
+        return (sorted, mids);
+    }
     let smooth = num(grad.get("Intr")).map_or(0.0, |v| (v / 4096.0) as f32);
-    crate::gradient_bake::bake_opacity(stops, &mids, smooth, crate::gradient_bake::Method::from_code(method))
+    (crate::gradient_bake::bake_opacity(stops, &mids, smooth, crate::gradient_bake::Method::from_code(method)), Vec::new())
 }
 
 /// Parses a fill block (`SoCo`, `GdFl`, `PtFl`).
@@ -461,12 +475,14 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
             let scale = num(d.get("Scl ")).map_or(1.0, |v| v as f32 / 100.0);
             let gradient = get_desc(d, "Grad");
             let raw = gradient.map(|g| gradient_stops_editable(g, gradient_method(d)));
-            let (mut stops, midpoints) = raw.map(|r| (r.stops, r.mids)).unwrap_or_default();
+            let (mut stops, midpoints, blend) = raw.map(|r| (r.stops, r.mids, r.blend)).unwrap_or_default();
             // Opacity stops with Photoshop's smoothness, opacity midpoints and method applied
             // (raw when the interpolation is plain); none when fully opaque.
-            let mut opacity_stops = get_desc(d, "Grad").map(|g| baked_opacity_stops(g, gradient_method(d))).unwrap_or_default();
+            let (mut opacity_stops, opacity_midpoints) = get_desc(d, "Grad").map(|g| opacity_stops(g, gradient_method(d), &blend)).unwrap_or_default();
+            let mut opacity_midpoints = opacity_midpoints;
             if opacity_stops.iter().all(|o| o.1 >= 1.0 - 1e-4) {
                 opacity_stops.clear();
+                opacity_midpoints.clear();
             }
             if stops.is_empty() {
                 // A provably constant-RGB noise gradient renders one exact colour. Any other
@@ -494,6 +510,8 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 offset,
                 dither: bool_of(d, "Dthr"),
                 align: !matches!(d.get("Algn"), Some(Value::Boolean(false))),
+                blend,
+                opacity_midpoints,
             })
         }
         b"PtFl" => {
@@ -516,13 +534,14 @@ pub fn write_fill(f: &Fill) -> ([u8; 4], Vec<u8>) {
 pub fn fill_to_desc(f: &Fill) -> ([u8; 4], Descriptor) {
     match f {
         Fill::Solid(c) => (*b"SoCo", Descriptor::new("null").with("Clr ", Value::Descriptor(color_to_desc(c)))),
-        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, blend, opacity_midpoints } => {
             let prc = |v: f32| Value::UnitFloat { unit: *b"#Prc", value: f64::from(v * 100.0) };
             let mut d = Descriptor::new("null")
                 .with("Angl", Value::UnitFloat { unit: *b"#Ang", value: f64::from(*angle) })
                 .with("Type", gradient_style_value(*style))
                 .with("Scl ", prc(*scale))
-                .with("Grad", Value::Descriptor(gradient_desc_with(stops, opacity_stops, midpoints)));
+                .with("Grad", Value::Descriptor(gradient_desc_smooth(stops, opacity_stops, midpoints, opacity_midpoints, blend.smooth())));
+            d = with_gradient_method(d, blend);
             if *reverse {
                 d = d.with("Rvrs", Value::Boolean(true));
             }
@@ -918,6 +937,55 @@ mod tests {
         }
     }
 
+    /// User report: a Photoshop gradient with 10 colours came in as about 100 stops (Smoothness
+    /// and the method were baked into them), so it couldn't be edited as made. The stops, their
+    /// midpoints, the opacity stops and their midpoints, Smoothness and the method come in as they
+    /// are, render exactly as the baked stops did, and save back the same.
+    #[test]
+    fn photoshop_gradients_keep_their_stops_and_blend() {
+        use photocraft_color::Color;
+        use photocraft_doc::effects::{GradientBlend, GradientMethod};
+        use photocraft_doc::{Fill, GradientStyle};
+        let stops: Vec<(f32, Color)> = (0..10).map(|i| (i as f32 / 9.0, Color::rgb((i % 3) as f32 / 2.0, (i % 4) as f32 / 3.0, (i % 5) as f32 / 4.0))).collect();
+        let mids = vec![0.3, 0.5, 0.7, 0.5, 0.5, 0.4, 0.5, 0.6, 0.5];
+        for method in [GradientMethod::Classic, GradientMethod::Perceptual, GradientMethod::Linear, GradientMethod::Smooth] {
+            let blend = GradientBlend { method, smoothness: 0.75 };
+            let mut f = Fill::gradient(stops.clone(), 90.0, 1.0, GradientStyle::Linear, false);
+            if let Fill::Gradient { midpoints, blend: b, opacity_stops, opacity_midpoints, .. } = &mut f {
+                *midpoints = mids.clone();
+                *b = blend;
+                *opacity_stops = vec![(0.0, 1.0), (0.5, 0.2), (1.0, 0.9)];
+                *opacity_midpoints = vec![0.25, 0.5];
+            }
+            let (k, data) = super::write_fill(&f);
+            let back = super::parse_fill(&k, &data).unwrap();
+            let Fill::Gradient { stops: s2, midpoints: m2, blend: b2, opacity_stops: o2, opacity_midpoints: om2, .. } = &back else { panic!("gradient") };
+            assert_eq!(s2.len(), 10, "{method:?}: the 10 stops, not baked ones");
+            assert_eq!(b2.method, method);
+            assert!((b2.smoothness - 0.75).abs() < 1e-3, "{method:?}: {}", b2.smoothness);
+            assert!(m2.iter().zip(&mids).all(|(a, b)| (a - b).abs() < 0.006), "{method:?}: {m2:?}");
+            assert_eq!(o2.len(), 3);
+            assert!((om2[0] - 0.25).abs() < 0.006, "{om2:?}");
+            // It renders as the baked stops render: the curve, not straight lines between stops.
+            let ramp = photocraft_compose::gradient_fill::Ramp::new(&back).unwrap();
+            let baked = crate::gradient_bake::bake(s2.clone(), m2, b2.smooth(), method);
+            for k in 0..=40 {
+                let t = k as f32 / 40.0;
+                let want = baked.windows(2).find(|w| t >= w[0].0 && t <= w[1].0).map(|w| {
+                    let u = (t - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
+                    let (a, b) = (w[0].1.to_rgb(), w[1].1.to_rgb());
+                    [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]
+                });
+                let got = ramp.sample(t);
+                let want = want.unwrap();
+                assert!((0..3).all(|c| (got[c] - want[c]).abs() < 1e-3), "{method:?} at {t}: {got:?} vs {want:?}");
+            }
+            // And saves back the same.
+            let (k2, data2) = super::write_fill(&back);
+            assert_eq!(super::parse_fill(&k2, &data2).as_ref(), Some(&back), "{method:?}");
+        }
+    }
+
     /// psd-tools layers-minimal/gradient-fill.psd ("Color to Transparent", no stored pixels): a
     /// gradient fill's opacity stops reach the model (as its opacity stops; written from stop
     /// alpha) and survive a write; the ramp's alpha follows them.
@@ -1155,6 +1223,8 @@ mod tests {
                 offset: (0.125, -0.375),
                 dither: true,
                 align: false,
+                blend: Default::default(),
+                opacity_midpoints: Vec::new(),
             },
             Fill::Pattern { name: "Bubbles".into(), scale: 0.5, id: "abc".into(), angle: 30.0, link: false, phase: (3.0, -2.0) },
         ] {

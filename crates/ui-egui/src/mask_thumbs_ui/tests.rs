@@ -886,3 +886,24 @@ fn the_second_mask_has_a_thumbnail_that_targets_it() {
     let l = layer(&h, masked);
     assert!(l.second_mask.is_none() && l.vector_mask.is_some());
 }
+
+/// User report: a Solid Color layer's colour square sometimes couldn't be clicked. With the mask
+/// targeted, the Channels side targets the layer mask too, and that target put the mask back
+/// right after the click. Clicking the colour square now targets the layer's colour.
+#[test]
+fn the_colour_square_wins_over_a_mask_targeted_from_the_channels() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let fill = s.execute("layer.newFillLayer.solidColor", json!({"color": "#3366cc"})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    h.state_mut().run("channel.target.layerMask", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().ui.mask_target, "the mask is targeted");
+    let rows = crate::layer_row_ui::recorded(&h.ctx);
+    let square = rows.iter().find(|r| r.layer == fill).and_then(|r| r.thumbnail).expect("the colour square is drawn");
+    click_with(&mut h, square.center(), Modifiers::NONE);
+    h.run_steps(2);
+    assert!(!h.state().ui.mask_target, "the colour square is targeted");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
+}
+

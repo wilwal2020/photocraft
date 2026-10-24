@@ -888,7 +888,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // (Preferences), then search (Edit › Search), and narrows the switcher
                     // (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
+                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 4.0 * ICON_SLOT {
+                        4
+                    } else if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
                     } else if room >= WORKSPACE_MIN + ICON_SLOT {
                         1
@@ -917,6 +919,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::prefs_ui::cycle_appearance(app, ui.ctx());
                         }
                         button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
+                    }
+                    // Timelapse: Export, and Record left of it (user request), dropped first
+                    // when the bar is narrow (also in File › Timelapse).
+                    if icons_shown >= 4 {
+                        crate::timelapse_ui::title_buttons(app, ui);
                     }
                     if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
                 };
@@ -3362,6 +3369,15 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.mask_target = p.as_bool().unwrap_or(false);
             app.ui.second_mask_target = false;
             app.ui.vector_mask_target = false;
+            // The layer thumbnail wins over a mask targeted from the Channels side (⌘\): that
+            // target put the mask back right away (user report: a Solid Color's colour square
+            // sometimes couldn't be clicked).
+            if !app.ui.mask_target
+                && let Some(st) = app.session.active_mut()
+                && st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
+            {
+                st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+            }
             app.sync_mask_targets();
             continue;
         }

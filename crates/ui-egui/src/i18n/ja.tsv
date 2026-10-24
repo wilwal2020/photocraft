@@ -4473,3 +4473,11 @@ curves	Smooth	スムーズ
 # Remove tool AI Outpaint (2026-10-24)
 	AI Outpaint	AI 拡張
 	Continue the picture into what is selected with Nano Banana, past a panel's border	Nano Banana で選択範囲に絵を続けて描く（コマ枠の外まで）
+# Title bar timelapse buttons (2026-10-24)
+	Export the timelapse of this document	このドキュメントのタイムラプスを書き出す
+	Export timelapse	タイムラプスを書き出し
+	Nothing recorded for this document yet.	このドキュメントはまだ記録されていません。
+	Paused: click to resume recording	一時停止中: クリックで記録を再開
+	Recording: click to pause	記録中: クリックで一時停止
+	Start recording a timelapse	タイムラプスの記録を開始
+	Timelapse recording	タイムラプスの記録
