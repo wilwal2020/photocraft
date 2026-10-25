@@ -237,6 +237,15 @@ fn main() {
     // ---- filters / adjustments / layers ------------------------------------------------------
     select(&mut s, 0);
     for radius in [4.0, 40.0, 250.0] {
+        // The command alone (filter, history snapshot, damage), without the canvas refresh.
+        b.time(&format!("Gaussian Blur r {radius} (photo layer), command only"), |b| {
+            let t = Instant::now();
+            exec(&mut s, "filter.blur.gaussianBlur", json!({"radius": radius}));
+            let v = ms(t);
+            exec(&mut s, "edit.undo", json!({}));
+            b.refresh(&s, false);
+            v
+        });
         b.time(&format!("Gaussian Blur r {radius} (photo layer) + refresh"), |b| {
             let t = Instant::now();
             exec(&mut s, "filter.blur.gaussianBlur", json!({"radius": radius}));

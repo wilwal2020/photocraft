@@ -3887,3 +3887,12 @@ cameraRaw	Red Primary	Primer merah
 cameraRaw	Refine Saturation	Perhalus saturasi
 cameraRaw	Treatment & Profile	Perlakuan & Profil
 cameraRaw	White Balance	Keseimbangan putih
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Lapisan referensi: pilih layer agar tidak masuk timelapse
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Lapisan referensi: tidak direkam dalam timelapse. Klik untuk menjadikannya layer biasa
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	Jadikan layer yang dipilih lapisan referensi: berfungsi seperti biasa tetapi tidak muncul di timelapse
+	Exporting the timelapse. Click to cancel	Timelapse sedang diekspor. Klik untuk membatalkan
+	Timelapse export progress	Kemajuan ekspor timelapse
+	Highlight on Rollover	Sorot saat diarahkan
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	Beri garis tepi di kanvas pada layer di bawah penunjuk, atau yang diarahkan di panel Layer

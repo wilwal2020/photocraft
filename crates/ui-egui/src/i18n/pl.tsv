@@ -4481,3 +4481,12 @@ cameraRaw	Red Primary	Kolor podstawowy czerwony
 cameraRaw	Refine Saturation	Doprecyzuj nasycenie
 cameraRaw	Treatment & Profile	Obróbka i profil
 cameraRaw	White Balance	Balans bieli
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Warstwa referencyjna: zaznacz warstwę, aby pominąć ją w timelapsie
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Warstwa referencyjna: nie jest nagrywana w timelapsie. Kliknij, aby zmienić ją w zwykłą warstwę
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	Zmień zaznaczoną warstwę w referencyjną: działa jak zwykle, ale nie pojawia się w timelapsie
+	Exporting the timelapse. Click to cancel	Trwa eksport timelapse'u. Kliknij, aby anulować
+	Timelapse export progress	Postęp eksportu timelapse'u
+	Highlight on Rollover	Podświetlaj po najechaniu
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	Obrysuj na obszarze roboczym warstwę pod wskaźnikiem lub wskazaną w panelu Warstwy

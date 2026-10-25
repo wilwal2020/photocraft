@@ -4822,3 +4822,12 @@ cameraRaw	Red Primary	Primario rojo
 cameraRaw	Refine Saturation	Refinar saturación
 cameraRaw	Treatment & Profile	Tratamiento y perfil
 cameraRaw	White Balance	Balance de blancos
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Capa de referencia: selecciona una capa para dejarla fuera del timelapse
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Capa de referencia: no se graba en el timelapse. Haz clic para convertirla en una capa normal
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	Convertir la capa seleccionada en capa de referencia: funciona como siempre, pero no aparece en el timelapse
+	Exporting the timelapse. Click to cancel	Exportando el timelapse. Haz clic para cancelar
+	Timelapse export progress	Progreso de la exportación del timelapse
+	Highlight on Rollover	Resaltar al pasar el puntero
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	Contornear en el lienzo la capa bajo el puntero o la señalada en el panel Capas

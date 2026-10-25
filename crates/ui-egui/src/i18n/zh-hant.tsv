@@ -3500,3 +3500,12 @@ cameraRaw	Red Primary	紅原色
 cameraRaw	Refine Saturation	微調飽和度
 cameraRaw	Treatment & Profile	處理方式和描述檔
 cameraRaw	White Balance	白平衡
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	參考圖層：選取一個圖層，使其不出現在縮時錄影中
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	參考圖層：不會錄入縮時錄影。按一下可變回一般圖層
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	將選取的圖層設為參考圖層：功能如常，但不會出現在縮時錄影中
+	Exporting the timelapse. Click to cancel	正在匯出縮時錄影。按一下可取消
+	Timelapse export progress	縮時錄影匯出進度
+	Highlight on Rollover	滑過時醒目提示
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	在畫布上為指標下方的圖層或在「圖層」面板中指向的圖層描出輪廓

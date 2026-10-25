@@ -2594,8 +2594,18 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let mode = view.c.x;
     var col: vec4<f32>;
     if (mode < 0.5) {
-        // Zoomed out: trilinear through the mip chain.
-        col = textureSampleLevel(tex, samp, t / size, view.c.y);
+        // Zoomed out: a box the size of one screen pixel's footprint, averaged on the sharper of
+        // the two mip levels around the zoom (four bilinear taps). Blending in the coarser level,
+        // as trilinear filtering does, softened the image against Photoshop's (user report).
+        let lod = max(view.c.y, 0.0);
+        let level = min(floor(lod), f32(textureNumLevels(tex) - 1u));
+        let dims = vec2<f32>(textureDimensions(tex, u32(level)));
+        let o = vec2(0.25 * exp2(lod - level)) / dims;
+        let uv = t / size;
+        col = 0.25 * (textureSampleLevel(tex, samp, uv + vec2(-o.x, -o.y), level)
+            + textureSampleLevel(tex, samp, uv + vec2(o.x, -o.y), level)
+            + textureSampleLevel(tex, samp, uv + vec2(-o.x, o.y), level)
+            + textureSampleLevel(tex, samp, uv + vec2(o.x, o.y), level));
     } else if (mode < 1.5) {
         col = textureSampleLevel(tex, samp, t / size, 0.0);
     } else {

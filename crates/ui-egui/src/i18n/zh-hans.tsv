@@ -3536,3 +3536,12 @@ cameraRaw	Red Primary	红原色
 cameraRaw	Refine Saturation	细化饱和度
 cameraRaw	Treatment & Profile	处理方式和配置文件
 cameraRaw	White Balance	白平衡
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	参考图层：选择一个图层，使其不出现在延时录像中
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	参考图层：不会录入延时录像。单击可变回普通图层
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	将所选图层设为参考图层：功能照常，但不会出现在延时录像中
+	Exporting the timelapse. Click to cancel	正在导出延时录像。单击可取消
+	Timelapse export progress	延时录像导出进度
+	Highlight on Rollover	滑过时高亮
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	在画布上为指针下方的图层或在“图层”面板中指向的图层描出轮廓

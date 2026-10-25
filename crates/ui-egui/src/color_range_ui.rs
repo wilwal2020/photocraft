@@ -208,6 +208,8 @@ pub struct Preview {
     overlay: Option<egui::TextureHandle>,
     overlay_key: u64,
     overlay_job: Option<Job>,
+    /// The size of the proxy the running (or last started) overlay job works on.
+    overlay_job_size: [usize; 2],
 }
 
 fn hash(text: &str) -> u64 {
@@ -442,6 +444,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
             overlay: None,
             overlay_key: 0,
             overlay_job: None,
+            overlay_job_size: [0, 0],
         });
     }
     let image_view = (s(f, "__view", "selection") == "image") ^ ctx.input(|i| i.modifiers.command || (!cfg!(target_os = "macos") && i.modifiers.ctrl));
@@ -731,24 +734,35 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
     }
     // Refresh the document/revision cache before borrowing its canvas proxy.
     let _ = preview(app, ctx, &fields);
-    if app.color_range.as_ref().is_some_and(|p| p.canvas_proxy.is_none()) {
+    let Some(side) = app.session.active().map(|st| st.doc.size.width.max(st.doc.size.height).max(1)) else { return };
+    // The first overlay comes from a small proxy at once; then one as sharp as the view shows it.
+    let first = app.color_range.as_ref().is_none_or(|p| p.overlay.is_none());
+    let max_side = ctx.input(|i| i.max_texture_side).max(256) as u32;
+    let k = if first { side.div_ceil(CANVAS_PREVIEW) } else { canvas_scale(side, image.width().max(image.height()) * ctx.pixels_per_point(), max_side) };
+    if !app.color_range.as_ref().is_some_and(|p| p.canvas_proxy.as_ref().is_some_and(|c| c.0 == k)) {
         let Some(original) = app.session.active().map(|st| st.doc.clone()) else { return };
-        let k = original.size.width.max(original.size.height).max(1).div_ceil(CANVAS_PREVIEW);
         let proxy = Arc::new(crate::proxy::proxy_document(&original, k));
         if let Some(p) = app.color_range.as_mut() {
             p.canvas_proxy = Some((k, proxy, Composite::default()));
         }
     }
     let params = params(&fields);
-    let key = (query_key(app, &params) ^ hash(mode)).max(1);
+    let key = (query_key(app, &params) ^ hash(mode) ^ u64::from(k).rotate_left(32)).max(1);
     let Some((k, proxy, composite)) = app.color_range.as_ref().and_then(|p| p.canvas_proxy.clone()) else { return };
     let step = {
         let Some(p) = app.color_range.as_mut() else { return };
         let (shown, first) = (p.overlay_key, p.overlay.is_none());
         let mut job = p.overlay_job.take();
-        let step = step_mask(&mut job, shown, first, key, ctx, || mask_job(app, proxy.clone(), k, &params, composite));
+        let mut started = None;
+        let step = step_mask(&mut job, shown, first, key, ctx, || {
+            started = Some([proxy.size.width as usize, proxy.size.height as usize]);
+            mask_job(app, proxy.clone(), k, &params, composite)
+        });
         if let Some(p) = app.color_range.as_mut() {
             p.overlay_job = job;
+            if let Some(size) = started {
+                p.overlay_job_size = size;
+            }
         }
         step
     };
@@ -760,7 +774,8 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
                 return;
             }
         };
-        let size = [proxy.size.width as usize, proxy.size.height as usize];
+        // The size of the proxy the finished job worked on (the view may have zoomed since).
+        let size = app.color_range.as_ref().map_or([0, 0], |p| p.overlay_job_size);
         if mask.len() != size[0] * size[1] {
             report(app, Some(format!("the selection preview has {} pixels, expected {}", mask.len(), size[0] * size[1])));
             return;
@@ -779,6 +794,17 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
         let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)) };
         painter.image(tex.id(), image, uv, Color32::WHITE);
     }
+}
+
+/// The canvas overlay's proxy scale for a document whose long side is `side` pixels, shown
+/// `screen` device pixels long: about one proxy pixel per screen pixel (full resolution once
+/// zoomed to 100 % or closer), in powers of two so zooming rebuilds it only now and then, and
+/// never larger than a texture may be.
+fn canvas_scale(side: u32, screen: f32, max_texture_side: u32) -> u32 {
+    let screen = if screen.is_finite() { screen.max(1.0) } else { 1.0 };
+    let wanted = (side as f32 / screen).floor().max(1.0) as u32;
+    let k = 1u32 << (31 - wanted.leading_zeros()).min(30);
+    k.max(side.div_ceil(max_texture_side.max(1))).max(1)
 }
 
 /// The top dialog's fields when it is Color Range in a mode that takes eyedropper samples.
@@ -1100,6 +1126,18 @@ mod tests {
         assert_eq!(mask[5 * 40 + 25], 0.0, "but the preview stays within the selection");
         assert!(pick_top(&mut app, [5.0, 5.0], egui::Modifiers::NONE));
         assert_eq!(points(&app.ui.dialogs.last().unwrap().fields, "points"), vec![[5.0, 5.0]]);
+    }
+
+    #[test]
+    fn the_canvas_preview_is_as_sharp_as_the_view() {
+        // A 6000-pixel image fitted into 1500 screen pixels: a quarter-size proxy; at 100 % and
+        // closer, full resolution; never past the texture limit; odd sizes stay sane.
+        assert_eq!(canvas_scale(6000, 1500.0, 16384), 4);
+        assert_eq!(canvas_scale(6000, 1200.0, 16384), 4, "powers of two: 5 rounds down to 4");
+        assert_eq!(canvas_scale(6000, 6000.0, 16384), 1);
+        assert_eq!(canvas_scale(6000, 24000.0, 16384), 1);
+        assert_eq!(canvas_scale(20000, 40000.0, 8192), 3);
+        assert_eq!(canvas_scale(1, f32::NAN, 0), 1);
     }
 
     #[test]

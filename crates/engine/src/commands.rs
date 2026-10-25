@@ -468,7 +468,7 @@ fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Res
 
 /// A layer made above `active` joins its clipping group: `active` is clipped, and the new layer
 /// goes above it rather than inside it (an open group takes it in).
-fn joins_clipping_group(doc: &Document, active: Option<LayerId>) -> bool {
+pub(crate) fn joins_clipping_group(doc: &Document, active: Option<LayerId>) -> bool {
     active.and_then(|a| doc.layer(a)).is_some_and(|a| a.clipped && !matches!(&a.content, LayerContent::Group(g) if g.expanded))
 }
 
@@ -1095,7 +1095,12 @@ fn build() -> Vec<CommandSpec> {
                             doc.remove(empty);
                             id
                         }
-                        None => doc.insert_new(*active, l),
+                        None => {
+                            // Made on a clipped layer, the fill joins its clipping group (user
+                            // request), as a new adjustment layer does.
+                            l.clipped = joins_clipping_group(doc, *active);
+                            doc.insert_new(*active, l)
+                        }
                     };
                     *active = Some(id);
                     Ok(id)
@@ -1128,6 +1133,7 @@ fn build() -> Vec<CommandSpec> {
                     .in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
+                    l.clipped = joins_clipping_group(doc, *active);
                     let id = doc.insert_new(*active, l);
                     *active = Some(id);
                     Ok(id)

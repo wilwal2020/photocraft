@@ -43,65 +43,87 @@ pub(crate) fn conv_sep(src: &Image, out: Rect, kx: &[f32], ky: &[f32], alpha: bo
     let ww = win.width() as usize;
     let mut p = vec![0.0f32; ww * win.height() as usize * n];
     for y in win.y0..win.y1 {
+        let o = (y - win.y0) as usize * ww * n;
+        let line = Rect::new(win.x0, y, win.x1, y + 1);
+        // Rows inside the image are copied whole; a sample at a time (transparent outside) only
+        // where the window leaves it: the per-sample reads were a quarter of a small blur's time.
+        if src.rect.contains_rect(&line) {
+            p[o..o + ww * n].copy_from_slice(src.row(line));
+            continue;
+        }
         for x in win.x0..win.x1 {
-            let o = ((y - win.y0) as usize * ww + (x - win.x0) as usize) * n;
+            let o = o + (x - win.x0) as usize * n;
             for c in 0..n {
                 p[o + c] = src.get(x, y, c);
             }
         }
     }
     premultiply(&mut p, n, alpha);
-    // Horizontal pass: (ow × th).
+    // Horizontal pass: (ow × th), each row as one flat run of interleaved samples, so the
+    // compiler vectorises across pixels and channels alike.
     let mut tmp = vec![0.0f32; ow * th * n];
     for ty in 0..th {
         let row = &p[ty * ww * n..(ty + 1) * ww * n];
         let dst = &mut tmp[ty * ow * n..(ty + 1) * ow * n];
-        match n {
-            1 => conv_row::<1>(row, dst, kx),
-            2 => conv_row::<2>(row, dst, kx),
-            3 => conv_row::<3>(row, dst, kx),
-            4 => conv_row::<4>(row, dst, kx),
-            5 => conv_row::<5>(row, dst, kx),
-            _ => {
-                for ox in 0..ow {
-                    let d = &mut dst[ox * n..(ox + 1) * n];
-                    for (i, kv) in kx.iter().enumerate() {
-                        let s = &row[(ox + i) * n..(ox + i + 1) * n];
-                        for c in 0..n {
-                            d[c] += s[c] * kv;
-                        }
-                    }
+        conv_flat(row, dst, kx, n);
+    }
+    // Vertical pass, a run of samples at a time summed in registers rather than in the output
+    // row once per tap.
+    let stride = ow * n;
+    let mut res = vec![0.0f32; stride * oh];
+    for oy in 0..oh {
+        let d = &mut res[oy * stride..(oy + 1) * stride];
+        for (k, run) in d.chunks_mut(RUN).enumerate() {
+            let (x0, len) = (k * RUN, run.len());
+            let mut acc = [0.0f32; RUN];
+            for (i, kv) in ky.iter().enumerate() {
+                let at = (oy + i) * stride + x0;
+                for (a, sv) in acc.iter_mut().zip(&tmp[at..at + len]) {
+                    *a += sv * kv;
                 }
             }
-        }
-    }
-    // Vertical pass.
-    let mut res = vec![0.0f32; ow * oh * n];
-    for oy in 0..oh {
-        let d = &mut res[oy * ow * n..(oy + 1) * ow * n];
-        for (i, kv) in ky.iter().enumerate() {
-            let s = &tmp[(oy + i) * ow * n..(oy + i + 1) * ow * n];
-            for (dv, sv) in d.iter_mut().zip(s) {
-                *dv += sv * kv;
-            }
+            run.copy_from_slice(&acc[..len]);
         }
     }
     unpremultiply(&mut res, n, alpha);
     res
 }
 
-// Fixed channel counts let LLVM keep one pixel's accumulators in registers and vectorize
-// channels. The tap order is unchanged; unusual multichannel images keep the generic path.
-fn conv_row<const N: usize>(src: &[f32], dst: &mut [f32], kernel: &[f32]) {
-    let pixels = src.as_chunks::<N>().0;
-    for (x, out) in dst.as_chunks_mut::<N>().0.iter_mut().enumerate() {
-        let mut acc = [0.0f32; N];
-        for (pixel, weight) in pixels.get(x..).unwrap_or(&[]).iter().zip(kernel) {
-            for c in 0..N {
-                acc[c] += pixel[c] * weight;
+/// Samples a [`conv_flat`] or vertical-pass run sums in registers at once.
+const RUN: usize = 32;
+
+/// One row of a separable convolution over interleaved pixels of `n` samples: `dst[j]` is the
+/// sum over taps `i` of `kernel[i] · src[j + i·n]` (`src` is `kernel.len() − 1` pixels longer).
+/// A run of samples is summed in registers over all the taps, and a symmetric kernel adds the two
+/// samples at the same distance before multiplying, which halves the work of the exact
+/// small-radius blurs. Sums group differently from a pixel-at-a-time loop, so results can differ
+/// from one in the last bits.
+fn conv_flat(src: &[f32], dst: &mut [f32], kernel: &[f32], n: usize) {
+    let r = kernel.len() / 2;
+    let symmetric = kernel.len() % 2 == 1 && kernel.iter().zip(kernel.iter().rev()).all(|(a, b)| a == b);
+    let at = |from: usize, len: usize| src.get(from..from + len).unwrap_or(&[]);
+    for (k, run) in dst.chunks_mut(RUN).enumerate() {
+        let (j0, len) = (k * RUN, run.len());
+        let mut acc = [0.0f32; RUN];
+        if symmetric {
+            let centre = kernel.get(r).copied().unwrap_or(0.0);
+            for (a, v) in acc.iter_mut().zip(at(j0 + r * n, len)) {
+                *a = v * centre;
+            }
+            for (i, weight) in kernel.iter().take(r).enumerate() {
+                let (near, far) = (at(j0 + i * n, len), at(j0 + (2 * r - i) * n, len));
+                for ((a, x), y) in acc.iter_mut().zip(near).zip(far) {
+                    *a += (x + y) * weight;
+                }
+            }
+        } else {
+            for (i, weight) in kernel.iter().enumerate() {
+                for (a, v) in acc.iter_mut().zip(at(j0 + i * n, len)) {
+                    *a += v * weight;
+                }
             }
         }
-        *out = acc;
+        run.copy_from_slice(&acc[..len]);
     }
 }
 
@@ -234,6 +256,78 @@ fn line_passes(dst: &mut [f32], w: usize, radii: &[usize], s: &mut Scratch, ctl:
     }
 }
 
+/// One running-sum box pass of a [`column_passes`] cascade: the last `2r + 1` rows it took (a ring)
+/// and their sum.
+struct Stage {
+    size: usize,
+    norm: f32,
+    ring: Vec<f32>,
+    acc: Vec<f32>,
+    taken: usize,
+}
+
+/// Box passes of the given radii in turn down a column strip of `w`-float rows, streamed: row `y`
+/// of the extended input (`top` copies of row 0, the `rows` rows `row(0 .. rows)`, `bottom` copies
+/// of the last) goes through every pass at once, each holding only its last `2r + 1` rows. The
+/// whole-column lines [`line_passes`] sweeps once per pass made the vertical passes memory-bound
+/// (about 3 GB moved for a 24 MP blur, three quarters of its time); this reads the strip once and
+/// writes `out` (`out.len() / w` rows) once. Stops early when `ctl` is cancelled.
+#[allow(clippy::too_many_arguments)]
+fn column_passes<'a>(row: &dyn Fn(usize) -> &'a [f32], top: usize, rows: usize, bottom: usize, w: usize, radii: &[usize], out: &mut [f32], ctl: &Interrupt) {
+    let Some(oh) = out.len().checked_div(w) else { return };
+    if rows == 0 || oh == 0 {
+        return;
+    }
+    let mut stages: Vec<Stage> = radii
+        .iter()
+        .map(|&r| {
+            let size = 2 * r + 1;
+            Stage { size, norm: 1.0 / size as f32, ring: vec![0.0; size * w], acc: vec![0.0; w], taken: 0 }
+        })
+        .collect();
+    let (mut cur, mut made) = (vec![0.0f32; w], 0usize);
+    for y in 0..top + rows + bottom {
+        if y % 256 == 0 && ctl.cancelled() {
+            return;
+        }
+        let input = row(y.saturating_sub(top).min(rows - 1));
+        cur.copy_from_slice(input);
+        let mut through = true;
+        for st in &mut stages {
+            let slot = (st.taken % st.size) * w;
+            let old = &mut st.ring[slot..slot + w];
+            if st.taken >= st.size {
+                for ((a, o), c) in st.acc.iter_mut().zip(old.iter_mut()).zip(&cur) {
+                    *a += c - *o;
+                    *o = *c;
+                }
+            } else {
+                for ((a, o), c) in st.acc.iter_mut().zip(old.iter_mut()).zip(&cur) {
+                    *a += c;
+                    *o = *c;
+                }
+            }
+            st.taken += 1;
+            if st.taken < st.size {
+                through = false;
+                break;
+            }
+            for (c, a) in cur.iter_mut().zip(&st.acc) {
+                *c = a * st.norm;
+            }
+        }
+        if through {
+            if let Some(dst) = out.get_mut(made * w..(made + 1) * w) {
+                dst.copy_from_slice(&cur);
+            }
+            made += 1;
+            if made == oh {
+                return;
+            }
+        }
+    }
+}
+
 /// Rows of the horizontal passes handed to one worker (they share its scratch buffers).
 const ROWS_PER_TASK: usize = 8;
 /// Width in pixels of the column strips the vertical passes work on (a divisor of the tile size).
@@ -299,13 +393,9 @@ pub(crate) fn box_blur(
             return (t, Vec::new());
         }
         let (sx, w) = ((t.x0 - out.x0) as usize * n, t.width() as usize * n);
-        let row = |y: usize| &h[y * stride + sx..y * stride + sx + w];
-        let mut s = Scratch::default();
-        (0..top).for_each(|_| s.line.extend_from_slice(row(0)));
-        (0..rows).for_each(|y| s.line.extend_from_slice(row(y)));
-        (0..bottom).for_each(|_| s.line.extend_from_slice(row(rows - 1)));
+        let row = |y: usize| h.get(y * stride + sx..y * stride + sx + w).unwrap_or(&[]);
         let mut res = vec![0.0f32; oh * w];
-        line_passes(&mut res, w, &radii, &mut s, ctl);
+        column_passes(&row, top, rows, bottom, w, &radii, &mut res, ctl);
         if ctl.cancelled() {
             return (t, Vec::new());
         }
@@ -837,11 +927,11 @@ mod tests {
     }
 
     #[test]
-    fn fixed_channel_convolution_matches_scalar_tap_order() {
+    fn flat_convolution_matches_the_scalar_sum() {
         fn check<const N: usize>() {
-            for width in [1, 7, 256] {
-                for radius in [0.0, 0.5, 3.0, 4.0] {
-                    let k = gaussian_kernel(radius);
+            for width in [1, 7, 33, 256] {
+                for kernel in [gaussian_kernel(0.0), gaussian_kernel(0.5), gaussian_kernel(3.0), gaussian_kernel(4.0), vec![0.1, 0.5, 0.25, 0.15]] {
+                    let k = kernel;
                     let src: Vec<f32> = (0..(width + k.len() - 1) * N).map(|i| ((i * 73) % 251) as f32 / 250.0).collect();
                     let mut expected = vec![0.0f32; width * N];
                     for x in 0..width {
@@ -852,8 +942,9 @@ mod tests {
                         }
                     }
                     let mut actual = vec![0.0f32; width * N];
-                    conv_row::<N>(&src, &mut actual, &k);
-                    assert_eq!(actual, expected, "channels={N} width={width} radius={radius}");
+                    conv_flat(&src, &mut actual, &k, N);
+                    let worst = actual.iter().zip(&expected).map(|(a, e)| (a - e).abs()).fold(0.0f32, f32::max);
+                    assert!(worst < 1e-5, "channels={N} width={width} taps={}: off by {worst}", k.len());
                 }
             }
         }

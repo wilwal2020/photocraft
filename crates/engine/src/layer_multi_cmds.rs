@@ -3293,6 +3293,31 @@ mod layers_panel_parity_tests {
         assert!(!s.active().unwrap().doc.layer(adj).unwrap().clipped, "on a layer that isn't clipped");
     }
 
+    /// User request: a fill layer made on a clipped layer (with pixels, so it goes above) is
+    /// clipped too; on a layer that isn't clipped, it isn't.
+    #[test]
+    fn a_fill_layer_made_on_a_clipped_layer_is_clipped() {
+        let (mut s, ids) = new_session();
+        s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
+        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+        s.execute("layer.createClippingMask", json!({})).unwrap();
+        for (cmd, p) in [
+            ("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})),
+            ("layer.newFillLayer.gradient", json!({})),
+            ("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard"})),
+        ] {
+            s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
+            let fill = LayerId(s.execute(cmd, p.clone()).unwrap()["layer"].as_u64().unwrap());
+            let doc = &s.active().unwrap().doc;
+            assert!(doc.layer(ids[1]).is_some(), "{cmd}: a layer with pixels stays");
+            assert!(doc.layer(fill).unwrap().clipped, "{cmd} on a clipped layer");
+        }
+        s.execute("layer.select", json!({"layer": ids[2].0})).unwrap();
+        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+        let fill = LayerId(s.execute("layer.newFillLayer.solidColor", json!({})).unwrap()["layer"].as_u64().unwrap());
+        assert!(!s.active().unwrap().doc.layer(fill).unwrap().clipped, "on a layer that isn't clipped");
+    }
+
     /// User request: Solid Color on an empty layer takes its place (one step, undone whole); on a
     /// layer with pixels, the Background, or an empty layer with a mask it goes above, as before.
     #[test]

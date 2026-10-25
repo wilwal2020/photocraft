@@ -237,7 +237,12 @@ impl CameraRawDialog {
         }
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
-        self.processed = frame.px;
+        // The frame it replaces goes back to the develop to write the next one into (unless a
+        // develop is using the cache right now: never wait for it here).
+        let old = std::mem::replace(&mut self.processed, frame.px);
+        if let Ok(mut cache) = self.cache.try_lock() {
+            cache.recycle(old);
+        }
         self.draft_shown = !frame.exact;
         (self.shown_params, self.shown_context) = (frame.params, frame.context);
         self.scope.cache = None;

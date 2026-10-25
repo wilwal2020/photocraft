@@ -835,11 +835,11 @@ pub fn develop_region(
     let (lk, pk) = (LightKey::of(p), PresenceKey::of(p));
     if !cache.presence.as_ref().is_some_and(|(k, _, _)| *k == pk) {
         let mut px = match &cache.light {
-            Some((k, v)) if *k == lk => v.clone(),
+            Some((k, v)) if *k == lk => par_copy(v),
             _ => {
-                let mut px = src.to_vec();
+                let mut px = par_copy(src);
                 light(&mut px, w, h, p, None, frame, Some(context), None);
-                cache.light = Some((lk, px.clone()));
+                cache.light = Some((lk, par_copy(&px)));
                 px
             }
         };
@@ -918,6 +918,19 @@ pub struct DevelopCache {
     light: Option<(LightKey, Vec<[f32; 4]>)>,
     presence: Option<(PresenceKey, Vec<[f32; 4]>, std::sync::Arc<Context>)>,
     tone: local_tone::Cache,
+    /// The settings of the last [`develop_cached`] call, to tell a stage being dragged.
+    seen: Option<LightKey>,
+    seen_presence: Option<PresenceKey>,
+    /// A finished result handed back ([`DevelopCache::recycle`]) for the next one to reuse.
+    spare: Option<Vec<[f32; 4]>>,
+}
+
+impl DevelopCache {
+    /// Hands back a result of [`develop_cached`] that is no longer shown, so the next develop
+    /// writes into it instead of a fresh allocation (whose page faults cost more than a stage).
+    pub fn recycle(&mut self, px: Vec<[f32; 4]>) {
+        self.spare = Some(px);
+    }
 }
 
 /// [`develop_cached`]'s pixels, whether they are exactly [`develop`]'s, and what it measured on
@@ -944,8 +957,13 @@ pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     let frame = Frame::whole(w, h);
     let (lk, pk) = (LightKey::of(p), PresenceKey::of(p));
     let mut exact = true;
+    // While a control is dragged (`draft`) a stage it changes isn't kept: the next step changes
+    // it again, and copying a proxy into the cache each step was a third of the step's time. A
+    // stage is kept once it holds still for a step (or outside a drag).
+    let (keep_light, keep_presence) = (!draft || cache.seen == Some(pk.light), !draft || cache.seen_presence == Some(pk));
+    (cache.seen, cache.seen_presence) = (Some(lk), Some(pk));
     let (mut px, context) = match &cache.presence {
-        Some((k, v, c)) if *k == pk => (v.clone(), c.clone()),
+        Some((k, v, c)) if *k == pk => (fresh(&mut cache.spare, v), c.clone()),
         _ => {
             let mut context = Context::default();
             // The light stages' measurements are taken again whenever they run (a cached result
@@ -955,27 +973,73 @@ pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
                     if let Some((_, _, c)) = &cache.presence {
                         (context.haze, context.tone) = (c.haze.clone(), c.tone.clone());
                     }
-                    v.clone()
+                    fresh(&mut cache.spare, v)
                 }
                 _ => {
-                    let mut px = src.to_vec();
+                    let mut px = fresh(&mut cache.spare, src);
                     exact = light(&mut px, w, h, p, Some((&mut cache.tone, tone_key(source, p), draft)), frame, None, Some(&mut context));
-                    if exact {
-                        cache.light = Some((lk, px.clone()));
+                    if exact && keep_light {
+                        match &mut cache.light {
+                            Some((k, v)) if v.len() == px.len() => {
+                                *k = lk;
+                                par_copy_into(v, &px);
+                            }
+                            slot => *slot = Some((lk, par_copy(&px))),
+                        }
                     }
                     px
                 }
             };
             presence(&mut px, w, h, p, frame, None, Some(&mut context));
             let context = std::sync::Arc::new(context);
-            if exact {
-                cache.presence = Some((pk, px.clone(), context.clone()));
+            if exact && keep_presence {
+                match &mut cache.presence {
+                    Some((k, v, c)) if v.len() == px.len() => {
+                        (*k, *c) = (pk, context.clone());
+                        par_copy_into(v, &px);
+                    }
+                    slot => *slot = Some((pk, par_copy(&px), context.clone())),
+                }
             }
             (px, context)
         }
     };
     finish(&mut px, w, h, p, float, frame);
     Developed { px, exact, context }
+}
+
+/// A copy of `px`, made in parallel: one thread copying a 4-megapixel proxy of floats took about
+/// as long as a whole tone stage.
+fn par_copy(px: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    let mut out = vec![[0.0f32; 4]; px.len()];
+    par_copy_into(&mut out, px);
+    out
+}
+
+/// A copy of `px` in `spare` when it has the length, else in a new buffer.
+fn fresh(spare: &mut Option<Vec<[f32; 4]>>, px: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    match spare.take() {
+        Some(mut v) if v.len() == px.len() => {
+            par_copy_into(&mut v, px);
+            v
+        }
+        _ => par_copy(px),
+    }
+}
+
+/// [`par_copy`] into a buffer of the same length that is kept (a fresh allocation of a proxy's
+/// size costs more in first-touch page faults than the copy itself).
+fn par_copy_into(out: &mut [[f32; 4]], px: &[[f32; 4]]) {
+    if out.len() != px.len() {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(1 << 15).zip(px.par_chunks(1 << 15)).for_each(|(d, s)| d.copy_from_slice(s));
+    }
+    #[cfg(target_arch = "wasm32")]
+    out.copy_from_slice(px);
 }
 
 /// What the Shadows and Highlights maps depend on besides those two sliders: the pixels and the
@@ -2000,6 +2064,34 @@ mod tests {
         // Odd input is returned as it is.
         assert_eq!(develop_cached(&src, w + 1, h, &base, false, 9, &mut cache, false).px, src);
         assert!(develop_cached(&[], 0, 0, &base, false, 9, &mut cache, false).px.is_empty());
+    }
+
+    /// A drag keeps out of the cache the stage it changes, and the stages that hold still go
+    /// back in: dragging Saturation after an Exposure drag reuses the toned image, and every step
+    /// is the plain develop's result.
+    #[test]
+    fn a_drag_keeps_only_the_stages_that_hold_still() {
+        let (w, h) = (24, 16);
+        let src: Vec<[f32; 4]> = (0..w * h).map(|i| [(i % w) as f32 / w as f32, (i / w) as f32 / h as f32, 0.4, 1.0]).collect();
+        let plain = |p: &CameraRaw| {
+            let mut a = src.clone();
+            develop(&mut a, w, h, p, false);
+            a
+        };
+        let mut cache = DevelopCache::default();
+        let step = |cache: &mut DevelopCache, p: &CameraRaw| {
+            let got = develop_cached(&src, w, h, p, false, 3, cache, true);
+            let worst = got.px.iter().flatten().zip(plain(p).iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst < 1e-5, "{p:?}: {worst}");
+        };
+        for e in [0.1, 0.2, 0.3] {
+            step(&mut cache, &CameraRaw { exposure: e, contrast: 10.0, ..Default::default() });
+            assert!(cache.light.is_none() && cache.presence.is_none(), "exposure {e}: a moving stage isn't kept");
+        }
+        for s in [10.0, 20.0, 30.0] {
+            step(&mut cache, &CameraRaw { exposure: 0.3, contrast: 10.0, saturation: s, ..Default::default() });
+        }
+        assert!(cache.presence.is_some(), "the still stages went back in");
     }
 
     #[test]

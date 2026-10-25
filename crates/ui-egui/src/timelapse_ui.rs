@@ -1257,7 +1257,68 @@ fn settings_view(ui: &mut Ui, t: &Tokens, settings: &Settings, ask: &mut Option<
 /// document: Record (idle, recording or paused; a click starts, pauses or resumes, as the panel's
 /// big button does) and Export (a small box under it with the length, the estimate and Export,
 /// as the panel's export box). Added to a right-to-left row: Export first, then Record left of it.
-pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui) {
+/// The title bar's reference-layer toggle: lit when every selected layer is a reference layer
+/// (kept out of the timelapse); a click makes them all reference layers, or all normal again.
+fn reference_button(app: &mut PhotocraftApp, ui: &mut Ui, ask: &mut Option<Ask>) {
+    let settings = app.session.timelapse_settings();
+    let (selected, refs) = app
+        .session
+        .active()
+        .map(|st| {
+            let tag = settings.reference_tag.to_lowercase();
+            let ids = st.selected_layers();
+            let refs = ids.iter().filter(|id| st.doc.layer(**id).is_some_and(|l| l.name.to_lowercase().contains(&tag))).count();
+            (ids.len(), refs)
+        })
+        .unwrap_or((0, 0));
+    let all = selected > 0 && refs == selected;
+    let tip = if selected == 0 {
+        tl!("Reference layer: select a layer to keep it out of the timelapse")
+    } else if all {
+        tl!("Reference layer: not recorded in the timelapse. Click to make it a normal layer")
+    } else {
+        tl!("Make the selected layer a reference layer: it works as usual but won't show up in the timelapse")
+    };
+    let b = ui.add_enabled_ui(selected > 0, |ui| crate::icons::button(ui, "layers", 28.0, all, tip)).inner;
+    if b.clicked() {
+        *ask = Some(Ask::Run(tc::REFERENCE, json!({"reference": !all})));
+    }
+}
+
+/// A running export in the title bar: a thin bar with its percentage; a click offers Cancel.
+fn progress_bar(ui: &mut Ui, t: &Tokens, id: photocraft_engine::jobs::JobId, progress: f32, ask: &mut Option<Ask>) {
+    let p = progress.clamp(0.0, 1.0);
+    let label = format!("{}%", (p * 100.0).round() as u32);
+    let (rect, resp) = ui.allocate_exact_size(vec2(PROGRESS_W, 28.0), Sense::click());
+    let resp = resp.on_hover_text(tl!("Exporting the timelapse. Click to cancel"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, tl!("Timelapse export progress")));
+    let painter = ui.painter();
+    let track = Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 3.0), vec2(PROGRESS_W - 34.0, 6.0));
+    painter.rect_filled(track, 3.0, t.field);
+    let mut bar = track;
+    bar.set_width(track.width() * p);
+    painter.rect_filled(bar, 3.0, t.accent);
+    painter.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, label, egui::FontId::proportional(11.0), t.text_dim);
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        if button(ui, t, tl!("Cancel export"), Look::Cancel, Icon::None, None, 26.0, true).clicked() {
+            *ask = Some(Ask::CancelJob(id));
+            egui::Popup::close_all(ui.ctx());
+        }
+    });
+}
+
+/// The running timelapse export's progress (0 … 1), if one runs.
+pub fn export_progress(app: &PhotocraftApp) -> Option<f32> {
+    app.session.jobs().into_iter().find(|j| j.command == tc::EXPORT && j.state == "running").map(|j| j.progress)
+}
+
+/// Width of the title bar's export progress bar (with its percentage).
+pub const PROGRESS_W: f32 = 74.0;
+
+/// The title bar's timelapse buttons: Export, Record and, with `more`, the reference-layer toggle
+/// and a running export's progress.
+pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui, more: bool) {
     let t = Tokens::get(ui.ctx());
     let status = app.session.timelapse_status();
     if status.get("available").and_then(Value::as_bool) == Some(false) {
@@ -1272,7 +1333,7 @@ pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui) {
 
     // Export, with its box.
     let job = app.session.jobs().into_iter().find(|j| j.command == tc::EXPORT && j.state == "running").map(|j| (j.id, j.progress));
-    let export = crate::icons::button(ui, "play", 28.0, false, tl!("Export timelapse"));
+    let export = crate::icons::button(ui, "share", 28.0, false, tl!("Export timelapse"));
     let export = export.on_hover_text(tl!("Export the timelapse of this document"));
     let settings = app.session.timelapse_settings();
     let estimate = estimate(app, &settings, &settings.export);
@@ -1363,6 +1424,12 @@ pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui) {
         // Not recording: a red ring around a small dot.
         p.circle_stroke(c, 7.0, Stroke::new(1.5, red));
         p.circle_filled(c, 3.5, red);
+    }
+    if more {
+        reference_button(app, ui, &mut ask);
+        if let Some((id, progress)) = job {
+            progress_bar(ui, &t, id, progress, &mut ask);
+        }
     }
     apply(app, ask);
     // Through the menu command, so the first recording asks for the recordings folder.

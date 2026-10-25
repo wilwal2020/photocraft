@@ -1208,13 +1208,64 @@ fn apply_tiled_with_impl(
         {
             return None;
         }
-        for (t, data) in results {
-            out.write_region(t, &data);
-        }
+        write_tiles(&mut out, results);
     }
     out.prune();
     ctl.progress(1.0);
     Some(out)
+}
+
+/// Writes filtered tiles into `out`, the surface's tile columns in parallel (the write turns
+/// floats back into the layer's samples, a third of a small blur's time when it ran on one
+/// thread). A result spanning two tile columns is split between them.
+fn write_tiles(out: &mut Surface, results: Vec<(Rect, Vec<f32>)>) {
+    /// A tile column's own surface and the pieces to write into it.
+    type Column = (Surface, Vec<(Rect, Vec<f32>)>);
+    use photocraft_geom::TILE_SIZE;
+    let n = out.format().channels().max(1);
+    let mut columns: std::collections::BTreeMap<i32, Vec<(Rect, Vec<f32>)>> = std::collections::BTreeMap::new();
+    for (t, data) in results {
+        if t.is_empty() {
+            continue;
+        }
+        let (c0, c1) = (t.x0.div_euclid(TILE_SIZE), (t.x1 - 1).div_euclid(TILE_SIZE));
+        if c0 == c1 {
+            columns.entry(c0).or_default().push((t, data));
+            continue;
+        }
+        let w = t.width() as usize * n;
+        for c in c0..=c1 {
+            let part = Rect::new(t.x0.max(c * TILE_SIZE), t.y0, t.x1.min((c + 1) * TILE_SIZE), t.y1);
+            let (from, pw) = ((part.x0 - t.x0) as usize * n, part.width() as usize * n);
+            let piece: Vec<f32> = data.chunks_exact(w).flat_map(|row| row.get(from..from + pw).unwrap_or(&[]).iter().copied()).collect();
+            columns.entry(c).or_default().push((part, piece));
+        }
+    }
+    let fmt = out.format();
+    let mut parts: Vec<Column> = columns
+        .into_values()
+        .map(|v| {
+            let r = v.iter().fold(Rect::EMPTY, |acc, (t, _)| if acc.is_empty() { *t } else { acc.union(t) });
+            let mut s = Surface::with_default(fmt, &out.default_pixel());
+            s.put_tiles(out.take_tiles(r));
+            (s, v)
+        })
+        .collect();
+    let write = |(s, v): &mut Column| {
+        for (t, data) in v.iter() {
+            s.write_region(*t, data);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        parts.par_iter_mut().for_each(write);
+    }
+    #[cfg(target_arch = "wasm32")]
+    parts.iter_mut().for_each(write);
+    for (s, _) in parts {
+        out.put_tiles(s.tiles().map(|(c, t)| (*c, t.clone())));
+    }
 }
 
 /// [`apply_tiled_with`] for the blurs run as box passes ([`blur::box_widths`]): the whole area at

@@ -5064,3 +5064,12 @@ cameraRaw	Red Primary	Основной красный
 cameraRaw	Refine Saturation	Уточнить насыщенность
 cameraRaw	Treatment & Profile	Обработка и профиль
 cameraRaw	White Balance	Баланс белого
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Опорный слой: выберите слой, чтобы исключить его из таймлапса
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Опорный слой: не записывается в таймлапс. Щёлкните, чтобы сделать его обычным слоем
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	Сделать выбранный слой опорным: он работает как обычно, но не появляется в таймлапсе
+	Exporting the timelapse. Click to cancel	Идёт экспорт таймлапса. Щёлкните, чтобы отменить
+	Timelapse export progress	Ход экспорта таймлапса
+	Highlight on Rollover	Подсветка при наведении
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	Обводить на холсте слой под указателем или слой, на который наведён указатель в панели «Слои»

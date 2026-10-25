@@ -4776,3 +4776,12 @@ cameraRaw	Red Primary	Vörös alapszín
 cameraRaw	Refine Saturation	Telítettség finomítása
 cameraRaw	Treatment & Profile	Kezelés és profil
 cameraRaw	White Balance	Fehéregyensúly
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Referenciaréteg: jelöljön ki egy réteget, hogy kimaradjon az időzített felvételből
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Referenciaréteg: nem kerül rögzítésre az időzített felvételben. Kattintson, hogy normál réteg legyen
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	A kijelölt réteg legyen referenciaréteg: a szokásos módon működik, de nem jelenik meg az időzített felvételben
+	Exporting the timelapse. Click to cancel	Az időzített felvétel exportálása folyamatban. Kattintson a megszakításhoz
+	Timelapse export progress	Az időzített felvétel exportálásának állapota
+	Highlight on Rollover	Kiemelés rámutatáskor
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	A mutató alatti réteg, illetve a Rétegek panelen rámutatott réteg körvonalazása a vásznon

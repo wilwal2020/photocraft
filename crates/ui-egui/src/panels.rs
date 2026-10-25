@@ -888,7 +888,10 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // (Preferences), then search (Edit › Search), and narrows the switcher
                     // (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 4.0 * ICON_SLOT {
+                    let progress_w = if crate::timelapse_ui::export_progress(app).is_some() { crate::timelapse_ui::PROGRESS_W + 6.0 } else { 0.0 };
+                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 5.0 * ICON_SLOT + progress_w {
+                        5
+                    } else if room >= WORKSPACE_MIN + 4.0 * ICON_SLOT {
                         4
                     } else if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
@@ -897,7 +900,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     } else {
                         0
                     };
-                    let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
+                    let extra = if icons_shown >= 5 { progress_w } else { 0.0 };
+                    let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - extra - 6.0).clamp(WORKSPACE_MIN, 130.0);
                     if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", &mut ws, &opts, ws_width) {
                         app.ui.workspace = ws;
                         crate::menus::apply_workspace(app);
@@ -920,10 +924,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                         button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
                     }
-                    // Timelapse: Export, and Record left of it (user request), dropped first
-                    // when the bar is narrow (also in File › Timelapse).
+                    // Timelapse: Export, Record left of it, then the reference-layer toggle and a
+                    // running export's progress (user requests), dropped first when the bar is
+                    // narrow (also in File › Timelapse and the Timelapse panel).
                     if icons_shown >= 4 {
-                        crate::timelapse_ui::title_buttons(app, ui);
+                        crate::timelapse_ui::title_buttons(app, ui, icons_shown >= 5);
                     }
                     if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
                 };
@@ -991,6 +996,18 @@ const TITLE_GAP: f32 = 16.0;
 /// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
 const WORKSPACE_MIN: f32 = 90.0;
 const ICON_SLOT: f32 = 34.0;
+
+/// Move tool › Highlight on Rollover: the outline of the layer under the pointer (or hovered in
+/// the Layers panel). It is Preferences › Tools › Show Highlight on Rollover itself, shown here
+/// too (user request), as Resize Windows to Fit is with the Zoom tool.
+fn rollover_highlight(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let mut on = app.session.prefs().tools.show_highlight_on_rollover;
+    let r = widgets::checkbox(ui, &mut on, tl!("Highlight on Rollover"))
+        .on_hover_text(tl!("Outline the layer under the pointer, or hovered in the Layers panel, on the canvas"));
+    if r.changed() {
+        app.session.prefs.edit(|p| p.tools.show_highlight_on_rollover = on);
+    }
+}
 
 /// Left edge for a title `width` wide: centred on `center` when it fits in the free gap from
 /// `left` to `right` (the menus' and the controls' facing edges, whichever side each is on),
@@ -1670,6 +1687,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         move_pick_from(ui, &mut o.move_pick_opacity);
                         widgets::vline(ui, 22.0);
                         widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
+                        rollover_highlight(app, ui);
                         widgets::vline(ui, 22.0);
                         crate::align_bar::options(app, ui);
                     }
@@ -1697,6 +1715,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // And Show Transform Controls (#5740): without it the box could not be
                         // turned on outside the Pro themes.
                         widgets::checkbox(ui, &mut app.ui.tool_options.move_show_transform, tl!("Show Transform Controls"));
+                        rollover_highlight(app, ui);
                         move_pick_from(ui, &mut app.ui.tool_options.move_pick_opacity);
                         hint(ui, tl!("Drag to move the active layer"));
                         widgets::vline(ui, 22.0);

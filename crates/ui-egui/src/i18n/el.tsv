@@ -4561,3 +4561,12 @@ cameraRaw	Red Primary	Κύριο κόκκινο
 cameraRaw	Refine Saturation	Βελτίωση κορεσμού
 cameraRaw	Treatment & Profile	Επεξεργασία και προφίλ
 cameraRaw	White Balance	Ισορροπία λευκού
+
+# Timelapse title bar: reference layer, export progress; Move tool rollover highlight
+	Reference layer: select a layer to keep it out of the timelapse	Επίπεδο αναφοράς: επιλέξτε ένα επίπεδο για να μείνει εκτός του timelapse
+	Reference layer: not recorded in the timelapse. Click to make it a normal layer	Επίπεδο αναφοράς: δεν καταγράφεται στο timelapse. Κάντε κλικ για να γίνει κανονικό επίπεδο
+	Make the selected layer a reference layer: it works as usual but won't show up in the timelapse	Μετατροπή του επιλεγμένου επιπέδου σε επίπεδο αναφοράς: λειτουργεί κανονικά, αλλά δεν εμφανίζεται στο timelapse
+	Exporting the timelapse. Click to cancel	Γίνεται εξαγωγή του timelapse. Κάντε κλικ για ακύρωση
+	Timelapse export progress	Πρόοδος εξαγωγής timelapse
+	Highlight on Rollover	Επισήμανση κατά το πέρασμα
+	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	Περίγραμμα στον καμβά για το επίπεδο κάτω από τον δείκτη ή εκείνο πάνω από το οποίο βρίσκεται ο δείκτης στον πίνακα Επίπεδα

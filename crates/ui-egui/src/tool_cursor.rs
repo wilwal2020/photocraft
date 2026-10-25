@@ -223,20 +223,22 @@ fn resize_on_screen(s: Vec2) -> CursorIcon {
 /// Linux themes already draw hands, and the OS moves those without waiting for a frame.
 pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
     if painted_in_window(ctx, "hand") {
-        return CursorIcon::None;
+        return CursorIcon::Default;
     }
     hand_with(ctx, closed, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
 }
 
 /// On Windows the bitmap pointers reach only the main window; another window (Camera Raw's)
-/// would show the plain arrow for `Grab` or `ZoomIn` (user report: no zoom pointer there), so
-/// icon `name` is painted at the pointer instead. True when it was.
+/// would show the plain arrow for `Grab` or `ZoomIn` (user report: no zoom pointer there). A
+/// pointer painted in its place moved only as often as the window redraws (user report: "at a
+/// low hertz"), so the system arrow stays, moving with the mouse, and icon `name` is painted as a
+/// small badge beside it. True when it was.
 fn painted_in_window(ctx: &egui::Context, name: &str) -> bool {
     if !cfg!(target_os = "windows") || ctx.viewport_id() == egui::ViewportId::ROOT {
         return false;
     }
     let Some(p) = ctx.pointer_latest_pos() else { return false };
-    crate::icons::cursor(ctx, name, p, egui::vec2(0.42, 0.42), 22.0, false);
+    crate::icons::cursor_badge(ctx, name, p);
     true
 }
 
@@ -259,7 +261,7 @@ pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCur
 /// the Linux themes already draw magnifiers.
 pub(crate) fn zoom(ctx: &egui::Context, out: bool) -> CursorIcon {
     if painted_in_window(ctx, if out { "zoom-out" } else { "zoom-in" }) {
-        return CursorIcon::None;
+        return CursorIcon::Default;
     }
     zoom_with(ctx, out, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
 }
