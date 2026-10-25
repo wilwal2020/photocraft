@@ -12,6 +12,7 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
+
 /// Parses a gradient style name (`linear`, `radial`, `angle`, `reflected`, `diamond`).
 pub fn gradient_style(s: &str) -> GradientStyle {
     match s.to_ascii_lowercase().as_str() {
@@ -93,7 +94,7 @@ pub fn effect_defaults(kind: &str) -> Value {
         "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100})
+            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
@@ -523,7 +524,9 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             overprint: false,
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
-        "gradientOverlay" => Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false },
+        "gradientOverlay" => {
+            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+        }
         "patternOverlay" => Effect::PatternOverlay {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             name: String::new(),
@@ -711,7 +714,9 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
             common(c, p);
             set_color(p, "color", color);
         }
-        Effect::GradientOverlay { common: c, gradient: g, dither } => {
+        // The method stays on the gradient (`blend`) and the renderers follow it: the stops are
+        // never baked (this branch's design; upstream's baked source-stop record is unused).
+        Effect::GradientOverlay { common: c, gradient: g, dither, .. } => {
             common(c, p);
             overlay_gradient(g, p);
             if let Some(x) = b_of(p, "dither") {
@@ -1046,7 +1051,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",

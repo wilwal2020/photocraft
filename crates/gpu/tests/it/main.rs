@@ -8,6 +8,7 @@ mod device_loss;
 #[cfg(windows)]
 mod dx12_release;
 mod parity;
+mod pipeline_errors;
 mod timing;
 mod uniform_limits;
 mod vector_mask;

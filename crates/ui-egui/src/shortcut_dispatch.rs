@@ -239,7 +239,15 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
                 .and_then(|p| table.iter().find(|(_, sc)| sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, *modifiers)));
-            by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key, *repeat))
+            let bound =
+                by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key, *repeat, false));
+            // Photoshop: ⌥ added to an adjustment's own key opens it at its last settings (⌥⌘L,
+            // ⌥⌘M, #8900), unless that key is bound to something else.
+            bound.or_else(|| {
+                let plain = egui::Modifiers { alt: false, ..*modifiers };
+                let last = modifiers.alt.then(|| table.iter().find(|(id, sc)| crate::adjust_dialog::has_dialog(id) && key_matches(sc, *key, plain))).flatten();
+                last.map(|(id, _)| (id.clone(), *key, *repeat, true))
+            })
         }
         _ => None,
     };
@@ -250,7 +258,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             i.events.remove(at);
             Some(hit)
         });
-        let Some((id, key, repeat)) = next else { break };
+        let Some((id, key, repeat, last)) = next else { break };
         // A held brush key repeats on the app's clock (`brush_key_repeat`), not the system's.
         if crate::brush_key_repeat::swallows(app.brush_key_held.as_ref(), &id, repeat) {
             ran = true;
@@ -266,7 +274,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         // A brush key during a stroke waits for it to end (`brush_key_repeat::painting`).
         let waits = crate::brush_key_repeat::IDS.contains(&id.as_str()) && crate::brush_key_repeat::painting(app);
         if !waits {
-            dispatch(app, ctx, &id);
+            dispatch_as(app, ctx, &id, last);
         }
         crate::brush_key_repeat::pressed(app, ctx, &id, key, !waits);
         ran = true;
@@ -355,6 +363,11 @@ fn label(id: &str) -> String {
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
+    dispatch_as(app, ctx, id, false);
+}
+
+/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings.
+fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     let outcome = if !crate::menus::is_enabled(app, command_id) {
@@ -378,7 +391,11 @@ pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
                 if v.get("failed").is_some_and(|f| f.is_object()) { Err(app.ui.status.clone()) } else { Ok(v) }
             })
         } else if crate::adjust_dialog::has_dialog(id) {
-            crate::adjust_dialog::open(app, id);
+            if last {
+                crate::adjust_dialog::open_last(app, id);
+            } else {
+                crate::adjust_dialog::open(app, id);
+            }
             Ok(serde_json::Value::Null)
         } else {
             crate::menus::invoke(app, ctx, id, json!({}))

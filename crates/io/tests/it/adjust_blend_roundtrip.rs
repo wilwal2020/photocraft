@@ -102,7 +102,7 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
         (Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -30.0, 20.0]) }, true),
         (Adjustment::SelectiveColor { relative: false, adjustments: std::array::from_fn(|r| [0.0, r as f32 * 5.0, 0.0, -10.0]) }, true),
         // A block this version cannot read (a truncated Selective Color) is kept verbatim.
-        (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0] }, true),
+        (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0].into() }, true),
         // PhotoCraft's private Grain block (Photoshop's own layout isn't published).
         (Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 }, true),
     ];

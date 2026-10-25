@@ -156,6 +156,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Overlays (thirds, grid, diagonal, triangle, golden ratio/spiral), O / ⇧O | done | TOOL-214-20 |
 | Crop shield, Show Cropped Area (H) | done | TOOL-214-22 |
 | Default mode: the image turns and moves behind an upright box; Auto Center Preview; Use Classic Mode | done | TOOL-214-23 |
+| Default mode: moving the image under an upright box snaps the frame's edges and centre (View › Snap), so content centres in the box without the Move tool | done | `crop_mode.rs::moving_the_image_snaps_the_frame_to_the_document_centre`, `crop_mode.rs::moving_the_image_centres_a_larger_box_on_a_layer` (#8580, 2026-10-22) |
 | W × H × Resolution with units, built-in size presets, Front Image | done | TOOL-214-9 (`crop_size.rs`) |
 | Saved custom crop presets (New / Delete Crop Preset, kept with the preferences; moving them to another computer is not offered) | done | TOOL-214-9 (`crop_presets.rs`, `tool.presets.*` with tool `crop`, #2723) |
 | Fill: Content-Aware Fill: a turned or extending crop fills the uncovered corners and strips from the image (each piece with its own sampling window), on the Background or else the active pixel layer, in the crop's one undo step; Generative Expand not offered | done | `tests/it/crop_content_aware.rs`, `crop_ui.rs::commit_passes_the_fill_choice` (#3823, 2026-10-12) |
@@ -214,6 +215,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Layer and selection keys: ⌘, toggles visibility, ⌘\ targets the mask, / locks transparency, ⌘⌥2 loads luminosity, ⌘⌥⌫ fills from history, Tab / ⇧Tab rename the next layer, ⌥-click a thumbnail fits the layer | done (2026-10-11) | |
 | Tool keys: ← / → turn the brush tip (1°, ⇧ 15°), ⇧-click with Type starts new text over old, Space+F / ⇧Space+F cycle the pasteboard colour | done (2026-10-11) | |
 | Type formatting keys while editing text | done: ⇧⌘K, U, B, I and / toggle All Caps, Underline, Faux Bold, Faux Italic, Strikethrough (off when every selected character has it, else on); ⌥↑/↓ leading ∓2 pt, ⇧⌥↑/↓ baseline shift ±2 pt (10 with ⌘); ⌥←/→ tracking ±20 over a selection (100 with ⌘; a collapsed caret still kerns); ⌥⇧⌘H toggles Hyphenate for the touched paragraphs. One `type.setStyle` step per press (new `leadingBy`/`baselineShiftBy`/`trackingBy`; auto leading starts from its laid-out value); the global ⇧⌘K/U/B/I never fire while typing. Differs: a collapsed caret in non-empty text changes nothing, since the model can't hold a pending style for the next characters typed (empty text takes it as its typing style) (`type_tool.rs`, `input_tests.rs` `type_tool_format_keys_*`) | |
+| ⌥ + an adjustment's shortcut opens it at its last settings (⌥⌘L Levels, ⌥⌘M Curves, and so ⌥⌘U, ⌥⌘B) | done (#8900): the settings of the last OK, kept in the preferences; Cancel and smart filter edits keep nothing; a key assigned to another command stays that command's. ⌥ while choosing the item from Image › Adjustments does the same | `shortcut_dispatch/tests.rs` `alt_adjustment_shortcut_reopens_the_last_confirmed_settings`, `alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings` |
 | Guides: click selects, Delete deletes, right-click menu, ⌥-click turns a guide, double-click opens Guides, Grid & Slices | done (2026-10-12) | a guide let go over either ruler is removed, not only off the canvas (#6286) |
 
 ## Panels and workspace
@@ -229,7 +231,8 @@ Paragraph; the rest open as in-app floating windows.
 | Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
 | Drag panels to reorder and regroup | partial | #2272, #2305 |
 | Docked resize pushes the neighbour | partial | #2573 |
-| Color panel wheel and RGB/HSB/CMYK/Lab sliders | missing | UI-217-17, #2569 |
+| Color panel modes from its panel menu (Hue Cube, Brightness Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), colour ramp (RGB/CMYK Spectrum, Grayscale Ramp, Current Colors, Make Ramp Web Safe; Shift-click cycles, Alt-click picks the other colour), Copy Color as HTML / Hex Code; the same in every theme | done | `color_panel_ui.rs`, `color_panel_tests.rs`; UI-217-17, #2569, #6000 |
+| A colour picked in the Color or Swatches panel or the Color Picker recolours the selection: selected characters while editing; every selected type layer with a Type tool; every selected shape's fill with a shape, Pen or path selection tool; only the foreground with other tools, the Move tool too; one history step (a Color panel drag too) | done: `apply_color.rs`, `apply_color_tests.rs` | |
 | Window size and dock width remembered | done | UI-217-2 |
 | Command palette with recents | done | UI-217-7 |
 | Menu bar from the keyboard: Alt / F10 focus the bar, ← → ↓ ↩ drive it, Alt+letter opens a menu, underlined mnemonics run items | done | `menu_keys.rs`, #4988; macOS uses the native bar |
@@ -244,6 +247,7 @@ Paragraph; the rest open as in-app floating windows.
 | Brushes is its own panel (Window › Brushes), groupable with any other; Brush Settings keeps a Brushes button that opens it | done (2026-10-16) | `dock::Group::Brushes`, `brush_panel::show_brushes_panel` |
 | Docked panel column has no fixed maximum width; the icon rail beside the dock can be closed (right-click › Close) | done (2026-10-16) | `dock_width_range`, `Panels::rail_closed` |
 | Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name and Mode; the other six missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
+| Adjustment scope: clipping control visible above tall Properties editors in a compact dock | done (2026-10-21) | `panels.rs`, `clipping_indicator_tests.rs`; #5231; stack-wide default retained |
 | Smart filter rows: click selects, drag onto another smart object moves, ⌥-drag copies, drag onto Delete removes; with a row selected, the Delete button and the ⌫/Delete key remove that filter, not the smart object | done | `smart_ui.rs`, `layer.smartFilter.transfer` (#4271), `smart_ui::keys` (#4751) |
 | Layers panel: Clip Thumbnails to Layer Bounds (panel menu, `interface.clipThumbnailsToLayerBounds`) | done (2026-10-12) | `layer_thumb_bounds_tests.rs`; #4281. Thumbnail size and the Panel Options dialog to come |
 | Smart filter rows: drag up or down the stack to reorder (a line marks the drop; the bottom filter is applied first) | done | `smart_ui.rs` `reorder_drop`, `layer.smartFilter.move` |
@@ -254,6 +258,8 @@ Paragraph; the rest open as in-app floating windows.
 |---|---|---|
 | 2026-10-17 | minor | Status bar in the document window with the horizontal scrollbar in it, docks to the window bottom, scrollbars outside the canvas; Tools panel docks between dock columns; ⌘-click picks layers; ⌘/⌥/⌘⌥ disclosure clicks; Blend If split handles; thin live gradients and Space reposition; no percentage changed |
 | 2026-10-16 | minor | Layers panel rows match Photoshop's metrics and glyphs, Layer Bounds thumbnails, Color panel readout removed and its field always fills, Brushes split from Brush Settings, movable Tools panel, dock width uncapped, closable icon rail, document tab menu gains New/Open; no percentage changed |
+| 2026-10-22 | minor | Crop default mode: a drag inside an upright box snaps the frame's edges and centre to the document, layers, guides and grid, as a Classic Mode frame's move does (#8580); no percentage changed |
+| 2026-10-21 | minor | Adjustment clipping moved above Properties editors to remain visible in compact docks (#5231); scope, undo/redo and 8/16/32-bit pixel regressions; readiness estimate unchanged |
 | 2026-10-19 | minor | A guide being moved or dragged out of a ruler shows an `X:` / `Y:` position readout beside the pointer, from the zero point in the ruler unit (#7680) |
 | 2026-10-17 | minor | The wheel steps value fields: a focused field takes it wherever the pointer is (the canvas and panels don't scroll), an unfocused one only a gesture that starts over it (#5473, #4061); no percentage changed |
 | 2026-10-17 | minor | Object Finder foreground/background discrimination (#6548) |
@@ -305,3 +311,6 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-16 | minor | View › Extras (⌘H) hides the Move tool's transform controls and their handles stop responding; ⌘H again restores them, and Show Transform Controls keeps its setting (#6699) |
 | 2026-10-15 | minor | ⌫/Delete with a smart filter row selected removes that filter (the Smart Filters row: all of them), as the Delete button does, instead of the smart object (#4751) |
 | 2026-10-14 | minor | Rounded corners on live triangles, polygons and stars: Properties field and on-canvas widgets (TOOL-214-12) |
+| 2026-10-14 | minor | A colour picked in the Color or Swatches panel or the Color Picker recolours the selected type layers (Type tool) or shape fills (shape, Pen and path selection tools) |
+| 2026-10-15 | minor | Color panel: Photoshop's panel-menu modes, colour ramp and copy commands; the theme no longer picks the panel's layout (UI-217-17 done, #2569, #6000) |
+| 2026-10-23 | minor | ⌥ + an adjustment's shortcut (⌥⌘L Levels, ⌥⌘M Curves) opens its dialog at the settings of its last OK, as in Photoshop (#8900); no percentage changed |

@@ -97,7 +97,7 @@ mod tests {
             let adj = photocraft_engine::adjust_params::default_for(kind, mode).unwrap();
             assert_eq!(for_adjustment(&adj), for_kind(kind), "{kind}");
         }
-        let raw = Adjustment::Unsupported { psd_key: "zzzz".into(), raw: Vec::new() };
+        let raw = Adjustment::Unsupported { psd_key: "zzzz".into(), raw: Vec::new().into() };
         assert_eq!(for_adjustment(&raw), "adjustment-layer");
     }
 

@@ -981,7 +981,7 @@ impl Recorder {
             if !locked.contains(&t.doc) && st.doc.metadata.xmp.as_deref().and_then(store::xmp_recording_id).as_deref() != Some(t.rec.meta.id.as_str()) {
                 let old = Arc::as_ptr(&st.doc);
                 let xmp = store::xmp_with_recording_id(st.doc.metadata.xmp.as_deref(), &t.rec.meta.id);
-                Arc::make_mut(&mut st.doc).metadata.xmp = Some(xmp);
+                Arc::make_mut(&mut st.doc).metadata.xmp = Some(xmp.into());
                 t.repoint(old, &st.doc);
             }
             let mut save = false;

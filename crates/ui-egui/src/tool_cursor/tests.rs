@@ -620,3 +620,12 @@ fn a_large_cursor_becomes_a_bitmap_only_once_it_holds_still() {
     }
 }
 
+#[test]
+fn type_path_cursors_are_small_and_centred() {
+    for rings in [super::area_type_rings(), super::path_type_rings()] {
+        assert!(rings.len() > 3);
+        for v in rings.iter().flatten() {
+            assert!(v.x.abs() <= 12.0 && v.y.abs() <= 12.0, "{v:?}");
+        }
+    }
+}

@@ -294,10 +294,11 @@ pub enum Adjustment {
         size: f32,
         roughness: f32,
     },
-    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip.
+    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
+    /// document snapshots (#4535).
     Unsupported {
         psd_key: String,
-        raw: Vec<u8>,
+        raw: std::sync::Arc<[u8]>,
     },
 }
 

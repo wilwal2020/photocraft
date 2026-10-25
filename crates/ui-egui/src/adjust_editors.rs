@@ -358,6 +358,19 @@ fn gradient_bar(p: &egui::Painter, r: Rect, from: Color32, to: Color32, vertical
 const CURVE_HANDLE_SIZE: f32 = 7.0;
 const CURVE_GRAPH_PADDING: f32 = 5.0;
 
+/// The room left on screen for the Curves dialog's other rows (title, channel and mode, Input and
+/// Output, eyedroppers, buttons) when its graph is as tall as it can be.
+const CURVES_CHROME: f32 = 360.0;
+/// The smallest the resizable Curves dialog's graph may stay (300 points was its fixed size until
+/// #8984); the editor itself keeps Photoshop's fixed graph ([`CURVES_SIDE`]).
+const CURVE_SIDE_MIN_MAX: f32 = 300.0;
+
+/// The largest the Curves graph gets in this window: as tall as the window leaves room for beside
+/// the dialog's other rows, and never under the old 300 points. The Curves dialog is no wider.
+pub(crate) fn curve_side_max(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - CURVES_CHROME).max(CURVE_SIDE_MIN_MAX)
+}
+
 fn curve_graph(full: Rect, side: f32) -> Rect {
     let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), vec2(side - 14.0, side - 14.0));
     Rect::from_min_max(base.min + vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING), base.max - vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING))
@@ -502,8 +515,10 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut e = Edit::default();
     // Photoshop's layout: a tool column (the eyedroppers, then the point and pencil buttons) left
     // of a fixed-size graph, Smooth under it.
+    // The graph takes the width beside the tool column, so it grows with the Properties panel
+    // and the resizable dialog (#8984), no taller than the window leaves room for.
     let room = ui.available_width() - CURVES_TOOL - ui.spacing().item_spacing.x;
-    let side = CURVES_SIDE.min(room).max(CURVES_MIN_SIDE);
+    let side = if room.is_finite() { room.min(curve_side_max(ui.ctx())).max(CURVES_MIN_SIDE) } else { CURVES_SIDE };
     // Centred in the panel, as Photoshop draws it, rather than against its left edge.
     let indent = curves_indent(ui.available_width(), side, ui.spacing().item_spacing.x);
     ui.add_space(4.0);

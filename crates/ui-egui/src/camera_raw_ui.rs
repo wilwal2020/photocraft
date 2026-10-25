@@ -42,6 +42,10 @@ mod presets;
 
 /// The proxy's long side lies within these, as large as the monitor (see [`proxy_side`]).
 const PROXY_SIDE: std::ops::RangeInclusive<usize> = 1024..=2560;
+/// Smallest run of proxy pixels one rayon task takes in the per-pixel passes: below it the
+/// split costs more than the work.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const PARALLEL_MIN_PIXELS: usize = 16 * 1024;
 const PANEL_W: f32 = 290.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
@@ -376,11 +380,19 @@ impl ProxyJob {
         };
         let (mut px, exact, context) = (developed.px, developed.exact, developed.context);
         if let Some(mask) = &self.selection {
-            for ((out, original), coverage) in px.iter_mut().zip(self.proxy.iter()).zip(mask.iter()) {
+            let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
                 for (out, original) in out.iter_mut().zip(original) {
                     *out = *original + (*out - *original) * coverage;
                 }
+            };
+            // Each pixel is independent, so bands of the proxy blend in parallel (#211, P36).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                px.par_iter_mut().zip(self.proxy.par_iter().zip(mask.par_iter())).with_min_len(PARALLEL_MIN_PIXELS).for_each(blend);
             }
+            #[cfg(target_arch = "wasm32")]
+            px.iter_mut().zip(self.proxy.iter().zip(mask.iter())).for_each(blend);
         }
         let histogram_start = crate::gpu_canvas::now_ms();
         let histogram = RgbHistogram::from_rgba(&px);
