@@ -29,7 +29,15 @@ impl CameraRawPreviewState {
             return;
         }
         let old = self.image_rect(viewport, size);
-        let point = (at - old.min) / old.size();
+        self.zoom_keeping(zoom, (at - old.min) / old.size(), at, viewport, size);
+    }
+
+    /// Zooms to `zoom` with the image point `point` (0–1 across the image) under `at`, as far as
+    /// keeping the image in view allows.
+    pub(crate) fn zoom_keeping(&mut self, zoom: f32, point: Vec2, at: Pos2, viewport: Rect, size: Vec2) {
+        if !zoom.is_finite() || !at.x.is_finite() || !at.y.is_finite() || !point.x.is_finite() || !point.y.is_finite() {
+            return;
+        }
         self.zoom = Some(zoom.clamp(MIN_ZOOM, MAX_ZOOM));
         let extent = size.max(Vec2::splat(f32::EPSILON)) * self.scale(viewport, size);
         let center = point - (at - viewport.center()) / extent;
@@ -93,6 +101,9 @@ pub(crate) fn prepare(current: CameraRawPreviewState, value: &Value) -> Result<C
 struct ZoomCapture {
     start: Pos2,
     image: Rect,
+    /// The image point under `start` (0–1 across the image): a scrub zooms about it throughout,
+    /// not about whatever the clamped view has put under the pointer since (user report).
+    point: Vec2,
     box_zoom: bool,
 }
 
@@ -141,7 +152,8 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
     if response.drag_started_by(PointerButton::Primary) && zoom_tool {
         let start = ui.input(|i| i.pointer.press_origin()).unwrap_or(at);
         if rect.contains(start) {
-            ui.ctx().data_mut(|data| data.insert_temp(capture_id, ZoomCapture { start, image: rect, box_zoom: modifiers.command && !temporary_zoom }));
+            let point = (start - rect.min) / rect.size();
+            ui.ctx().data_mut(|data| data.insert_temp(capture_id, ZoomCapture { start, image: rect, point, box_zoom: modifiers.command && !temporary_zoom }));
         }
     }
     let capture = ui.ctx().data(|data| data.get_temp::<ZoomCapture>(capture_id));
@@ -160,7 +172,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
         } else {
             // The anchor is the initial press, not the moving pointer; reversing a scrub
             // follows the same detail instead of drifting across the image.
-            state.zoom_at(state.scale(viewport, size) * (response.drag_delta().x * 0.01).clamp(-1.0, 1.0).exp(), capture.start, viewport, size);
+            state.zoom_keeping(state.scale(viewport, size) * (response.drag_delta().x * 0.01).clamp(-1.0, 1.0).exp(), capture.point, capture.start, viewport, size);
         }
     } else if response.double_clicked() && hand {
         state.fit();
@@ -364,6 +376,23 @@ mod tests {
         let rect_after = state.image_rect(viewport, size);
         let point_after = (at - rect_after.min) / rect_after.size();
         assert!((point_before - point_after).length() < 0.01, "point preserved: {point_before:?} vs {point_after:?}");
+    }
+
+    /// User report: a scrub zoom started at fit drifted off the point it started on. Zooming
+    /// about the press point keeps that image point under the press once the view allows it.
+    #[test]
+    fn a_scrub_zoom_from_fit_ends_on_the_point_it_started_on() {
+        let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let size = vec2(4000.0, 3000.0);
+        let mut view = CameraRawPreviewState::default();
+        let rect = view.image_rect(viewport, size);
+        let at = pos2(600.0, 450.0);
+        let point = (at - rect.min) / rect.size();
+        for _ in 0..40 {
+            view.zoom_keeping(view.scale(viewport, size) * 1.1, point, at, viewport, size);
+        }
+        let r = view.image_rect(viewport, size);
+        assert!(((at - r.min) / r.size() - point).length() < 1e-3, "{:?} vs {point:?}", (at - r.min) / r.size());
     }
 
     #[test]

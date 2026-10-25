@@ -403,7 +403,17 @@ pub(crate) struct Cache {
 /// `cache`: maps kept from earlier calls, the key of these pixels, and whether a map made for
 /// another key (or Highlights value) may serve, which is close but not exact. Returns false when
 /// one did.
-pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highlights: f32, enc: Encoding, cache: Option<(&mut Cache, u64, bool)>) -> bool {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply(
+    px: &mut [[f32; 4]],
+    w: usize,
+    h: usize,
+    shadows: f32,
+    highlights: f32,
+    enc: Encoding,
+    cache: Option<(&mut Cache, u64, bool)>,
+    record: Option<&mut Option<Map>>,
+) -> bool {
     if (shadows == 0.0 && highlights == 0.0) || w < 2 || h < 2 || px.len() != w * h {
         return true;
     }
@@ -446,12 +456,15 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
         }
     }
     // The change in log luminance, at full size.
-    let change: Vec<f32> = if f == 1 {
-        par_map(o.v.len(), |i| o.v[i] - u.v[i])
-    } else {
-        let d: Vec<f32> = par_map(o.v.len(), |i| o.v[i] - small.v[i]);
-        guided_upsample(&small, &d, &u)
-    };
+    let d: Vec<f32> = par_map(o.v.len(), |i| o.v[i] - small.v[i]);
+    if let Some(r) = record {
+        // For a region's develop: the change as the guided filter's coefficients over the image.
+        let (ma, mb) = super::guided_coefficients(&small.v, &d, small.w, small.h, 2, 0.01);
+        *r = Some(Map { ma, mb, w: small.w, h: small.h });
+    }
+    // Through the guided filter at every size (at the work copy's own size too), so a region's
+    // develop from the coefficients ([`apply_map`]) gives the same.
+    let change = guided_upsample(&small, &d, &u);
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
             let gain = change[y * w + x].exp2();
@@ -461,6 +474,38 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
         }
     });
     exact
+}
+
+/// The Shadows and Highlights change of a whole image as the guided filter's coefficients on its
+/// work copy (`w × h`, laid over the image): the change in log luminance at a pixel is
+/// `a · u + b`, `u` its log luminance (see [`guided_upsample`]).
+#[derive(Clone, Debug)]
+pub(crate) struct Map {
+    ma: Vec<f32>,
+    mb: Vec<f32>,
+    w: usize,
+    h: usize,
+}
+
+/// Shadows and Highlights on part of an image (`frame`) from the whole image's [`Map`].
+pub(crate) fn apply_map(px: &mut [[f32; 4]], w: usize, map: &Map, frame: super::Frame, enc: Encoding) {
+    const FLOOR: f32 = 1.0 / 65536.0;
+    let curves = enc.curves();
+    let (fx, fy) = (map.w as f32 / frame.full_w as f32, map.h as f32 / frame.full_h as f32);
+    par_rows(px, w, 1, |y, row| {
+        let sy = (frame.y(y) + 0.5) * fy - 0.5;
+        for (x, q) in row.iter_mut().enumerate() {
+            let sx = (frame.x(x) + 0.5) * fx - 0.5;
+            let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
+            let u = (luma(lin).max(0.0) + FLOOR).log2();
+            let a = crate::photo_util::bilinear(&map.ma, map.w, map.h, 1, 0, sx, sy);
+            let b = crate::photo_util::bilinear(&map.mb, map.w, map.h, 1, 0, sx, sy);
+            let gain = (a * u + b).exp2();
+            for c in 0..3 {
+                q[c] = curves.encode(lin[c] * gain);
+            }
+        }
+    });
 }
 
 /// `u` averaged over `f × f` blocks.
@@ -594,7 +639,7 @@ mod tests {
     #[test]
     fn a_flat_image_is_unchanged() {
         let mut px = grey(64, 48, |_, _| 0.4);
-        apply(&mut px, 64, 48, 100.0, -100.0, SRGB, None);
+        apply(&mut px, 64, 48, 100.0, -100.0, SRGB, None, None);
         assert!(px.iter().all(|q| (q[0] - 0.4).abs() < 1e-5));
     }
 
@@ -604,7 +649,7 @@ mod tests {
         // moves either): the bright half stays, and no halo forms on either side of the edge.
         let (w, h) = (256, 128);
         let mut px = grey(w, h, |x, _| if x < w / 2 { 0.1 } else { 0.6 });
-        apply(&mut px, w, h, 100.0, 0.0, SRGB, None);
+        apply(&mut px, w, h, 100.0, 0.0, SRGB, None, None);
         let row = &px[64 * w..65 * w];
         assert!((row[w / 2 + 1][0] - 0.6).abs() < 0.002 && (row[w - 5][0] - 0.6).abs() < 0.002);
         let (far, near) = (row[10][0], row[w / 2 - 1][0]);
@@ -629,7 +674,7 @@ mod tests {
         };
         for (s, hl, want) in [(100.0, 0.0, 165.3), (0.0, -100.0, 89.6)] {
             let mut px = image(0.5);
-            apply(&mut px, n, n, s, hl, SRGB, None);
+            apply(&mut px, n, n, s, hl, SRGB, None, None);
             let got = px[175 * n + 100][0] * 255.0;
             assert!((got - want).abs() < 5.0, "{s} {hl}: {got} vs {want}");
         }
@@ -639,7 +684,7 @@ mod tests {
     fn highlights_lower_a_bright_area_and_keep_the_darkest() {
         let (w, h) = (192, 192);
         let mut px = grey(w, h, |x, y| if (64..128).contains(&x) && (64..128).contains(&y) { 0.8 } else { 0.2 });
-        apply(&mut px, w, h, 0.0, -100.0, SRGB, None);
+        apply(&mut px, w, h, 0.0, -100.0, SRGB, None, None);
         assert!(px[96 * w + 96][0] < 0.75, "{}", px[96 * w + 96][0]);
         assert!((px[5 * w + 5][0] - 0.2).abs() < 0.01, "{}", px[5 * w + 5][0]);
     }
@@ -653,7 +698,7 @@ mod tests {
         let mut px = grey(w, h, |x, _| crate::photo_util::linear_to_srgb((x as f32 / (w - 1) as f32 * 8.0 - 9.0).exp2()));
         for (s, hl) in [(100.0, 0.0), (0.0, -100.0), (-100.0, 100.0)] {
             let mut p = px.clone();
-            apply(&mut p, w, h, s, hl, SRGB, None);
+            apply(&mut p, w, h, s, hl, SRGB, None, None);
             let row: Vec<f32> = (0..w).map(|x| crate::photo_util::srgb_to_linear(p[24 * w + x][0]).max(1e-6).log2()).collect();
             let steps: Vec<f32> = row.windows(2).map(|d| d[1] - d[0]).collect();
             assert!(steps.iter().all(|d| *d > 0.0), "{s} {hl}: the ramp reverses");
@@ -669,7 +714,7 @@ mod tests {
     fn the_result_does_not_depend_on_the_image_size() {
         let at = |n: usize| {
             let mut px = grey(n, n, |x, y| if x < n / 3 || y < n / 4 { 0.08 } else { 0.7 });
-            apply(&mut px, n, n, 70.0, -60.0, SRGB, None);
+            apply(&mut px, n, n, 70.0, -60.0, SRGB, None, None);
             [px[(n / 8) * n + n / 8][0], px[(3 * n / 4) * n + 3 * n / 4][0]]
         };
         let (a, b) = (at(96), at(384));

@@ -215,6 +215,7 @@ mod tests {
         let h = RgbHistogram::from_rgba(&pixels);
         assert!(h.channels[0][10..230].iter().filter(|&&v| v == 0).count() > 10);
         assert_eq!(h.samples, 256);
-        assert!(h.overflow[0] > 0);
+        // Camera Raw's exposure rolls off into white (as Photoshop's does) instead of passing it.
+        assert_eq!(h.overflow[0], 0);
     }
 }

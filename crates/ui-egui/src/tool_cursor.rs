@@ -222,7 +222,22 @@ fn resize_on_screen(s: Vec2) -> CursorIcon {
 /// `Grabbing` to the four-arrow move cursor on Windows, so there it is a bitmap; macOS and the
 /// Linux themes already draw hands, and the OS moves those without waiting for a frame.
 pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
+    if painted_in_window(ctx, "hand") {
+        return CursorIcon::None;
+    }
     hand_with(ctx, closed, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
+}
+
+/// On Windows the bitmap pointers reach only the main window; another window (Camera Raw's)
+/// would show the plain arrow for `Grab` or `ZoomIn` (user report: no zoom pointer there), so
+/// icon `name` is painted at the pointer instead. True when it was.
+fn painted_in_window(ctx: &egui::Context, name: &str) -> bool {
+    if !cfg!(target_os = "windows") || ctx.viewport_id() == egui::ViewportId::ROOT {
+        return false;
+    }
+    let Some(p) = ctx.pointer_latest_pos() else { return false };
+    crate::icons::cursor(ctx, name, p, egui::vec2(0.42, 0.42), 22.0, false);
+    true
 }
 
 fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
@@ -243,6 +258,9 @@ pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCur
 /// `ZoomIn` and `ZoomOut` to the plain arrow on Windows (#3735), so there it is a bitmap; macOS and
 /// the Linux themes already draw magnifiers.
 pub(crate) fn zoom(ctx: &egui::Context, out: bool) -> CursorIcon {
+    if painted_in_window(ctx, if out { "zoom-out" } else { "zoom-in" }) {
+        return CursorIcon::None;
+    }
     zoom_with(ctx, out, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
 }
 

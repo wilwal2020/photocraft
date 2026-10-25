@@ -282,6 +282,8 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
     let mut next = params.clone();
     let mut report = LoadReport::default();
     let mut found = false;
+    // Settings named in the file, for the defaults that depend on what it has.
+    let mut named: Vec<String> = Vec::new();
     for desc in doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "Description") {
         // A structured setting's own description (a profile's, a mask's) belongs to that setting.
         if desc.ancestors().skip(1).any(|a| a.tag_name().namespace() == Some(CRS_NS)) {
@@ -289,11 +291,13 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
         }
         for a in desc.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
             found = true;
+            named.push(a.name().to_string());
             apply(&mut next, &mut report, a.name(), a.value());
         }
         for c in desc.children().filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS)) {
             found = true;
             let name = c.tag_name().name();
+            named.push(name.to_string());
             if let Some((_, field)) = CURVES.iter().find(|(n, _)| *n == name) {
                 match curve(c) {
                     Some(points) => {
@@ -324,6 +328,12 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
     }
     if !found {
         return Err("no Camera Raw settings in the file".into());
+    }
+    // Split toning from before Color Grading (no Blending in the file) blends fully, as Camera
+    // Raw upgrades it.
+    let has = |n: &str| named.iter().any(|m| m == n);
+    if !has("ColorGradeBlending") && ["SplitToningShadowSaturation", "SplitToningHighlightSaturation"].iter().any(|n| has(n)) {
+        next.grade_blending = 100.0;
     }
     *params = next;
     Ok(report)
@@ -682,6 +692,21 @@ mod tests {
         // Lens vignetting and calibration are read now.
         assert_eq!((p.lens_vignette_amount, p.red_hue), (-20.0, -5.0));
         assert!(r.ignored.is_empty(), "{:?}", r.ignored);
+    }
+
+    #[test]
+    fn split_toning_without_blending_blends_fully() {
+        let file = |extra: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:SplitToningShadowHue="220" crs:SplitToningShadowSaturation="20" {extra}/></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let mut p = CameraRaw::default();
+        load(&mut p, file("").as_bytes()).unwrap();
+        assert_eq!((p.grade_shadows.sat, p.grade_blending), (20.0, 100.0));
+        let mut p = CameraRaw::default();
+        load(&mut p, file(r#"crs:ColorGradeBlending="30""#).as_bytes()).unwrap();
+        assert_eq!(p.grade_blending, 30.0);
     }
 
     #[test]

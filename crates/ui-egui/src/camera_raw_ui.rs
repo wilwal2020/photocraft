@@ -42,7 +42,7 @@ mod presets;
 
 /// The proxy's long side lies within these, as large as the monitor (see [`proxy_side`]).
 const PROXY_SIDE: std::ops::RangeInclusive<usize> = 1024..=2560;
-const PANEL_W: f32 = 330.0;
+const PANEL_W: f32 = 290.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
@@ -101,6 +101,10 @@ pub struct CameraRawDialog {
     source: u64,
     /// The frame shown is a draft (made while a slider moved): an exact one follows on release.
     draft_shown: bool,
+    /// The settings and image-wide measurements of the frame shown: the full-resolution view of a
+    /// zoomed-in preview develops the visible region from them.
+    pub(crate) shown_params: CameraRaw,
+    shown_context: std::sync::Arc<photocraft_algo::camera_raw::Context>,
     /// The right panel's tab: 0 Edit, 1 Presets.
     tab: usize,
     /// The Curve panel's view (see `edit::CURVE_MODES`) and the Color Grading panel's.
@@ -235,6 +239,7 @@ impl CameraRawDialog {
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;
         self.draft_shown = !frame.exact;
+        (self.shown_params, self.shown_context) = (frame.params, frame.context);
         self.scope.cache = None;
         self.render_ms = frame.ms;
         self.preview_revision = self.preview_revision.saturating_add(1);
@@ -329,6 +334,9 @@ struct ProxyJob {
 /// A developed proxy, ready to show.
 struct ProxyFrame {
     px: Vec<[f32; 4]>,
+    /// The settings developed (with the proxy's pixel scale) and what the develop measured.
+    params: CameraRaw,
+    context: std::sync::Arc<photocraft_algo::camera_raw::Context>,
     /// Not a draft (see [`ProxyJob::draft`]).
     exact: bool,
     histogram: RgbHistogram,
@@ -361,7 +369,7 @@ impl ProxyJob {
             let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             photocraft_algo::camera_raw::develop_cached(input, pw, ph, &p, self.float, source, &mut cache, self.draft)
         };
-        let (mut px, exact) = (developed.px, developed.exact);
+        let (mut px, exact, context) = (developed.px, developed.exact, developed.context);
         if let Some(mask) = &self.selection {
             for ((out, original), coverage) in px.iter_mut().zip(self.proxy.iter()).zip(mask.iter()) {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -373,7 +381,7 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, exact, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
+        ProxyFrame { px, params: p, context, exact, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
     }
 }
 
@@ -463,7 +471,6 @@ fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Resul
         d.layer_name = raw.name.clone();
         // The full-size preview retones the whole frame with it, as Open will.
         let curve = curve.map(std::sync::Arc::new);
-        d.detail.raw_curve = curve.clone();
         d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
@@ -866,6 +873,8 @@ fn open_pixels(
         cache: Default::default(),
         source: next_source(),
         draft_shown: false,
+        shown_params: CameraRaw::default(),
+        shown_context: Default::default(),
         tab: 0,
         // The point curve first, as the dialog had it; Parametric is a tab away.
         curve_mode: 1,
@@ -1380,16 +1389,79 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    // Where the window was last (user report: it always reopened small).
+    let saved = WindowPlace::load(app);
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(window_title)
+        .with_inner_size(saved.map_or([1360.0, 900.0], |w| w.size))
+        .with_min_inner_size([900.0, 600.0]);
+    if let Some(w) = saved {
+        if let Some(pos) = w.pos {
+            builder = builder.with_position(pos);
+        }
+        builder = builder.with_maximized(w.maximized);
+    }
     let mut close = false;
+    let mut place = None;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
+        }
+        if class != egui::ViewportClass::EmbeddedWindow {
+            place = WindowPlace::of(ui.ctx());
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
     });
     if close && app.camera_raw.is_some() {
         cancel(app);
+    }
+    // Saved as the dialog closes (OK, Cancel or the window's close button), not on every move.
+    if let Some(p) = place
+        && app.camera_raw.is_none()
+    {
+        p.save(app);
+    }
+}
+
+/// The Camera Raw window's place, kept in preferences (`dialogs["filter.cameraRaw.window"]`).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct WindowPlace {
+    /// Inner size in points.
+    size: [f32; 2],
+    /// Outer position in points, where the platform reports it.
+    pos: Option<[f32; 2]>,
+    maximized: bool,
+}
+
+impl WindowPlace {
+    const KEY: &'static str = "filter.cameraRaw.window";
+
+    fn load(app: &PhotocraftApp) -> Option<Self> {
+        let w: Self = serde_json::from_value(app.session.prefs().dialogs.get(Self::KEY)?.clone()).ok()?;
+        let sane = |v: f32| v.is_finite() && (-20_000.0..=20_000.0).contains(&v);
+        (w.size.iter().all(|v| sane(*v) && *v >= 300.0) && w.pos.is_none_or(|p| p.iter().all(|v| sane(*v)))).then_some(w)
+    }
+
+    /// The current viewport's place (inside its own window).
+    fn of(ctx: &egui::Context) -> Option<Self> {
+        ctx.input(|i| {
+            let v = i.viewport();
+            let inner = v.inner_rect?;
+            let maximized = v.maximized.unwrap_or(false);
+            Some(WindowPlace { size: [inner.width(), inner.height()], pos: v.outer_rect.map(|r| [r.left(), r.top()]), maximized })
+        })
+    }
+
+    /// Saves it, keeping the size from before a maximize (restoring then gives that back).
+    fn save(self, app: &mut PhotocraftApp) {
+        let previous = Self::load(app);
+        let place = if self.maximized { previous.map_or(self, |p| WindowPlace { maximized: true, ..p }) } else { self };
+        if previous == Some(place) {
+            return;
+        }
+        if let Ok(value) = serde_json::to_value(place) {
+            app.session.prefs.edit(|p| p.dialogs.insert(Self::KEY.into(), value));
+        }
     }
 }
 
@@ -1491,11 +1563,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
-            // While a control is dragged the proxy follows it; the full-resolution develop starts
-            // once it is let go instead of competing with the proxy for every step.
-            let detail_needed =
-                !raw_tone && !editing && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
-            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
+            // Zoomed in past the proxy's pixels, the visible region develops at full resolution from
+            // the frame's settings and measurements, also while a control is dragged.
+            let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
+            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.shown_params, &d.shown_context, detail_needed, &d.display);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }

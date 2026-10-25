@@ -61,6 +61,9 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
+mod acr;
+mod acr_grade_tables;
+mod acr_tables;
 mod local_tone;
 mod whites_blacks;
 
@@ -142,10 +145,6 @@ impl Curves {
         let (a, b) = (self.encode[i], self.encode[i + 1]);
         a + (b - a) * t
     }
-}
-
-fn luma_linear(c: [f32; 3]) -> f32 {
-    luma(c)
 }
 
 /// One colour grading wheel.
@@ -553,47 +552,12 @@ pub fn curve_lut(pts: &[[f32; 2]], n: usize) -> Vec<f32> {
         .collect()
 }
 
-fn lut_eval(lut: &[f32], v: f32) -> f32 {
-    if !(0.0..=1.0).contains(&v) {
-        // Extend linearly outside (float documents).
-        return if v < 0.0 { v + lut[0] } else { lut[lut.len() - 1] + (v - 1.0) };
-    }
-    let x = v * (lut.len() - 1) as f32;
-    let i = (x as usize).min(lut.len() - 2);
-    let t = x - i as f32;
-    lut[i] + (lut[i + 1] - lut[i]) * t
-}
-
-/// Parametric tone curve as a LUT (regions split at `splits`, each slider ±100 moves its region
-/// by up to a quarter of the range, smoothly).
-fn parametric_lut(p: &CameraRaw, n: usize) -> Vec<f32> {
-    let s = p.curve_splits.map(|v| v.clamp(5.0, 95.0) / 100.0);
-    let centres = [s[0] / 2.0, (s[0] + s[1]) / 2.0, (s[1] + s[2]) / 2.0, (s[2] + 1.0) / 2.0];
-    let amounts = [p.curve_shadows, p.curve_darks, p.curve_lights, p.curve_highlights];
-    let widths = [s[0].max(0.1), (s[1] - s[0]).max(0.1), (s[2] - s[1]).max(0.1), (1.0 - s[2]).max(0.1)];
-    let mut lut: Vec<f32> = (0..n)
-        .map(|i| {
-            let x = i as f32 / (n - 1) as f32;
-            let mut y = x;
-            for k in 0..4 {
-                let d = (x - centres[k]) / (widths[k] * 1.2);
-                let bump = (-d * d * 2.0).exp() * x * (1.0 - x) * 4.0;
-                y += amounts[k] / 100.0 * 0.25 * bump;
-            }
-            y.clamp(0.0, 1.0)
-        })
-        .collect();
-    // Keep it monotone.
-    for i in 1..n {
-        lut[i] = lut[i].max(lut[i - 1]);
-    }
-    lut
-}
-
 /// The parametric tone curve of `p` (its four regions and their splits) at `n` points over
-/// 0 … 1, for drawing.
+/// 0 … 1, for drawing: Camera Raw's measured regions (see `acr`).
 pub fn parametric_curve(p: &CameraRaw, n: usize) -> Vec<f32> {
-    parametric_lut(p, n.max(2))
+    let n = n.max(2);
+    let tone = acr::parametric(p);
+    (0..n).map(|i| tone.at(i as f32 / (n - 1) as f32)).collect()
 }
 
 fn rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
@@ -742,9 +706,163 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     if px.is_empty() || p.is_identity() {
         return;
     }
-    light(px, w, h, p, None);
-    presence(px, w, h, p);
-    finish(px, w, h, p, float);
+    let frame = Frame::whole(w, h);
+    light(px, w, h, p, None, frame, None, None);
+    presence(px, w, h, p, frame, None, None);
+    finish(px, w, h, p, float, frame);
+}
+
+/// Where the pixels a develop works on lie in the image they belong to: their top-left pixel and
+/// the image's size, in the same pixels. Stages that depend on the position (vignettes, grain,
+/// distortion) or on the image's size (Clarity's and Texture's radii) read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Frame {
+    pub x0: i64,
+    pub y0: i64,
+    pub full_w: usize,
+    pub full_h: usize,
+}
+
+impl Frame {
+    /// The whole of a `w × h` image.
+    pub fn whole(w: usize, h: usize) -> Self {
+        Frame { x0: 0, y0: 0, full_w: w.max(1), full_h: h.max(1) }
+    }
+    /// Column `x` of the buffer, in the image.
+    fn x(&self, x: usize) -> f32 {
+        (self.x0 + x as i64) as f32
+    }
+    fn y(&self, y: usize) -> f32 {
+        (self.y0 + y as i64) as f32
+    }
+    /// The image's centre and half-diagonal.
+    fn centre(&self) -> (f32, f32, f32) {
+        let (cx, cy) = (self.full_w as f32 / 2.0, self.full_h as f32 / 2.0);
+        (cx, cy, cx.hypot(cy).max(1e-3))
+    }
+}
+
+/// What a develop of a whole image measures on it and a develop of part of it
+/// ([`develop_region`]) reuses: Dehaze's atmospheric light and transmission map, the Shadows and
+/// Highlights change map (its guided-filter coefficients), Contrast's pivot and Whites and
+/// Blacks' amounts. The maps
+/// are over the whole image in relative coordinates, so a proxy's serve the full-size image.
+#[derive(Clone, Debug, Default)]
+pub struct Context {
+    haze: Option<Haze>,
+    tone: Option<local_tone::Map>,
+    amounts: Option<(f32, f32)>,
+    /// Contrast's pivot (linear light).
+    pivot: Option<f32>,
+}
+
+/// Dehaze's measurements: the atmospheric light and the transmission on a `tw × th` grid laid over
+/// the image with `per_w × per_h` cells across it (fractional at the edges).
+#[derive(Clone, Debug)]
+struct Haze {
+    air: [f32; 3],
+    t: Vec<f32>,
+    tw: usize,
+    th: usize,
+    per_w: f32,
+    per_h: f32,
+}
+
+/// The margin, in pixels of a `full_w × full_h` image, a region needs around it so that the
+/// stages that look at the surroundings (Clarity, Texture, noise reduction, sharpening, defringe)
+/// see what they would in the whole image.
+pub fn region_margin(p: &CameraRaw, full_w: usize, full_h: usize) -> usize {
+    let long = full_w.max(full_h) as f32;
+    let mut m = 16.0f32;
+    if p.clarity != 0.0 {
+        m = m.max(long * 0.02 * 2.0 + 8.0);
+    }
+    if p.texture != 0.0 {
+        m = m.max(long * 0.002 * 3.5);
+    }
+    if p.noise_color > 0.0 {
+        m = m.max(p.noise_color / 100.0 * 6.0 * 3.0 * 4.0);
+    }
+    m.ceil() as usize + 4
+}
+
+/// Where Manual Distortion takes the pixel at `(x, y)` (pixel centres, in a `full_w × full_h`
+/// image) from; `None` without distortion. [`develop_region`] expects its input already moved so.
+pub fn distortion_source(p: &CameraRaw, full_w: usize, full_h: usize, x: f32, y: f32) -> Option<(f32, f32)> {
+    if p.lens_distortion == 0.0 {
+        return None;
+    }
+    let (cx, cy, diag) = Frame::whole(full_w, full_h).centre();
+    let k = p.lens_distortion.clamp(-100.0, 100.0) / 100.0 * 0.25;
+    let (dx, dy) = ((x + 0.5 - cx) / diag, (y + 0.5 - cy) / diag);
+    let f = 1.0 - k * (dx * dx + dy * dy);
+    Some((cx + dx * f * diag - 0.5, cy + dy * f * diag - 0.5))
+}
+
+/// [`develop`] of part of an image: `src` (`w × h`) is the part `frame` places, Manual Distortion
+/// already applied ([`distortion_source`]) and with [`region_margin`] around what is wanted,
+/// `inner` (x, y, width, height in `src`), which is what it returns, and `context` holds the
+/// image-wide measurements of a develop of the whole image (a proxy's, [`Developed::context`]):
+/// nothing image-wide is measured here, so a zoomed-in view develops only what it shows. The late
+/// stages run on `inner` and their own small margin only. `cache` and `source` work as for
+/// [`develop_cached`] (the source naming the region and the context).
+#[allow(clippy::too_many_arguments)]
+pub fn develop_region(
+    src: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    frame: Frame,
+    p: &CameraRaw,
+    float: bool,
+    context: &Context,
+    source: u64,
+    cache: &mut DevelopCache,
+    inner: (usize, usize, usize, usize),
+) -> Vec<[f32; 4]> {
+    let (ix, iy, iw, ih) = inner;
+    if src.is_empty() || src.len() != w.saturating_mul(h) || ix.saturating_add(iw) > w || iy.saturating_add(ih) > h {
+        return Vec::new();
+    }
+    let cut = |buf: &[[f32; 4]], x0: usize, y0: usize, cw: usize, ch: usize, stride: usize| -> Vec<[f32; 4]> {
+        (0..ch).flat_map(|y| buf[(y0 + y) * stride + x0..(y0 + y) * stride + x0 + cw].iter().copied()).collect()
+    };
+    if p.is_identity() {
+        return cut(src, ix, iy, iw, ih, w);
+    }
+    if cache.source != Some((source, w, h)) {
+        *cache = DevelopCache { source: Some((source, w, h)), ..Default::default() };
+    }
+    let (lk, pk) = (LightKey::of(p), PresenceKey::of(p));
+    if !cache.presence.as_ref().is_some_and(|(k, _, _)| *k == pk) {
+        let mut px = match &cache.light {
+            Some((k, v)) if *k == lk => v.clone(),
+            _ => {
+                let mut px = src.to_vec();
+                light(&mut px, w, h, p, None, frame, Some(context), None);
+                cache.light = Some((lk, px.clone()));
+                px
+            }
+        };
+        presence(&mut px, w, h, p, frame, Some(context), None);
+        cache.presence = Some((pk, px, Default::default()));
+    }
+    let Some((_, px, _)) = &cache.presence else { return Vec::new() };
+    // The late stages look only a few pixels around (noise reduction, sharpening): on `inner`
+    // with that margin, not the presence stages' wide one, cut straight from the cached image.
+    let m = finish_margin(p);
+    let (x0, y0) = (ix.saturating_sub(m), iy.saturating_sub(m));
+    let (x1, y1) = ((ix + iw + m).min(w), (iy + ih + m).min(h));
+    let (fw, fh) = (x1 - x0, y1 - y0);
+    let mut part = cut(px, x0, y0, fw, fh, w);
+    let near = Frame { x0: frame.x0 + x0 as i64, y0: frame.y0 + y0 as i64, ..frame };
+    finish(&mut part, fw, fh, p, float, near);
+    cut(&part, ix - x0, iy - y0, iw, ih, fw)
+}
+
+/// The margin the late stages (noise reduction, sharpening) need around a region at full size.
+fn finish_margin(p: &CameraRaw) -> usize {
+    let colour = if p.noise_color > 0.0 { p.noise_color / 100.0 * 6.0 * 3.0 * 3.0 } else { 0.0 };
+    (colour.ceil() as usize).max(12) + 4
 }
 
 /// The settings [`light`] reads.
@@ -798,14 +916,16 @@ impl PresenceKey {
 pub struct DevelopCache {
     source: Option<(u64, usize, usize)>,
     light: Option<(LightKey, Vec<[f32; 4]>)>,
-    presence: Option<(PresenceKey, Vec<[f32; 4]>)>,
+    presence: Option<(PresenceKey, Vec<[f32; 4]>, std::sync::Arc<Context>)>,
     tone: local_tone::Cache,
 }
 
-/// [`develop_cached`]'s pixels, and whether they are exactly [`develop`]'s.
+/// [`develop_cached`]'s pixels, whether they are exactly [`develop`]'s, and what it measured on
+/// the image (for [`develop_region`]).
 pub struct Developed {
     pub px: Vec<[f32; 4]>,
     pub exact: bool,
+    pub context: std::sync::Arc<Context>,
 }
 
 /// [`develop`] of `src` for an interactive preview, reusing what `cache` kept from earlier calls.
@@ -816,47 +936,55 @@ pub struct Developed {
 #[allow(clippy::too_many_arguments)]
 pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, source: u64, cache: &mut DevelopCache, draft: bool) -> Developed {
     if src.is_empty() || src.len() != w.saturating_mul(h) || p.is_identity() {
-        return Developed { px: src.to_vec(), exact: true };
+        return Developed { px: src.to_vec(), exact: true, context: Default::default() };
     }
     if cache.source != Some((source, w, h)) {
         *cache = DevelopCache { source: Some((source, w, h)), ..Default::default() };
     }
+    let frame = Frame::whole(w, h);
     let (lk, pk) = (LightKey::of(p), PresenceKey::of(p));
     let mut exact = true;
-    let mut px = match &cache.presence {
-        Some((k, v)) if *k == pk => v.clone(),
+    let (mut px, context) = match &cache.presence {
+        Some((k, v, c)) if *k == pk => (v.clone(), c.clone()),
         _ => {
+            let mut context = Context::default();
+            // The light stages' measurements are taken again whenever they run (a cached result
+            // has them in the cache's last context).
             let mut px = match &cache.light {
-                Some((k, v)) if *k == lk => v.clone(),
+                Some((k, v)) if *k == lk => {
+                    if let Some((_, _, c)) = &cache.presence {
+                        (context.haze, context.tone) = (c.haze.clone(), c.tone.clone());
+                    }
+                    v.clone()
+                }
                 _ => {
                     let mut px = src.to_vec();
-                    exact = light(&mut px, w, h, p, Some((&mut cache.tone, tone_key(source, p), draft)));
+                    exact = light(&mut px, w, h, p, Some((&mut cache.tone, tone_key(source, p), draft)), frame, None, Some(&mut context));
                     if exact {
                         cache.light = Some((lk, px.clone()));
                     }
                     px
                 }
             };
-            presence(&mut px, w, h, p);
+            presence(&mut px, w, h, p, frame, None, Some(&mut context));
+            let context = std::sync::Arc::new(context);
             if exact {
-                cache.presence = Some((pk, px.clone()));
+                cache.presence = Some((pk, px.clone(), context.clone()));
             }
-            px
+            (px, context)
         }
     };
-    finish(&mut px, w, h, p, float);
-    Developed { px, exact }
+    finish(&mut px, w, h, p, float, frame);
+    Developed { px, exact, context }
 }
 
 /// What the Shadows and Highlights maps depend on besides those two sliders: the pixels and the
-/// settings before them. Exposure only shifts the log luminance they filter, which the filter
-/// ignores, so it counts only when Dehaze (which it changes) runs between.
+/// settings before them.
 fn tone_key(source: u64, p: &CameraRaw) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut h);
-    let exposure = if p.dehaze != 0.0 { p.exposure } else { 0.0 };
-    for v in [p.temperature, p.tint, p.dehaze, exposure, p.encoding_gamma, p.pixel_scale].into_iter().chain(front_settings(p)) {
+    for v in [p.temperature, p.tint, p.dehaze, p.exposure, p.encoding_gamma, p.pixel_scale].into_iter().chain(front_settings(p)) {
         v.to_bits().hash(&mut h);
     }
     h.finish()
@@ -886,17 +1014,29 @@ fn front_settings(p: &CameraRaw) -> [f32; 16] {
 
 /// Stages 1–3a: white balance and exposure, Dehaze, Shadows and Highlights. `tone`: the cache of
 /// the last, its key ([`tone_key`]) and whether stale maps may serve; false when one did.
-fn light(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, tone: Option<(&mut local_tone::Cache, u64, bool)>) -> bool {
+/// `given`: image-wide measurements to use instead of taking them (a region's develop, whose
+/// input is already distorted); `record`: where to keep the ones taken.
+#[allow(clippy::too_many_arguments)]
+fn light(
+    px: &mut [[f32; 4]],
+    w: usize,
+    h: usize,
+    p: &CameraRaw,
+    tone: Option<(&mut local_tone::Cache, u64, bool)>,
+    frame: Frame,
+    given: Option<&Context>,
+    mut record: Option<&mut Context>,
+) -> bool {
     // 0. The lens and the camera profile.
     if !p.front_neutral() {
-        optics(px, w, h, p);
+        optics(px, w, h, p, frame, given.is_none());
         calibrate(px, w, p);
     }
-    // 1. White balance + exposure in linear light.
-    if !p.wb_neutral() {
+    // 1. White balance in linear light, then Exposure as Camera Raw's curve (see `acr`).
+    if p.temperature != 0.0 || p.tint != 0.0 {
         let mut g = white_balance_gains(p.temperature, p.tint);
         let norm = luma(g);
-        g = g.map(|v| v / norm * 2f32.powf(p.exposure));
+        g = g.map(|v| v / norm);
         let srgb = Encoding(0.0).curves();
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
@@ -906,29 +1046,50 @@ fn light(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, tone: Option<(&
             }
         });
     }
+    if p.exposure != 0.0 {
+        acr::hue_preserving(px, w, &acr::exposure(p.exposure), Encoding::of(p.encoding_gamma));
+    }
     // 2. Dehaze.
     if p.dehaze != 0.0 {
-        dehaze(px, w, h, p.dehaze / 100.0);
+        let haze = match given.and_then(|c| c.haze.as_ref()) {
+            Some(haze) => std::borrow::Cow::Borrowed(haze),
+            None => std::borrow::Cow::Owned(measure_haze(px, w, h)),
+        };
+        dehaze(px, w, &haze, p.dehaze / 100.0, frame);
+        if let Some(r) = record.as_deref_mut() {
+            r.haze = Some(haze.into_owned());
+        }
     }
     // 3. Tone. Highlights and Shadows: a local Laplacian filter (see `local_tone`).
     if p.highlights != 0.0 || p.shadows != 0.0 {
-        return local_tone::apply(px, w, h, p.shadows, p.highlights, Encoding::of(p.encoding_gamma), tone);
+        let enc = Encoding::of(p.encoding_gamma);
+        if let Some(map) = given.and_then(|c| c.tone.as_ref()) {
+            local_tone::apply_map(px, w, map, frame, enc);
+            return true;
+        }
+        let mut map = None;
+        let exact = local_tone::apply(px, w, h, p.shadows, p.highlights, enc, tone, record.is_some().then_some(&mut map));
+        if let Some(r) = record {
+            r.tone = map;
+        }
+        return exact;
     }
     true
 }
 
-/// Stage 3, continued: Contrast, Texture and Clarity on luminance, then Whites and Blacks.
-fn presence(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
+/// Stage 3, continued: Texture and Clarity on luminance, Contrast as Camera Raw's curve about a
+/// pivot that follows the image (see `acr`), then Whites and Blacks. Contrast's pivot and Whites
+/// and Blacks' amounts come from `given`, or are measured and kept in `record`.
+fn presence(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame, given: Option<&Context>, mut record: Option<&mut Context>) {
     use crate::photo_util::par_map as par;
     let ps = p.pixel_scale.clamp(0.01, 1.0);
-    let long = w.max(h) as f32;
-    if [p.contrast, p.texture, p.clarity].iter().any(|v| *v != 0.0) {
+    let long = frame.full_w.max(frame.full_h) as f32;
+    let enc = Encoding::of(p.encoding_gamma);
+    if p.texture != 0.0 || p.clarity != 0.0 {
         let l: Vec<f32> = par(px.len(), |i| luma([px[i][0], px[i][1], px[i][2]]).max(0.0));
         let lc: Vec<f32> = par(l.len(), |i| l[i].min(1.0));
         let clar = (p.clarity != 0.0).then(|| guided_fast(&lc, &lc, w, h, ((long * 0.02) as usize).max(3), 0.005));
         let tex = (p.texture != 0.0).then(|| gauss(&lc, w, h, (long * 0.002).max(1.5 * ps)));
-        let k_con = p.contrast / 100.0 * 0.6;
-        let tau = std::f32::consts::TAU;
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
                 let i = y * w + x;
@@ -941,10 +1102,6 @@ fn presence(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
                 if let Some(t) = &tex {
                     lv += p.texture / 100.0 * 0.9 * (lc[i] - t[i]).clamp(-0.1, 0.1);
                 }
-                if k_con != 0.0 {
-                    let xx = lv.clamp(0.0, 1.0);
-                    lv += -k_con * (tau * xx).sin() / tau;
-                }
                 let lv = lv.max(0.0) + (l0 - lc[i]);
                 let ratio = if l0 > 1e-5 { lv / l0 } else { 1.0 };
                 for c in 0..3 {
@@ -953,71 +1110,49 @@ fn presence(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
             }
         });
     }
+    if p.contrast != 0.0 {
+        let pivot = match given.and_then(|c| c.pivot) {
+            Some(v) => v,
+            None => acr::contrast_pivot(px, enc),
+        };
+        if let Some(r) = record.as_deref_mut() {
+            r.pivot = Some(pivot);
+        }
+        acr::hue_preserving(px, w, &acr::contrast(p.contrast, pivot), enc);
+    }
     // 3b. Whites and Blacks: global curves adapted to the image's black and white points.
     if p.whites != 0.0 || p.blacks != 0.0 {
-        let enc = Encoding::of(p.encoding_gamma);
-        let (bp, wp) = luminance_points(px, w, h, enc);
-        let (xw, xb) = whites_blacks::amounts(p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0), bp, wp);
+        let (xw, xb) = match given.and_then(|c| c.amounts) {
+            Some(a) => a,
+            None => {
+                let (bp, wp) = luminance_points(px, w, h, enc);
+                whites_blacks::amounts(p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0), bp, wp)
+            }
+        };
+        if let Some(r) = record {
+            r.amounts = Some((xw, xb));
+        }
         whites_blacks::apply(px, w, xw, xb, enc);
     }
 }
 
 /// Stages 4–9: presence, curves, colour, detail and effects, then the range kept.
-fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, frame: Frame) {
     let ps = p.pixel_scale.clamp(0.01, 1.0);
-    // 4–7: per-pixel colour stages.
-    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral() || p.monochrome;
-    if need_color {
-        let par = (!(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0)).then(|| parametric_lut(p, 1024));
-        let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
-        let (master, cr, cg, cb) = (pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue));
+    // 4. Tone curve.
+    if !p.curves_neutral() {
+        curves(px, w, p);
+    }
+    // 5. Vibrance and Saturation (see `acr`).
+    if p.vibrance != 0.0 || p.saturation != 0.0 {
+        acr::vibrance_saturation(px, w, p.vibrance, p.saturation, Encoding::of(p.encoding_gamma));
+    }
+    // 6. HSL or the black and white mix.
+    if !p.hsl_neutral() || p.monochrome {
         let hsl = !p.hsl_neutral() && !p.monochrome;
-        let grade = !p.grade_neutral();
-        let curved = par.is_some() || master.is_some() || cr.is_some() || cg.is_some() || cb.is_some();
-        let refine = p.curve_refine_saturation.clamp(0.0, 100.0) / 100.0;
-        let wheel_tint = |wh: &Wheel| -> [f32; 3] {
-            let c = hsv_to_rgb(wh.hue, 1.0, 1.0);
-            let l = luma(c);
-            [c[0] - l, c[1] - l, c[2] - l].map(|v| v * wh.sat / 100.0 * 0.3)
-        };
-        let tints = [wheel_tint(&p.grade_shadows), wheel_tint(&p.grade_midtones), wheel_tint(&p.grade_highlights), wheel_tint(&p.grade_global)];
-        let blend = 0.15 + p.grade_blending.clamp(0.0, 100.0) / 100.0 * 0.35;
-        let bal = p.grade_balance.clamp(-100.0, 100.0) / 100.0 * 0.25;
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
                 let mut c = [q[0], q[1], q[2]];
-                if p.vibrance != 0.0 || p.saturation != 0.0 {
-                    let l = luma(c);
-                    let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
-                    let sat = if mx > 1e-6 { (mx - mn) / mx } else { 0.0 };
-                    // Vibrance protects skin-ish hues (oranges) a little, like ACR.
-                    let hue = rgb_to_hsv(c)[0];
-                    let skin = (1.0 - ((hue - 25.0).abs() / 25.0)).clamp(0.0, 1.0) * 0.5;
-                    let k = 1.0 + p.saturation / 100.0 + p.vibrance / 100.0 * (1.0 - sat) * (1.0 - skin);
-                    c = c.map(|v| l + (v - l) * k.max(0.0));
-                }
-                let uncurved = c;
-                if let Some(lut) = &par {
-                    c = c.map(|v| lut_eval(lut, v));
-                }
-                if let Some(lut) = &master {
-                    c = c.map(|v| lut_eval(lut, v));
-                }
-                for (ch, lut) in [&cr, &cg, &cb].iter().enumerate() {
-                    if let Some(lut) = lut {
-                        c[ch] = lut_eval(lut, c[ch]);
-                    }
-                }
-                if curved && refine < 1.0 {
-                    // Refine Saturation: the colours' spread around their grey, scaled with the
-                    // grey as the curve moved it, instead of all the spread the curve made.
-                    let (l0, l1) = (luma(uncurved), luma(c));
-                    let scale = if l0 > 1e-5 { l1 / l0 } else { 1.0 };
-                    for ch in 0..3 {
-                        let kept = (uncurved[ch] - l0) * scale;
-                        c[ch] = l1 + kept + (c[ch] - l1 - kept) * refine;
-                    }
-                }
                 if p.monochrome {
                     c = gray_mix(c, &p.gray_mix);
                 } else if hsl {
@@ -1042,28 +1177,15 @@ fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
                         c = out.map(|x| x * k);
                     }
                 }
-                if grade {
-                    let l = luma(c).clamp(0.0, 1.0);
-                    let sh = 1.0 - smoothstep(0.0, 0.5 + bal + blend, l);
-                    let hi = smoothstep(0.5 + bal - blend, 1.0, l);
-                    let mid = (1.0 - sh - hi).max(0.0);
-                    let masks = [sh, mid, hi, 1.0];
-                    let lums = [p.grade_shadows.lum, p.grade_midtones.lum, p.grade_highlights.lum, p.grade_global.lum];
-                    for k in 0..4 {
-                        for ch in 0..3 {
-                            c[ch] += masks[k] * tints[k][ch];
-                        }
-                        if lums[k] != 0.0 {
-                            let f = 2f32.powf(masks[k] * lums[k] / 100.0 * 0.6);
-                            c = c.map(|x| x * f);
-                        }
-                    }
-                }
                 q[0] = c[0];
                 q[1] = c[1];
                 q[2] = c[2];
             }
         });
+    }
+    // 7. Colour Grading (see `acr`).
+    if !p.grade_neutral() {
+        acr::grade(px, w, p, Encoding::of(p.encoding_gamma));
     }
     // 8. Detail.
     if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
@@ -1071,7 +1193,7 @@ fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
     }
     // 9. Effects.
     if p.vignette_amount != 0.0 {
-        vignette(px, w, h, p);
+        vignette(px, w, p, frame);
     }
     if p.grain_amount > 0.0 {
         let cell = 1.0 + p.grain_size / 25.0;
@@ -1082,7 +1204,7 @@ fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
                 // Sample in full-resolution coordinates so previews match the result.
-                let (fx, fy) = (x as f32 * pscale / cell, y as f32 * pscale / cell);
+                let (fx, fy) = (frame.x(x) * pscale / cell, frame.y(y) * pscale / cell);
                 let n = value_noise(fx, fy, seed) * (1.0 - rough) + (value_noise(fx * 2.3, fy * 2.3, seed + 7) - 0.0) * rough;
                 let l = luma([q[0], q[1], q[2]]).clamp(0.0, 1.0);
                 let g = (n - 0.5) * 2.0 * amt * (0.4 + 2.4 * l * (1.0 - l));
@@ -1097,6 +1219,44 @@ fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
             for q in row.iter_mut() {
                 for c in 0..3 {
                     q[c] = q[c].clamp(0.0, 1.0);
+                }
+            }
+        });
+    }
+}
+
+/// The tone curve as Camera Raw applies it (see `acr`): the parametric curve and then the point
+/// curve as one hue-preserving curve, then the red, green and blue point curves on each channel.
+/// Refine Saturation below 100 keeps less of the change of colour the curves made.
+fn curves(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
+    let enc = Encoding::of(p.encoding_gamma);
+    let refine = p.curve_refine_saturation.clamp(0.0, 100.0) / 100.0;
+    let before = (refine < 1.0).then(|| px.to_vec());
+    let parametric = [p.curve_shadows, p.curve_darks, p.curve_lights, p.curve_highlights].iter().any(|v| *v != 0.0).then(|| acr::parametric(p));
+    let master = (!is_linear(&p.point_curve)).then(|| acr::point(&p.point_curve));
+    let grey = match (parametric, master) {
+        (Some(a), Some(b)) => Some(b.after(&a)),
+        (a, b) => a.or(b),
+    };
+    if let Some(t) = grey {
+        acr::hue_preserving(px, w, &t, enc);
+    }
+    let channels = [&p.point_curve_red, &p.point_curve_green, &p.point_curve_blue].map(|c| (!is_linear(c)).then(|| acr::point(c)));
+    if channels.iter().any(Option::is_some) {
+        acr::per_channel(px, w, &channels, enc);
+    }
+    if let Some(before) = before {
+        // Refine Saturation: the colours' spread around their grey, scaled with the grey as the
+        // curves moved it, instead of all the spread the curves made.
+        par_rows(px, w, 1, |y, row| {
+            for (x, q) in row.iter_mut().enumerate() {
+                let Some(b) = before.get(y * w + x) else { continue };
+                let (u, c) = ([b[0], b[1], b[2]], [q[0], q[1], q[2]]);
+                let (l0, l1) = (luma(u), luma(c));
+                let scale = if l0 > 1e-5 { l1 / l0 } else { 1.0 };
+                for ch in 0..3 {
+                    let kept = (u[ch] - l0) * scale;
+                    q[ch] = l1 + kept + (c[ch] - l1 - kept) * refine;
                 }
             }
         });
@@ -1138,8 +1298,11 @@ fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding) -> (f32,
 }
 
 /// Bilinear sample of a straight RGBA buffer at `(x, y)` (pixel centres at integers), edges
-/// repeated.
-fn sample_rgba(src: &[[f32; 4]], w: usize, h: usize, x: f32, y: f32) -> [f32; 4] {
+/// repeated (for moving a region's input by [`distortion_source`]).
+pub fn sample_rgba(src: &[[f32; 4]], w: usize, h: usize, x: f32, y: f32) -> [f32; 4] {
+    if w == 0 || h == 0 || src.len() < w * h {
+        return [0.0; 4];
+    }
     let x = if x.is_finite() { x.clamp(0.0, (w - 1) as f32) } else { 0.0 };
     let y = if y.is_finite() { y.clamp(0.0, (h - 1) as f32) } else { 0.0 };
     let (x0, y0) = (x as usize, y as usize);
@@ -1155,22 +1318,20 @@ fn sample_rgba(src: &[[f32; 4]], w: usize, h: usize, x: f32, y: f32) -> [f32; 4]
 
 /// Stage 0, the Optics panel: manual distortion, defringe and lens vignetting, all measured on
 /// the frame (radius 1 at the corners) so a proxy and the full image agree.
-fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
+fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame, distort: bool) {
     if w == 0 || h == 0 || px.len() != w * h {
         return;
     }
-    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-    let diag = cx.hypot(cy).max(1e-3);
-    if p.lens_distortion != 0.0 {
+    let (cx, cy, diag) = frame.centre();
+    if distort && p.lens_distortion != 0.0 {
         // A radial model: each pixel samples the source at its radius scaled by 1 − k r², so
         // positive amounts push the frame's edges out (straightening barrel distortion).
-        let k = p.lens_distortion.clamp(-100.0, 100.0) / 100.0 * 0.25;
         let src = px.to_vec();
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
-                let (dx, dy) = ((x as f32 + 0.5 - cx) / diag, (y as f32 + 0.5 - cy) / diag);
-                let f = 1.0 - k * (dx * dx + dy * dy);
-                *q = sample_rgba(&src, w, h, cx + dx * f * diag - 0.5, cy + dy * f * diag - 0.5);
+                if let Some((sx, sy)) = distortion_source(p, frame.full_w, frame.full_h, frame.x(x), frame.y(y)) {
+                    *q = sample_rgba(&src, w, h, sx - frame.x0 as f32, sy - frame.y0 as f32);
+                }
             }
         });
     }
@@ -1218,7 +1379,7 @@ fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
         let curves = Encoding::of(p.encoding_gamma).curves();
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
-                let r = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy) / diag;
+                let r = (frame.x(x) + 0.5 - cx).hypot(frame.y(y) + 0.5 - cy) / diag;
                 let m = smoothstep(start, 1.0, r);
                 if m <= 0.0 {
                     continue;
@@ -1400,8 +1561,10 @@ fn value_noise(x: f32, y: f32, seed: u64) -> f32 {
     top + (bot - top) * sy
 }
 
-fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
-    // Transmission on a ≤ 768 px proxy, upsampled.
+/// Dehaze's measurements of a `w × h` image (He et al.: the dark channel, the atmospheric light
+/// from its brightest 0.1 %, the transmission refined with the guided filter), on a copy at most
+/// 768 px across.
+fn measure_haze(px: &[[f32; 4]], w: usize, h: usize) -> Haze {
     let k = w.max(h).div_ceil(768).max(1);
     let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
     // Rows of blocks in parallel, each block summed in the order one pass would.
@@ -1450,10 +1613,17 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     let t_raw: Vec<f32> = norm_dark.iter().map(|d| 1.0 - 0.95 * d).collect();
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
     let t = guided(&guide, &t_raw, sw, sh, r * 2, 1e-3);
-    let ks = k as f32;
+    Haze { air, t, tw: sw, th: sh, per_w: w as f32 / k as f32, per_h: h as f32 / k as f32 }
+}
+
+/// Dehaze by `amount` (−1 … 1) with `haze` measured on the whole image `frame` belongs to.
+fn dehaze(px: &mut [[f32; 4]], w: usize, haze: &Haze, amount: f32, frame: Frame) {
+    let Haze { air, t, tw: sw, th: sh, per_w, per_h } = haze;
+    let (sw, sh) = (*sw, *sh);
+    let (fx, fy) = (per_w / frame.full_w as f32, per_h / frame.full_h as f32);
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let tv = crate::photo_util::bilinear(&t, sw, sh, 1, 0, (x as f32 + 0.5) / ks - 0.5, (y as f32 + 0.5) / ks - 0.5).clamp(0.1, 1.0);
+            let tv = crate::photo_util::bilinear(t, sw, sh, 1, 0, (frame.x(x) + 0.5) * fx - 0.5, (frame.y(y) + 0.5) * fy - 0.5).clamp(0.1, 1.0);
             for c in 0..3 {
                 let i = q[c];
                 let j = (i - air[c]) / tv + air[c];
@@ -1529,58 +1699,44 @@ fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     });
 }
 
-fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
-    let amt = p.vignette_amount / 100.0;
-    let mid = p.vignette_midpoint.clamp(0.0, 100.0) / 100.0;
-    let feather = p.vignette_feather.clamp(0.0, 100.0) / 100.0;
-    let round = p.vignette_roundness.clamp(-100.0, 100.0) / 100.0;
+fn vignette(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, frame: Frame) {
+    let amount = p.vignette_amount.clamp(-100.0, 100.0);
+    let amt = amount / 100.0;
     let hl = p.vignette_highlights.clamp(0.0, 100.0) / 100.0;
     let style = p.vignette_style.as_str();
-    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-    // Roundness: 0 follows the frame's aspect, +1 a circle, −1 a rounded rectangle.
-    let (ax, ay) = if round >= 0.0 {
-        let r = cx.min(cy) + (cx.max(cy) - cx.min(cy)) * (1.0 - round);
-        (if cx >= cy { r } else { cx }, if cy > cx { r } else { cy })
-    } else {
-        (cx, cy)
-    };
-    let pw = 2.0 + (-round).max(0.0) * 6.0;
-    let inner = 1.0 - mid * 0.8;
-    let edge0 = inner - feather * 0.5 * inner;
-    let edge1 = inner + feather * 0.5 * (1.4 - inner) + 0.02;
+    let (cx, cy) = (frame.full_w as f32 / 2.0, frame.full_h as f32 / 2.0);
+    let mask = acr::VignetteMask::new(p, frame.full_w, frame.full_h);
+    let enc = Encoding::of(p.encoding_gamma);
+    let tone = (style != "paintOverlay" && style != "colorPriority").then(|| acr::VignetteTone::new(enc));
+    let curves = enc.curves();
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let (dx, dy) = (((x as f32 + 0.5 - cx) / ax).abs(), ((y as f32 + 0.5 - cy) / ay).abs());
-            let r = if pw == 2.0 { dx.hypot(dy) } else { (dx.powf(pw) + dy.powf(pw)).powf(1.0 / pw) };
-            let m = smoothstep(edge0, edge1, r);
-            if m <= 0.0 {
+            let m = mask.at(frame.x(x) + 0.5 - cx, frame.y(y) + 0.5 - cy);
+            if m <= 1e-4 {
                 continue;
             }
             let l = luma([q[0], q[1], q[2]]).clamp(0.0, 1.0);
-            match style {
-                "paintOverlay" => {
+            match (style, &tone) {
+                ("paintOverlay", _) => {
                     let target = if amt < 0.0 { 0.0 } else { 1.0 };
                     let k = m * amt.abs();
                     for c in 0..3 {
                         q[c] += (target - q[c]) * k;
                     }
                 }
-                _ => {
-                    let mut k = 2f32.powf(amt * 2.0 * m);
-                    if amt < 0.0 && hl > 0.0 {
-                        // Highlights: let bright areas punch through a darkening vignette.
-                        let protect = smoothstep(0.6, 1.0, l) * hl;
-                        k += (1.0 - k) * protect;
+                (_, Some(tone)) => {
+                    // Highlights: let bright areas punch through a darkening vignette.
+                    let protect = if amt < 0.0 { smoothstep(0.6, 1.0, l) * hl } else { 0.0 };
+                    let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
+                    let out = tone.apply(lin, amount * m * (1.0 - protect));
+                    for c in 0..3 {
+                        q[c] = curves.encode(out[c]);
                     }
-                    if style == "colorPriority" {
-                        let nl = l * k;
-                        for c in 0..3 {
-                            q[c] += nl - l;
-                        }
-                    } else {
-                        for c in 0..3 {
-                            q[c] *= k;
-                        }
+                }
+                _ => {
+                    let nl = l * 2f32.powf(amt * 2.0 * m);
+                    for c in 0..3 {
+                        q[c] += nl - l;
                     }
                 }
             }
@@ -1963,6 +2119,69 @@ mod tests {
         assert!(a.exposure > 0.5 && a.contrast > 0.0 && a.whites > 0.0, "{a:?}");
         assert_eq!(auto_tone(&[]), AutoTone::default());
         assert!([a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks].iter().all(|v| v.is_finite()));
+    }
+
+    /// A zoomed-in view develops only the part it shows, with the whole image's measurements: the
+    /// part comes out as the whole image's develop has it there.
+    #[test]
+    fn a_region_develops_as_the_whole_image_does() {
+        let (w, h) = (240usize, 180usize);
+        let src: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let n = hash01(x as i64, y as i64, 9) * 0.06;
+                let v = if (60..120).contains(&x) && (40..100).contains(&y) { 0.85 } else { 0.1 + 0.5 * y as f32 / h as f32 };
+                [v + n, v * 0.8 + n, v * 0.6 + 0.2 * x as f32 / w as f32, 1.0]
+            })
+            .collect();
+        let p = CameraRaw {
+            exposure: 0.3,
+            contrast: 20.0,
+            highlights: -40.0,
+            shadows: 50.0,
+            whites: 15.0,
+            blacks: -10.0,
+            texture: 20.0,
+            clarity: 25.0,
+            dehaze: 20.0,
+            vibrance: 15.0,
+            sharpen_amount: 30.0,
+            noise_luminance: 20.0,
+            noise_color: 25.0,
+            grain_amount: 20.0,
+            vignette_amount: -30.0,
+            lens_vignette_amount: 30.0,
+            lens_distortion: 20.0,
+            red_hue: 30.0,
+            ..Default::default()
+        };
+        let whole = develop_cached(&src, w, h, &p, false, 1, &mut DevelopCache::default(), false);
+        let (rx, ry, rw, rh) = (90usize, 60usize, 70usize, 50usize);
+        let m = region_margin(&p, w, h);
+        let (x0, y0) = (rx.saturating_sub(m), ry.saturating_sub(m));
+        let (x1, y1) = ((rx + rw + m).min(w), (ry + rh + m).min(h));
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        let input: Vec<[f32; 4]> = (0..bw * bh)
+            .map(|i| {
+                let (x, y) = ((x0 + i % bw) as f32, (y0 + i / bw) as f32);
+                let (sx, sy) = distortion_source(&p, w, h, x, y).unwrap_or((x, y));
+                sample_rgba(&src, w, h, sx, sy)
+            })
+            .collect();
+        let frame = Frame { x0: x0 as i64, y0: y0 as i64, full_w: w, full_h: h };
+        let part = develop_region(&input, bw, bh, frame, &p, false, &whole.context, 1, &mut DevelopCache::default(), (rx - x0, ry - y0, rw, rh));
+        assert_eq!(part.len(), rw * rh);
+        let mut worst = 0.0f32;
+        for y in ry..ry + rh {
+            for x in rx..rx + rw {
+                let (a, b) = (part[(y - ry) * rw + (x - rx)], whole.px[y * w + x]);
+                worst = (0..3).map(|c| (a[c] - b[c]).abs()).fold(worst, f32::max);
+            }
+        }
+        assert!(worst < 0.02, "the region differs from the whole develop by {worst}");
+        // Odd input is returned unchanged.
+        assert!(develop_region(&[], 0, 0, frame, &p, false, &whole.context, 1, &mut DevelopCache::default(), (0, 0, 0, 0)).is_empty());
+        assert!(develop_region(&input, bw, bh, frame, &p, false, &whole.context, 1, &mut DevelopCache::default(), (bw, 0, 1, 1)).is_empty());
     }
 
     #[test]

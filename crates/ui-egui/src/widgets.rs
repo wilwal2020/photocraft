@@ -1150,9 +1150,14 @@ pub fn second_click(ui: &Ui, resp: &Response) -> bool {
 }
 
 fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
+    slider_sized(ui, value, range, gradient, g, 18.0)
+}
+
+/// [`slider_with`] `height` points tall.
+fn slider_sized(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
@@ -1292,22 +1297,23 @@ pub fn slider_row_prec(
     r
 }
 
-/// [`slider_row`] packed tighter, for long panels of sliders (Camera Raw): the label and a
-/// shorter value field above the full-width track, without the gap after the row. The track
-/// keeps the whole width, for fine control.
+/// [`slider_row`] packed tighter, for long panels of sliders (Camera Raw, as compact as its
+/// panel): a smaller label and value field above the full-width track, which is shorter, without
+/// the gap after the row. The track keeps the whole width, for fine control.
 pub fn slider_row_compact(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut field = None;
     let spacing = ui.spacing().item_spacing.y;
     ui.spacing_mut().item_spacing.y = 0.0;
     ui.horizontal(|ui| {
-        let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        ui.set_height(16.0);
+        let l = ui.label(egui::RichText::new(tl!(label)).size(12.0).color(t.text_dim));
         scrub_label_within(ui, &l, f32::INFINITY);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            field = Some(value_field_box(ui, value, range.clone(), "", vec2(56.0, 18.0), 0.0, FieldOpts::default()).0);
+            field = Some(value_field_box(ui, value, range.clone(), "", vec2(44.0, 16.0), 0.0, FieldOpts::default()).0);
         });
     });
-    let s = slider_with(ui, value, range, gradient, RowGestures::default());
+    let s = slider_sized(ui, value, range, gradient, RowGestures::default(), 14.0);
     ui.spacing_mut().item_spacing.y = spacing;
     let mut r = s.clone();
     if let Some(v) = field {
