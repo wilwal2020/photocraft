@@ -37,6 +37,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Drain texture deltas just as a real frame does, rather than retaining every upload.
         let _ = ctx.run_ui(Default::default(), |_| {});
     }
+    // Slider drags (draft frames, as the dialog makes while a control moves): Exposure, and the
+    // colour sliders that act per pixel after the tone stages (Vibrance, the Color Mixer).
+    let mut colour_rows = Vec::new();
+    for (name, set) in [
+        ("exposure drag frame", [json!({"exposure": 0.25}), json!({"exposure": 0.75})]),
+        ("vibrance drag frame", [json!({"vibrance": 20}), json!({"vibrance": 40})]),
+        ("color mixer drag frame", [json!({"hslLum": [0, 0, 0, 0, 0, -20, 0, 0]}), json!({"hslLum": [0, 0, 0, 0, 0, -40, 0, 0]})]),
+    ] {
+        let mut ms = Vec::new();
+        for i in 0..reps + 3 {
+            let r = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set[i % 2], "draft": true}})).ok_or("no dialog entry point")??;
+            if i >= 3 {
+                ms.push(r.get("renderMs").and_then(Value::as_f64).ok_or("no render timing")?);
+            }
+            let _ = ctx.run_ui(Default::default(), |_| {});
+        }
+        colour_rows.push(json!({"name": name, "samples_ms": ms}));
+    }
+    camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0, "vibrance": 0, "hslLum": [0, 0, 0, 0, 0, 0, 0, 0]}}})).ok_or("no dialog entry point")??;
     // Measure the complete native dialog CPU path with every SDR scope feature enabled:
     // filter preparation + ICC vectorscope + clipping texture + nine Lab probes + pixel-hover overlays + UI mesh.
     // A full-coverage selection exercises the mask blend and selected-region scope without
@@ -113,7 +132,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let p50 = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
     let p95 = sorted.get(sorted.len().saturating_sub(1) * 95 / 100).copied().unwrap_or(0.0);
     let max = sorted.last().copied().unwrap_or(0.0);
-    let report = json!({"width": width, "height": height, "rows": [{"name": "exposure proxy update", "median_ms": p50, "p95_ms": p95, "max_ms": max, "samples_ms": samples}, {"name": "RGB histogram", "samples_ms": histogram_samples}, {"name": "RGB histogram paint + tessellation", "samples_ms": draw_samples}, {"name":"interactive scope update", "samples_ms":interactive_samples}, {"name":"vectorscope ICC analysis", "samples_ms":scope_samples}, {"name":"cached scope frame", "samples_ms":idle_samples}]});
+    let mut rows = vec![json!({"name": "exposure proxy update", "median_ms": p50, "p95_ms": p95, "max_ms": max, "samples_ms": samples})];
+    rows.extend(colour_rows);
+    rows.extend([json!({"name": "RGB histogram", "samples_ms": histogram_samples}), json!({"name": "RGB histogram paint + tessellation", "samples_ms": draw_samples}), json!({"name":"interactive scope update", "samples_ms":interactive_samples}), json!({"name":"vectorscope ICC analysis", "samples_ms":scope_samples}), json!({"name":"cached scope frame", "samples_ms":idle_samples})]);
+    let report = json!({"width": width, "height": height, "rows": rows});
     println!("{}", serde_json::to_string_pretty(&report)?);
     if let Some(path) = args.iter().position(|a| a == "--json").and_then(|i| args.get(i + 1)) {
         std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;

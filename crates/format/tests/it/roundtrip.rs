@@ -841,7 +841,7 @@ fn grain_adjustment_round_trips() {
         let mut doc = rich_doc(ColorMode::Rgb, depth);
         doc.insert_above(
             None,
-            Layer::new("Grain 1", LayerContent::Adjustment(photocraft_doc::Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 })),
+            Layer::new("Grain 1", LayerContent::Adjustment(photocraft_doc::Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0, seed: 0 })),
         );
         let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
         assert_eq!(back, doc, "{depth:?}");

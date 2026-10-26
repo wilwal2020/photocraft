@@ -262,7 +262,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 p[..3].copy_from_slice(&o);
             }
         }
-        Adjustment::Grain { amount, size, roughness } => {
+        Adjustment::Grain { amount, size, roughness, .. } => {
             let g = GrainParams::new(*amount, *size, *roughness);
             if !g.is_identity() {
                 apply_grain(&g, buf, depth == Some(SampleType::F32));
@@ -2664,7 +2664,7 @@ mod grain_tests {
     }
 
     fn grain(amount: f32) -> Adjustment {
-        Adjustment::Grain { amount, size: 34.0, roughness: 50.0 }
+        Adjustment::Grain { amount, size: 34.0, roughness: 50.0, seed: 0 }
     }
 
     /// The same pixels get the same grain every time, and a tile renders exactly the matching
@@ -2706,7 +2706,7 @@ mod grain_tests {
         assert_eq!(b.px, grey(rect, 0.5).px);
         assert!(spread(&grain(80.0)) > 1.8 * spread(&grain(30.0)));
         // Hostile settings never panic or produce NaN.
-        for adj in [Adjustment::Grain { amount: f32::NAN, size: f32::INFINITY, roughness: -1e30 }, grain(1e9)] {
+        for adj in [Adjustment::Grain { amount: f32::NAN, size: f32::INFINITY, roughness: -1e30, seed: 0 }, grain(1e9)] {
             let mut b = grey(Rect::new(i32::MAX - 16, i32::MIN, i32::MAX, i32::MIN + 2), 0.5);
             apply_depth(&adj, &mut b, Transfer::Srgb, None);
             assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))));
@@ -2722,7 +2722,7 @@ mod grain_tests {
         let rect = Rect::new(0, 0, 256, 256);
         let stats = |amount: f32, size: f32, roughness: f32| {
             let mut b = grey(rect, 134.0 / 255.0);
-            apply_depth(&Adjustment::Grain { amount, size, roughness }, &mut b, Transfer::Srgb, None);
+            apply_depth(&Adjustment::Grain { amount, size, roughness, seed: 0 }, &mut b, Transfer::Srgb, None);
             let v: Vec<f32> = b.px.iter().map(|p| p[0] * 255.0).collect();
             let mean = v.iter().sum::<f32>() / v.len() as f32;
             let d: Vec<f32> = v.iter().map(|x| x - mean).collect();

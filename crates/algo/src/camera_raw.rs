@@ -63,6 +63,10 @@ use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 mod acr;
 mod acr_grade_tables;
+mod acr_hsl_lum_tables;
+mod acr_hsl_tables;
+mod acr_vibrance_tables;
+mod colour_lut;
 mod acr_tables;
 mod local_tone;
 mod whites_blacks;
@@ -575,22 +579,6 @@ fn rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
     [h, if mx > 1e-9 { d / mx } else { 0.0 }, mx]
 }
 
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
-    let h = h.rem_euclid(360.0) / 60.0;
-    let c = v * s;
-    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
-    let (r, g, b) = match h as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = v - c;
-    [r + m, g + m, b + m]
-}
-
 /// Weights of the eight HSL bands at hue `h` (hat functions between neighbouring centres).
 pub fn band_weights(h: f32) -> [f32; 8] {
     let mut w = [0.0f32; 8];
@@ -659,8 +647,10 @@ impl CameraRaw {
     }
     /// Optics and Calibration: stage 0 (see [`front_settings`]).
     fn front_neutral(&self) -> bool {
+        self.optics_neutral() && self.calibration_neutral()
+    }
+    fn optics_neutral(&self) -> bool {
         [self.lens_distortion, self.lens_vignette_amount, self.defringe_purple_amount, self.defringe_green_amount].iter().all(|v| *v == 0.0)
-            && self.calibration_neutral()
     }
     fn calibration_neutral(&self) -> bool {
         [self.shadow_tint, self.red_hue, self.red_saturation, self.green_hue, self.green_saturation, self.blue_hue, self.blue_saturation].iter().all(|v| *v == 0.0)
@@ -692,8 +682,9 @@ fn is_linear(c: &[[f32; 2]]) -> bool {
 /// Camera Raw's white-balance channel gains for Temperature / Tint (−100…100), relative to the
 /// as-shot balance: warmer raises red and lowers blue (±35 % at the ends); a negative tint
 /// raises green, a positive one lowers it toward magenta (±25 %). An observed approximation of
-/// Adobe Camera Raw's sliders, not a colour-temperature model; shared by the filter (in linear
-/// RGB) and the raw open (on the camera's white-balance multipliers) so both agree.
+/// Adobe Camera Raw's sliders, not a colour-temperature model, for the raw open (on the camera's
+/// white-balance multipliers). The filter on a rendered image uses Photoshop's measured gains
+/// (`acr::white_balance`).
 pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
     let t = temperature / 100.0;
     let tn = tint / 100.0;
@@ -707,7 +698,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         return;
     }
     let frame = Frame::whole(w, h);
-    light(px, w, h, p, None, frame, None, None);
+    light(px, w, h, p, None, frame, None, None, false);
     presence(px, w, h, p, frame, None, None);
     finish(px, w, h, p, float, frame);
 }
@@ -838,7 +829,7 @@ pub fn develop_region(
             Some((k, v)) if *k == lk => par_copy(v),
             _ => {
                 let mut px = par_copy(src);
-                light(&mut px, w, h, p, None, frame, Some(context), None);
+                light(&mut px, w, h, p, None, frame, Some(context), None, false);
                 cache.light = Some((lk, par_copy(&px)));
                 px
             }
@@ -944,8 +935,10 @@ pub struct Developed {
 /// [`develop`] of `src` for an interactive preview, reusing what `cache` kept from earlier calls.
 /// `source` names the pixels: another value (or size) drops what was kept. With `draft` (while a
 /// slider moves), Shadows and Highlights may reuse maps made for other settings before them (white
-/// balance, Dehaze, the other of the two), which is close but not exact: `exact` is false then,
-/// and a call without `draft` gives [`develop`]'s result.
+/// balance, Dehaze, the other of the two), and the per-pixel colour stages go through colour
+/// tables (`colour_lut`; all of them as one table when nothing between them looks at the image),
+/// which is close but not exact: `exact` is false then, and a call without `draft` gives
+/// [`develop`]'s result.
 #[allow(clippy::too_many_arguments)]
 pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, source: u64, cache: &mut DevelopCache, draft: bool) -> Developed {
     if src.is_empty() || src.len() != w.saturating_mul(h) || p.is_identity() {
@@ -962,7 +955,35 @@ pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     // stage is kept once it holds still for a step (or outside a drag).
     let (keep_light, keep_presence) = (!draft || cache.seen == Some(pk.light), !draft || cache.seen_presence == Some(pk));
     (cache.seen, cache.seen_presence) = (Some(lk), Some(pk));
+    // Dragging a colour slider: the colour stages go through a table, read straight from the
+    // kept image.
+    let mut coloured = false;
+    // Dragging when nothing between the light's colour and the finish's measures or looks
+    // around: the whole develop up to the detail stages is one table, read straight from `src`.
+    if draft && colour_runs_meet(p) && (light_colour_active(p) || finish_colour_active(p)) && colour_lut::worth(src) {
+        let mut out = match cache.spare.take() {
+            Some(out) if out.len() == src.len() => out,
+            _ => vec![[0.0f32; 4]; src.len()],
+        };
+        let colour = |px: &mut [[f32; 4]], w: usize| {
+            light_colour(px, w, p);
+            finish_colour(px, w, p);
+        };
+        colour_lut::ColourLut::build(colour_lut::LUT_SIZE, &colour).apply_from(src, &mut out, w, &colour);
+        finish_rest(&mut out, w, h, p, float, frame);
+        return Developed { px: out, exact: false, context: Default::default() };
+    }
     let (mut px, context) = match &cache.presence {
+        Some((k, v, c)) if *k == pk && draft && finish_colour_active(p) && colour_lut::worth(v) => {
+            let mut out = match cache.spare.take() {
+                Some(out) if out.len() == v.len() => out,
+                _ => vec![[0.0f32; 4]; v.len()],
+            };
+            let colour = |px: &mut [[f32; 4]], w: usize| finish_colour(px, w, p);
+            colour_lut::ColourLut::build(colour_lut::LUT_SIZE, &colour).apply_from(v, &mut out, w, &colour);
+            coloured = true;
+            (out, c.clone())
+        }
         Some((k, v, c)) if *k == pk => (fresh(&mut cache.spare, v), c.clone()),
         _ => {
             let mut context = Context::default();
@@ -977,7 +998,7 @@ pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
                 }
                 _ => {
                     let mut px = fresh(&mut cache.spare, src);
-                    exact = light(&mut px, w, h, p, Some((&mut cache.tone, tone_key(source, p), draft)), frame, None, Some(&mut context));
+                    exact = light(&mut px, w, h, p, Some((&mut cache.tone, tone_key(source, p), draft)), frame, None, Some(&mut context), draft);
                     if exact && keep_light {
                         match &mut cache.light {
                             Some((k, v)) if v.len() == px.len() => {
@@ -1004,7 +1025,13 @@ pub fn develop_cached(src: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
             (px, context)
         }
     };
-    finish(&mut px, w, h, p, float, frame);
+    let tabled = if coloured {
+        finish_rest(&mut px, w, h, p, float, frame);
+        true
+    } else {
+        finish_with(&mut px, w, h, p, float, frame, draft)
+    };
+    let exact = exact && !tabled;
     Developed { px, exact, context }
 }
 
@@ -1090,28 +1117,22 @@ fn light(
     frame: Frame,
     given: Option<&Context>,
     mut record: Option<&mut Context>,
+    lut: bool,
 ) -> bool {
-    // 0. The lens and the camera profile.
-    if !p.front_neutral() {
+    // 0. The lens (then the camera profile, with the colour below).
+    if !p.optics_neutral() {
         optics(px, w, h, p, frame, given.is_none());
-        calibrate(px, w, p);
     }
-    // 1. White balance in linear light, then Exposure as Camera Raw's curve (see `acr`).
-    if p.temperature != 0.0 || p.tint != 0.0 {
-        let mut g = white_balance_gains(p.temperature, p.tint);
-        let norm = luma(g);
-        g = g.map(|v| v / norm);
-        let srgb = Encoding(0.0).curves();
-        par_rows(px, w, 1, |_, row| {
-            for q in row.iter_mut() {
-                for c in 0..3 {
-                    q[c] = srgb.encode((srgb.decode(q[c]) * g[c]).max(0.0));
-                }
-            }
-        });
-    }
-    if p.exposure != 0.0 {
-        acr::hue_preserving(px, w, &acr::exposure(p.exposure), Encoding::of(p.encoding_gamma));
+    // 0–1. Calibration, white balance, then Exposure as Camera Raw's curve (see `acr`): per pixel,
+    // through a colour table while a slider is dragged (`lut`).
+    let colour = |px: &mut [[f32; 4]], w: usize| light_colour(px, w, p);
+    let active = light_colour_active(p);
+    // A table's result is close to the stages' but not exact.
+    let tabled = lut && active && colour_lut::worth(px);
+    if tabled {
+        colour_lut::ColourLut::build(colour_lut::LUT_SIZE, &colour).apply(px, w, &colour);
+    } else if active {
+        colour(px, w);
     }
     // 2. Dehaze.
     if p.dehaze != 0.0 {
@@ -1129,16 +1150,38 @@ fn light(
         let enc = Encoding::of(p.encoding_gamma);
         if let Some(map) = given.and_then(|c| c.tone.as_ref()) {
             local_tone::apply_map(px, w, map, frame, enc);
-            return true;
+            return !tabled;
         }
         let mut map = None;
         let exact = local_tone::apply(px, w, h, p.shadows, p.highlights, enc, tone, record.is_some().then_some(&mut map));
         if let Some(r) = record {
             r.tone = map;
         }
-        return exact;
+        return exact && !tabled;
     }
-    true
+    !tabled
+}
+
+/// Stages 0–1's per-pixel part: Calibration, white balance, then Exposure.
+fn light_colour(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
+    calibrate(px, w, p);
+    if p.temperature != 0.0 || p.tint != 0.0 {
+        acr::white_balance(px, w, p.temperature, p.tint, Encoding::of(p.encoding_gamma));
+    }
+    if p.exposure != 0.0 {
+        acr::hue_preserving(px, w, &acr::exposure(p.exposure), Encoding::of(p.encoding_gamma));
+    }
+}
+
+fn light_colour_active(p: &CameraRaw) -> bool {
+    !p.calibration_neutral() || p.temperature != 0.0 || p.tint != 0.0 || p.exposure != 0.0
+}
+
+/// Nothing between the light's colour stages and the finish's looks at the surroundings or
+/// measures the image (lens, Dehaze, Shadows, Highlights, Texture, Clarity, Contrast, Whites,
+/// Blacks): the two runs are one colour function.
+fn colour_runs_meet(p: &CameraRaw) -> bool {
+    p.optics_neutral() && [p.dehaze, p.shadows, p.highlights, p.texture, p.clarity, p.contrast, p.whites, p.blacks].iter().all(|v| *v == 0.0)
 }
 
 /// Stage 3, continued: Texture and Clarity on luminance, Contrast as Camera Raw's curve about a
@@ -1202,7 +1245,12 @@ fn presence(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame
 
 /// Stages 4–9: presence, curves, colour, detail and effects, then the range kept.
 fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, frame: Frame) {
-    let ps = p.pixel_scale.clamp(0.01, 1.0);
+    let _ = finish_with(px, w, h, p, float, frame, false);
+}
+
+/// Steps 4–7, the per-pixel colour stages after the tone: what [`finish_with`] samples into a
+/// colour table while a slider is dragged.
+fn finish_colour(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
     // 4. Tone curve.
     if !p.curves_neutral() {
         curves(px, w, p);
@@ -1211,46 +1259,44 @@ fn finish(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, f
     if p.vibrance != 0.0 || p.saturation != 0.0 {
         acr::vibrance_saturation(px, w, p.vibrance, p.saturation, Encoding::of(p.encoding_gamma));
     }
-    // 6. HSL or the black and white mix.
-    if !p.hsl_neutral() || p.monochrome {
-        let hsl = !p.hsl_neutral() && !p.monochrome;
+    // 6. The black and white mix, or HSL (see `acr`).
+    if p.monochrome {
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
-                let mut c = [q[0], q[1], q[2]];
-                if p.monochrome {
-                    c = gray_mix(c, &p.gray_mix);
-                } else if hsl {
-                    let [hh, s, v] = rgb_to_hsv(c.map(|x| x.max(0.0)));
-                    if s > 1e-4 {
-                        let wts = band_weights(hh);
-                        let (mut dh, mut ds, mut dl) = (0.0f32, 0.0f32, 0.0f32);
-                        for k in 0..8 {
-                            dh += wts[k] * p.hsl_hue[k];
-                            ds += wts[k] * p.hsl_sat[k];
-                            dl += wts[k] * p.hsl_lum[k];
-                        }
-                        let nh = hh + dh / 100.0 * 30.0;
-                        let ns = (s * (1.0 + ds / 100.0)).clamp(0.0, 1.0);
-                        let mut out = hsv_to_rgb(nh, ns, v);
-                        // Keep the luminance, then apply the luminance shift weighted by saturation.
-                        let (l0, l1) = (luma(c), luma(out));
-                        if l1 > 1e-6 {
-                            out = out.map(|x| x * l0 / l1);
-                        }
-                        let k = 2f32.powf(dl / 100.0 * 1.0 * s);
-                        c = out.map(|x| x * k);
-                    }
-                }
-                q[0] = c[0];
-                q[1] = c[1];
-                q[2] = c[2];
+                let c = gray_mix([q[0], q[1], q[2]], &p.gray_mix);
+                q[..3].copy_from_slice(&c);
             }
         });
+    } else if !p.hsl_neutral() {
+        acr::hsl(px, w, p, Encoding::of(p.encoding_gamma));
     }
     // 7. Colour Grading (see `acr`).
     if !p.grade_neutral() {
         acr::grade(px, w, p, Encoding::of(p.encoding_gamma));
     }
+}
+
+fn finish_colour_active(p: &CameraRaw) -> bool {
+    !p.curves_neutral() || p.vibrance != 0.0 || p.saturation != 0.0 || p.monochrome || !p.hsl_neutral() || !p.grade_neutral()
+}
+
+/// [`finish`], with steps 4–7 through a colour table when `lut` (a slider is being dragged) and
+/// the table pays. Whether it did (its result is close to the stages' but not exact).
+fn finish_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, frame: Frame, lut: bool) -> bool {
+    let colour = |px: &mut [[f32; 4]], w: usize| finish_colour(px, w, p);
+    let tabled = lut && finish_colour_active(p) && colour_lut::worth(px);
+    if tabled {
+        colour_lut::ColourLut::build(colour_lut::LUT_SIZE, &colour).apply(px, w, &colour);
+    } else {
+        colour(px, w);
+    }
+    finish_rest(px, w, h, p, float, frame);
+    tabled
+}
+
+/// Steps 8–9 (detail and effects), then the range kept.
+fn finish_rest(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, frame: Frame) {
+    let ps = p.pixel_scale.clamp(0.01, 1.0);
     // 8. Detail.
     if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
         detail(px, w, h, p, ps);
@@ -1458,18 +1504,20 @@ fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame, 
 }
 
 /// Stage 0, the Calibration panel: the primaries' hue and saturation as a matrix on linear light
-/// (see [`calibration_matrix`]), then the shadows' tint (green to magenta).
+/// (see [`acr::calibration`]), then the shadows' tint (green to magenta).
 fn calibrate(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
     if p.calibration_neutral() {
         return;
     }
+    let enc = Encoding::of(p.encoding_gamma);
     let primaries = [(p.red_hue, p.red_saturation), (p.green_hue, p.green_saturation), (p.blue_hue, p.blue_saturation)];
-    let matrix = primaries.iter().any(|(h, s)| *h != 0.0 || *s != 0.0).then(|| calibration_matrix(primaries)).flatten();
+    let matrix = acr::calibration(primaries, enc);
     let tint = p.shadow_tint.clamp(-100.0, 100.0) / 100.0 * 0.12;
+    let curves = enc.curves();
     let srgb = Encoding(0.0).curves();
     par_rows(px, w, 1, |_, row| {
         for q in row.iter_mut() {
-            let mut lin = [0, 1, 2].map(|c| srgb.decode(q[c]));
+            let mut lin = [0, 1, 2].map(|c| curves.decode(q[c]));
             if let Some(m) = &matrix {
                 lin = std::array::from_fn(|r| m[r][0] * lin[0] + m[r][1] * lin[1] + m[r][2] * lin[2]);
             }
@@ -1479,67 +1527,49 @@ fn calibrate(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
                 lin = [lin[0] * (1.0 + k * 0.5), lin[1] * (1.0 - k), lin[2] * (1.0 + k * 0.5)];
             }
             for c in 0..3 {
-                q[c] = srgb.encode(lin[c].max(0.0));
+                q[c] = curves.encode(lin[c].max(0.0));
             }
         }
     });
 }
 
-/// The Calibration matrix (rows act on linear RGB) for the primaries' `(hue, saturation)`
-/// sliders: each primary's colour around its own grey is turned about the grey axis (positive hue
-/// toward the next hue: red to yellow, green to cyan, blue to magenta; up to 25°) and scaled
-/// (saturation ±100 → 0.4 … 1.6), its luminance kept; then the three are scaled so white stays
-/// white. `None` when that is impossible (the primaries no longer span the colours).
-fn calibration_matrix(primaries: [(f32, f32); 3]) -> Option<[[f32; 3]; 3]> {
-    let weights = [0.2126f32, 0.7152, 0.0722];
-    let n = 1.0 / 3f32.sqrt();
-    let mut cols = [[0.0f32; 3]; 3];
-    for (k, (hue, sat)) in primaries.iter().enumerate() {
-        let l = weights[k];
-        let mut v = [-l; 3];
-        v[k] += 1.0;
-        let (sin, cos) = (hue.clamp(-100.0, 100.0) / 100.0 * 25f32.to_radians()).sin_cos();
-        // Rodrigues' rotation about the unit grey axis (n, n, n).
-        let cross = [n * (v[2] - v[1]), n * (v[0] - v[2]), n * (v[1] - v[0])];
-        let along = n * (v[0] + v[1] + v[2]) * (1.0 - cos);
-        let scale = 1.0 + sat.clamp(-100.0, 100.0) / 100.0 * 0.6;
-        let col: [f32; 3] = std::array::from_fn(|c| l + (v[c] * cos + cross[c] * sin + n * along) * scale);
-        let dl = l - luma(col);
-        cols[k] = col.map(|x| x + dl);
-    }
-    // Scale the columns so that (1, 1, 1) maps to itself: solve cols · s = 1 (Cramer's rule).
-    let m = |r: usize, c: usize| cols[c][r];
-    let det3 = |a: [[f32; 3]; 3]| a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
-    let a: [[f32; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| m(r, c)));
-    let det = det3(a);
-    if !det.is_finite() || det.abs() < 1e-6 {
-        return None;
-    }
-    let s: [f32; 3] = std::array::from_fn(|k| {
-        let mut b = a;
-        for row in b.iter_mut() {
-            row[k] = 1.0;
-        }
-        det3(b) / det
-    });
-    if s.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-        return None;
-    }
-    Some(std::array::from_fn(|r| std::array::from_fn(|c| m(r, c) * s[c])))
-}
-
-/// Temperature and Tint (−100..=100) that make `lin` (linear RGB, before any setting) grey: the
-/// inverse of [`white_balance_gains`]. `None` for a colour too dark or odd to judge.
+/// Temperature and Tint (−100..=100) that make `lin` (linear sRGB, before any setting) grey under
+/// the Camera Raw filter's white balance (see `acr::white_balance`). `None` for a colour too dark
+/// or odd to judge.
 fn neutralize_linear(lin: [f32; 3]) -> Option<(f32, f32)> {
     if lin.iter().any(|v| !v.is_finite() || *v <= 1e-4) {
         return None;
     }
-    // Gains g with g·lin grey: g_r / g_g = a, g_b / g_g = b.
-    let (a, b) = (lin[1] / lin[0], lin[1] / lin[2]);
-    let tint = 4.0 * (1.0 - 2.0 / (a + b));
-    let temperature = 2.0 * (a - b) / (0.7 * (a + b));
-    let round = |v: f32| (v * 100.0).clamp(-100.0, 100.0).round();
-    Some((round(temperature), round(tint)))
+    let pro = acr::srgb_to_prophoto(lin);
+    if pro.iter().any(|v| *v <= 1e-5) {
+        return None;
+    }
+    // Gains g with g·pro grey: ln g_c − ln g_g = ln pro_g − ln pro_c for red and blue.
+    let want = [pro[1].ln() - pro[0].ln(), pro[1].ln() - pro[2].ln()];
+    let miss = |t: f32, n: f32| {
+        let l = acr::white_balance_log(t, n);
+        (l[0] - l[1] - want[0]).powi(2) + (l[2] - l[1] - want[1]).powi(2)
+    };
+    // A coarse search over the whole range, then whole steps around the best.
+    let mut best = (f32::INFINITY, 0.0f32, 0.0f32);
+    for t in (-100..=100).step_by(5) {
+        for n in (-100..=100).step_by(5) {
+            let e = miss(t as f32, n as f32);
+            if e < best.0 {
+                best = (e, t as f32, n as f32);
+            }
+        }
+    }
+    let (t0, n0) = (best.1 as i32, best.2 as i32);
+    for t in (t0 - 5).max(-100)..=(t0 + 5).min(100) {
+        for n in (n0 - 5).max(-100)..=(n0 + 5).min(100) {
+            let e = miss(t as f32, n as f32);
+            if e < best.0 {
+                best = (e, t as f32, n as f32);
+            }
+        }
+    }
+    Some((best.1, best.2))
 }
 
 /// The White Balance tool: Temperature and Tint (−100..=100) that make the colour `c` (as the
@@ -1927,7 +1957,8 @@ mod tests {
         let mut hs = [0.0; 8];
         hs[0] = -100.0;
         develop(&mut a, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
-        assert!(a[0][0] - a[0][1] < 0.1, "reds desaturated: {:?}", a[0]);
+        // This red sits mostly (not wholly) in the red band, as on Photoshop: most of its colour goes.
+        assert!(a[0][0] - a[0][1] < 0.25 && a[0][1] > 0.3, "reds desaturated: {:?}", a[0]);
         let blues: Vec<[f32; 4]> = vec![[0.2, 0.2, 0.8, 1.0]; w * h];
         let mut b = blues.clone();
         develop(&mut b, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
@@ -2095,6 +2126,43 @@ mod tests {
     }
 
     #[test]
+    fn drag_frames_go_through_colour_tables_close_to_the_exact_develop() {
+        // Big enough for a table to pay; smooth colours, a few pixels outside 0…1 (taken exactly).
+        let (w, h) = (480, 320);
+        let mut src: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+                [x, y, (1.0 - x) * 0.5 + y * 0.5, 1.0]
+            })
+            .collect();
+        src[5] = [1.4, -0.2, 0.5, 1.0];
+        let cases = [
+            CameraRaw { exposure: 0.4, temperature: 15.0, ..Default::default() },
+            CameraRaw { vibrance: 35.0, hsl_lum: [0.0, 0.0, 0.0, 0.0, 0.0, -40.0, 0.0, 0.0], ..Default::default() },
+            CameraRaw { shadows: 30.0, saturation: 20.0, grade_shadows: Wheel { hue: 220.0, sat: 40.0, lum: 0.0 }, ..Default::default() },
+        ];
+        for p in cases {
+            let mut exact = src.clone();
+            develop(&mut exact, w, h, &p, true);
+            let draft = develop_cached(&src, w, h, &p, true, 9, &mut DevelopCache::default(), true);
+            assert!(!draft.exact, "{p:?}: a table's frame is a draft");
+            let mut sum = 0.0f64;
+            for (a, b) in draft.px.iter().zip(&exact) {
+                for c in 0..3 {
+                    sum += f64::from((a[c] - b[c]).abs());
+                }
+            }
+            let mean = sum / (exact.len() * 3) as f64 * 255.0;
+            assert!(mean < 0.3, "{p:?}: mean {mean} levels");
+            // The pixel outside the grid went through the stages themselves.
+            assert!(draft.px[5].iter().zip(&exact[5]).all(|(a, b)| (a - b).abs() < 1e-4), "{:?} {:?}", draft.px[5], exact[5]);
+            // Without `draft` the develop is exact.
+            let again = develop_cached(&src, w, h, &p, true, 9, &mut DevelopCache::default(), false);
+            assert!(again.exact && again.px.iter().flatten().zip(exact.iter().flatten()).all(|(a, b)| (a - b).abs() < 1e-5));
+        }
+    }
+
+    #[test]
     fn black_and_white_mixes_by_hue_and_still_grades() {
         let (w, h) = (8, 1);
         let src: Vec<[f32; 4]> = vec![[0.8, 0.2, 0.2, 1.0], [0.2, 0.3, 0.8, 1.0], [0.5, 0.5, 0.5, 1.0], [0.1, 0.1, 0.1, 1.0], [0.9, 0.9, 0.9, 1.0], [0.2, 0.7, 0.2, 1.0], [0.6, 0.4, 0.1, 1.0], [0.0, 0.0, 0.0, 1.0]];
@@ -2140,7 +2208,8 @@ mod tests {
         develop(&mut d, 4, 1, &CameraRaw { shadow_tint: 100.0, ..Default::default() }, false);
         assert!(d[0][1] < d[0][0], "magenta shadows: {:?}", d[0]);
         assert!((magenta[3][1] - 1.0).abs() < 1e-3, "white is no shadow");
-        assert!(calibration_matrix([(100.0, -100.0); 3]).is_some());
+        assert!(acr::calibration([(100.0, -100.0); 3], Encoding(0.0)).is_some());
+        assert!(acr::calibration([(0.0, 0.0); 3], Encoding(0.0)).is_none());
     }
 
     #[test]

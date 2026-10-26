@@ -1803,7 +1803,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             p[0] = [n as f32, if *tetrahedral { 1.0 } else { 0.0 }, if *dither { 1.0 } else { 0.0 }, 0.0];
             (16, p, Some(rows))
         }
-        Adjustment::Grain { amount, size, roughness } => {
+        Adjustment::Grain { amount, size, roughness, .. } => {
             // compose::adjust::{grain_noise, grain_px} with the same filter (the raw noise is
             // integer-exact).
             let g = photocraft_compose::adjust::GrainParams::new(*amount, *size, *roughness);

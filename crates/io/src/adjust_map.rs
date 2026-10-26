@@ -10,21 +10,25 @@
 //! that cannot be read (noise gradients, profile lookups, CMYK channel mixers, unknown versions)
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 //!
-//! Grain (Photoshop 2026) has no published block layout: PhotoCraft writes it as a private
-//! [`GRAIN_KEY`] block (version, then Amount, Size and Roughness as big-endian `f32`s), which it
-//! reads back; other readers see an empty layer.
+//! Grain (Photoshop 2026) is a `grnA` block: a versioned descriptor with the integers
+//! `grainAmount`, `grainSize`, `grainRoughness` and `grainSeed`, each left out at its default (0,
+//! 25, 50, 0), as Photoshop 27.11 writes it (read from files it saved; no published layout).
+//! PhotoCraft writes that block; earlier PhotoCraft files had a private [`GRAIN_KEY`] block
+//! (version, then Amount, Size and Roughness as big-endian `f32`s), which it still reads.
 
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, ToneSpace, curve_map, curve_map_outputs};
 use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 
-/// PhotoCraft's private block for a Grain adjustment layer (see the module docs).
+/// PhotoCraft's earlier private block for a Grain adjustment layer (see the module docs).
 pub const GRAIN_KEY: [u8; 4] = *b"PCgr";
 const GRAIN_VERSION: u32 = 1;
+/// Photoshop's Grain adjustment block.
+pub const GRAIN_PS_KEY: [u8; 4] = *b"grnA";
 
 /// All PSD adjustment keys recognized as adjustment layers.
-pub const ADJUSTMENT_KEYS: [&[u8; 4]; 17] = [
-    b"levl", b"curv", b"hue2", b"brit", b"nvrt", b"thrs", b"post", b"expA", b"vibA", b"blnc", b"mixr", b"grdm", b"phfl", b"selc", b"blwh", b"clrL", &GRAIN_KEY,
+pub const ADJUSTMENT_KEYS: [&[u8; 4]; 18] = [
+    b"levl", b"curv", b"hue2", b"brit", b"nvrt", b"thrs", b"post", b"expA", b"vibA", b"blnc", b"mixr", b"grdm", b"phfl", b"selc", b"blwh", b"clrL", &GRAIN_KEY, &GRAIN_PS_KEY,
 ];
 
 fn be16(d: &[u8], at: usize) -> Option<u16> {
@@ -144,7 +148,7 @@ pub fn label(key: &[u8; 4]) -> &'static str {
         b"selc" => "Selective Color",
         b"blwh" => "Black & White",
         b"clrL" => "Color Lookup",
-        b"PCgr" => "Grain",
+        b"PCgr" | b"grnA" => "Grain",
         _ => "adjustment",
     }
 }
@@ -229,8 +233,19 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
             let known = data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == GRAIN_VERSION);
             // Hostile values are clamped to the sliders' range (NaN → 0).
             let pct = |at: usize| bef32(data, at).map(|v| if v.is_finite() { v.clamp(0.0, 100.0) } else { 0.0 });
-            known.then(|| Some(Adjustment::Grain { amount: pct(4)?, size: pct(8)?, roughness: pct(12)? })).flatten()
+            known.then(|| Some(Adjustment::Grain { amount: pct(4)?, size: pct(8)?, roughness: pct(12)?, seed: 0 })).flatten()
         }
+        b"grnA" => VersionedDescriptor::parse_prefix(data).ok().map(|(v, _)| {
+            let d = v.descriptor;
+            // Hostile values are clamped to the sliders' range (NaN → the default).
+            let pct = |k: &str, default: f32| desc_num(&d, k).filter(|v| v.is_finite()).map_or(default, |v| v.clamp(0.0, 100.0));
+            let seed = match d.get("grainSeed") {
+                Some(Value::Integer(v)) => *v as u32,
+                Some(Value::LargeInteger(v)) => *v as u32,
+                _ => 0,
+            };
+            Adjustment::Grain { amount: pct("grainAmount", 0.0), size: pct("grainSize", 25.0), roughness: pct("grainRoughness", 50.0), seed }
+        }),
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
         // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
@@ -870,12 +885,15 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             return vec![(*b"mixr", v)];
         }
-        Adjustment::Grain { amount, size, roughness } => {
-            v.extend_from_slice(&GRAIN_VERSION.to_be_bytes());
-            for x in [amount, size, roughness] {
-                v.extend_from_slice(&x.to_be_bytes());
-            }
-            return vec![(GRAIN_KEY, v)];
+        Adjustment::Grain { amount, size, roughness, seed } => {
+            // Photoshop's block; its sliders are whole numbers.
+            let int = |x: &f32| Value::Integer(if x.is_finite() { x.clamp(0.0, 100.0).round() as i32 } else { 0 });
+            let d = Descriptor::new("null")
+                .with("grainAmount", int(amount))
+                .with("grainSize", int(size))
+                .with("grainRoughness", int(roughness))
+                .with("grainSeed", Value::Integer(*seed as i32));
+            return vec![(GRAIN_PS_KEY, VersionedDescriptor::new(d).to_bytes())];
         }
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();
@@ -1115,8 +1133,9 @@ mod tests {
         let b = write(&inkl);
         assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
         rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
-        rt(Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 });
-        rt(Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0 });
+        rt(Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0, seed: 0 });
+        rt(Adjustment::Grain { amount: 7.0, size: 99.0, roughness: 1.0, seed: 1_729_710_294 });
+        rt(Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0, seed: 0 });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false, blend: Default::default(), midpoints: Vec::new() });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true, blend: Default::default(), midpoints: Vec::new() });
         rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
@@ -1201,7 +1220,20 @@ mod tests {
         for v in [f32::NAN, 1e9, -5.0] {
             hostile.extend_from_slice(&v.to_be_bytes());
         }
-        assert_eq!(parse(b"PCgr", &hostile, None, Channels::Rgb), Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0 });
+        assert_eq!(parse(b"PCgr", &hostile, None, Channels::Rgb), Adjustment::Grain { amount: 0.0, size: 100.0, roughness: 0.0, seed: 0 });
+        // The `grnA` block Photoshop 27.11 saved for Amount 32, Size 34 (Roughness at its default
+        // 50, so left out): read as it was set, seed included, and written back the same way.
+        let ps: &[u8] = &[0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6e, 0x75, 0x6c, 0x6c, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x0b, 0x67, 0x72, 0x61, 0x69, 0x6e, 0x41, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x6c, 0x6f, 0x6e, 0x67, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x09, 0x67, 0x72, 0x61, 0x69, 0x6e, 0x53, 0x69, 0x7a, 0x65, 0x6c, 0x6f, 0x6e, 0x67, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00, 0x09, 0x67, 0x72, 0x61, 0x69, 0x6e, 0x53, 0x65, 0x65, 0x64, 0x6c, 0x6f, 0x6e, 0x67, 0x67, 0x19, 0x48, 0xd4, 0x00];
+        let grain = parse(b"grnA", ps, None, Channels::Rgb);
+        assert_eq!(grain, Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0, seed: 0x6719_48d4 });
+        assert_eq!(label(b"grnA"), "Grain");
+        let written = write(&grain);
+        assert_eq!(written[0].0, *b"grnA", "Photoshop's own block");
+        assert_eq!(parse(b"grnA", &written[0].1, None, Channels::Rgb), grain);
+        // Nothing set: Photoshop's defaults. Unreadable bytes are kept raw.
+        let empty = VersionedDescriptor::new(Descriptor::new("null")).to_bytes();
+        assert_eq!(parse(b"grnA", &empty, None, Channels::Rgb), Adjustment::Grain { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0 });
+        assert!(matches!(parse(b"grnA", &[0, 0, 0, 16, 1], None, Channels::Rgb), Adjustment::Unsupported { .. }));
     }
 
     fn cube_lookup_block(cube: &[u8]) -> Vec<u8> {

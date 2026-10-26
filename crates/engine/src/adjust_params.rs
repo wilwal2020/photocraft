@@ -260,11 +260,11 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
         "grain" => {
-            let (a, s, ro) = match base {
-                Some(Adjustment::Grain { amount, size, roughness }) => (*amount, *size, *roughness),
-                _ => GRAIN_DEFAULTS,
+            let ((a, s, ro), seed) = match base {
+                Some(Adjustment::Grain { amount, size, roughness, seed }) => ((*amount, *size, *roughness), *seed),
+                _ => (GRAIN_DEFAULTS, 0),
             };
-            Adjustment::Grain { amount: r.num("amount", a, 0.0, 100.0)?, size: r.num("size", s, 0.0, 100.0)?, roughness: r.num("roughness", ro, 0.0, 100.0)? }
+            Adjustment::Grain { amount: r.num("amount", a, 0.0, 100.0)?, size: r.num("size", s, 0.0, 100.0)?, roughness: r.num("roughness", ro, 0.0, 100.0)?, seed }
         }
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
@@ -349,7 +349,7 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::ColorLookup { tetrahedral, dither, .. } => {
             json!({"interpolation": if *tetrahedral { "tetrahedral" } else { "trilinear" }, "dither": dither})
         }
-        Adjustment::Grain { amount, size, roughness } => json!({"amount": amount, "size": size, "roughness": roughness}),
+        Adjustment::Grain { amount, size, roughness, .. } => json!({"amount": amount, "size": size, "roughness": roughness}),
     }
 }
 
@@ -1657,10 +1657,10 @@ mod tests {
             }
         };
         s.execute("layer.newAdjustmentLayer.grain", json!({})).unwrap();
-        assert_eq!(grain(&s), Adjustment::Grain { amount: 0.0, size: 34.0, roughness: 50.0 });
+        assert_eq!(grain(&s), Adjustment::Grain { amount: 0.0, size: 34.0, roughness: 50.0, seed: 0 });
         assert_eq!(grain(&s).label(), "Grain");
         s.execute("layer.newAdjustmentLayer.grain", json!({"amount": 500, "size": -3})).unwrap();
-        assert_eq!(grain(&s), Adjustment::Grain { amount: 100.0, size: 0.0, roughness: 50.0 });
+        assert_eq!(grain(&s), Adjustment::Grain { amount: 100.0, size: 0.0, roughness: 50.0, seed: 0 });
         assert!(s.execute("layer.newAdjustmentLayer.grain", json!({"amount": "lots"})).is_err());
         assert!(crate::commands::find("layer.newAdjustmentLayer.grain").is_some());
         assert!(crate::commands::find("image.adjustments.grain").is_none(), "no Image › Adjustments › Grain");

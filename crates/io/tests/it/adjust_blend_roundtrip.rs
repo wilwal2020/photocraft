@@ -104,7 +104,7 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
         // A block this version cannot read (a truncated Selective Color) is kept verbatim.
         (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0].into() }, true),
         // PhotoCraft's private Grain block (Photoshop's own layout isn't published).
-        (Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0 }, true),
+        (Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0, seed: 0 }, true),
     ];
     // Compile-time guard: a new Adjustment kind must be added to the list above.
     for (a, _) in &all {

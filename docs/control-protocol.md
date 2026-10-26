@@ -517,7 +517,9 @@ preset mixed with the settings it was applied over), `savePreset: {name, group?,
 (sections: `treatment`, `whiteBalance`, `light`, `presence`, `curve`, `colorMixer`, `colorGrading`,
 `detail`, `effects`, `optics`, `calibration`; all when left out; written to PhotoCraft's folder, the
 reply's `savedPreset` its path) and `deletePreset` (a path in PhotoCraft's folder; Photoshop's
-presets are never written). All parts of one request are validated before any is applied; a rejected request
+presets are never written). `draft: true` develops the request's settings as a slider drag does
+(the colour stages through colour tables, within a fraction of a level; the reply's `draft` is then
+true, and the next request without it develops exactly). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,

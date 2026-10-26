@@ -68,13 +68,28 @@ const SCALARS: &[(&str, &str)] = &[
     ("lensVignetteAmount", "VigA"),
     ("lensVignetteMidpoint", "VigM"),
     ("curveRefineSaturation", "crfs"),
+    // Confirmed on Photoshop 27.11 by setting each key through the filter and watching its effect.
+    ("redHue", "RHue"),
+    ("redSaturation", "RSat"),
+    ("greenHue", "GHue"),
+    ("greenSaturation", "GSat"),
+    ("blueHue", "BHue"),
+    ("blueSaturation", "BSat"),
+    ("defringePurpleAmount", "DfPA"),
+    ("defringeGreenAmount", "DfGA"),
+    ("vignetteHighlights", "PCVH"),
 ];
 const ARRAYS: &[(&str, &[&str])] = &[
     ("curveSplits", &["PC_1", "PC_2", "PC_3"]),
     ("hslHue", &["HA_R", "HA_O", "HA_Y", "HA_G", "HA_A", "HA_B", "HA_P", "HA_M"]),
     ("hslSat", &["SA_R", "SA_O", "SA_Y", "SA_G", "SA_A", "SA_B", "SA_P", "SA_M"]),
     ("hslLum", &["LA_R", "LA_O", "LA_Y", "LA_G", "LA_A", "LA_B", "LA_P", "LA_M"]),
+    ("defringePurpleHue", &["DPHL", "DPHH"]),
+    ("defringeGreenHue", &["DPGL", "DPGH"]),
 ];
+/// The post-crop vignette's style (`PCVS`), numbered as the XMP's `PostCropVignetteStyle`.
+const VIGNETTE_STYLE: &str = "PCVS";
+const VIGNETTE_STYLES: &[(i32, &str)] = &[(1, "highlightPriority"), (2, "colorPriority"), (3, "paintOverlay")];
 const CURVES: &[(&str, &str)] = &[("pointCurve", "Crv "), ("pointCurveRed", "CrvR"), ("pointCurveGreen", "CrvG"), ("pointCurveBlue", "CrvB")];
 
 // These controls have no PhotoCraft counterpart yet. Their observed neutral values can be
@@ -86,7 +101,7 @@ fn default_params() -> Option<J> {
 }
 
 fn known_key(key: &str) -> bool {
-    matches!(key, "CrVe" | "PrVN" | "PrVe" | "WBal")
+    matches!(key, "CrVe" | "PrVN" | "PrVe" | "WBal" | VIGNETTE_STYLE)
         || SCALARS.iter().any(|(_, k)| *k == key)
         || ARRAYS.iter().any(|(_, keys)| keys.contains(&key))
         || CURVES.iter().any(|(_, k)| *k == key)
@@ -108,7 +123,8 @@ fn number_range(key: &str) -> std::ops::RangeInclusive<f64> {
         "Shrp" => 0.0..=150.0,
         "STSH" | "STHH" | "CgMH" | "CgGH" => 0.0..=360.0,
         "PC_1" | "PC_2" | "PC_3" | "ShpD" | "ShpM" | "LNR " | "LNRD" | "CNR " | "CNRD" | "STSS" | "STHS" | "CgMS" | "CgGS" | "CgBl" | "GRNA" | "GRNS"
-        | "GRNF" | "PCVM" | "PCVF" | "LNRC" | "CNRS" | "VigM" | "crfs" => 0.0..=100.0,
+        | "GRNF" | "PCVM" | "PCVF" | "LNRC" | "CNRS" | "VigM" | "crfs" | "PCVH" | "DPHL" | "DPHH" | "DPGL" | "DPGH" => 0.0..=100.0,
+        "DfPA" | "DfGA" => 0.0..=20.0,
         _ => -100.0..=100.0,
     }
 }
@@ -179,6 +195,11 @@ fn descriptor_params(d: &Descriptor) -> Option<J> {
             }
         }
     }
+    if d.get(VIGNETTE_STYLE).is_some() {
+        let style = int(d, VIGNETTE_STYLE)?;
+        let (_, name) = VIGNETTE_STYLES.iter().find(|(n, _)| *n == style)?;
+        *params.get_mut("vignetteStyle")? = json!(name);
+    }
     validate_splits(&params).ok()?;
     // Use the same f32 representation as the editor so opening and confirming without changes
     // does not rewrite a stored double such as 1.15 to 1.149999976158142.
@@ -221,6 +242,7 @@ fn validate_splits(params: &J) -> Result<(), String> {
 
 fn supported_param(key: &str) -> bool {
     SCALARS.iter().any(|(p, _)| p.split('.').next() == Some(key)) || ARRAYS.iter().any(|(p, _)| *p == key) || CURVES.iter().any(|(p, _)| *p == key)
+        || key == "vignetteStyle"
 }
 
 fn write_number(d: &mut Descriptor, key: &str, value: &J) -> Result<(), String> {
@@ -343,6 +365,12 @@ pub(super) fn export_item(params: &J) -> Result<Descriptor, String> {
                 write_number(&mut d, key, value)?;
             }
         }
+    }
+    let style = normalized.get("vignetteStyle").ok_or("missing Camera Raw vignette style")?;
+    if original.get("vignetteStyle") != Some(style) {
+        let style = style.as_str().ok_or("Camera Raw vignetteStyle must be text")?;
+        let (number, _) = VIGNETTE_STYLES.iter().find(|(_, s)| *s == style).ok_or("unknown Camera Raw vignette style")?;
+        set(&mut d, VIGNETTE_STYLE, Value::Integer(*number));
     }
     set(&mut item, "Fltr", Value::Descriptor(d));
     Ok(item)
@@ -611,6 +639,32 @@ mod tests {
     }
 
     #[test]
+    fn calibration_defringe_and_vignette_style_use_photoshops_keys() {
+        let mut f = filter_from_item(&source_item());
+        f.params["redHue"] = json!(50);
+        f.params["greenSaturation"] = json!(-60);
+        f.params["defringePurpleAmount"] = json!(5);
+        f.params["defringePurpleHue"] = json!([20, 80]);
+        f.params["vignetteAmount"] = json!(-30);
+        f.params["vignetteHighlights"] = json!(40);
+        f.params["vignetteStyle"] = json!("paintOverlay");
+        let item = item_for_filter(&f).unwrap();
+        let d = get_desc(&item, "Fltr").unwrap();
+        for (key, value) in [("RHue", 50), ("GSat", -60), ("DfPA", 5), ("DPHL", 20), ("DPHH", 80), ("PCVH", 40), ("PCVS", 3)] {
+            assert_eq!(d.get(key), Some(&Value::Integer(value)), "{key}");
+        }
+        let back = filter_from_item(&Descriptor::from_bytes(&item.to_bytes()).unwrap());
+        assert_eq!(back.command, COMMAND);
+        assert_eq!((&back.params["vignetteStyle"], &back.params["redHue"], &back.params["defringePurpleHue"]), (&json!("paintOverlay"), &json!(50.0), &json!([20.0, 80.0])));
+        // A style number Photoshop doesn't have keeps the whole filter opaque.
+        let mut odd = item.clone();
+        let mut d = get_desc(&odd, "Fltr").unwrap().clone();
+        set(&mut d, "PCVS", Value::Integer(9));
+        set(&mut odd, "Fltr", Value::Descriptor(d));
+        assert_eq!(filter_from_item(&odd).command, UNSUPPORTED_FILTER);
+    }
+
+    #[test]
     fn unsupported_processing_settings_remain_opaque_and_lossless() {
         for (key, value) in [
             ("LCs ", Value::Text(UnicodeString::new("unknown masks"))),
@@ -663,7 +717,10 @@ mod tests {
             json!({"gradeShadows": {"hue": 361}}),
             json!({"gradeShadows": {"unknown": 1}}),
             json!({"seed": 1}),
-            json!({"vignetteHighlights": 10}),
+            json!({"vignetteHighlights": 101}),
+            json!({"vignetteStyle": "sepia"}),
+            json!({"vignetteStyle": 2}),
+            json!({"defringePurpleAmount": 21}),
             json!({"futureSetting": 1}),
             json!({TEMPLATE_KEY: "zz"}),
             json!({TEMPLATE_KEY: "00"}),

@@ -8,8 +8,10 @@
 //! drag never waits for it, and on the UI thread for the control channel, so a reply describes its
 //! own settings. The cache keeps the image after the stages that look at its surroundings, so a
 //! later slider redoes only the stages after it; while a slider moves, Shadows and Highlights may
-//! reuse maps made for other settings (a draft, redone exactly once it is let go), and the
-//! full-resolution refinement waits for the release. OK runs `filter.cameraRaw` with the
+//! reuse maps made for other settings and the per-pixel colour stages (white balance, Exposure,
+//! the curves, Vibrance, the Color Mixer, Color Grading) go through a colour table sampled once per
+//! step (a draft, redone exactly once it is let go), and the full-resolution refinement waits for
+//! the release. OK runs `filter.cameraRaw` with the
 //! non-default settings, so the result is one history step (or a smart filter on a smart object)
 //! and exactly replayable.
 //!
@@ -20,7 +22,8 @@
 //! `"auto": "tone" | "whiteBalance"`, `"whiteBalanceAt": [u, v]` (the White Balance tool at a
 //! point of the image, 0–1), `"tab": "edit" | "presets"`, `"applyPreset": path or name`,
 //! `"presetAmount": 0–200`, `"savePreset": {"name", "group", "sections": [ids]}`,
-//! `"deletePreset": path` and `"showAdobePresets": bool`.
+//! `"deletePreset": path`, `"showAdobePresets": bool` and `"draft": bool` (develop this request's
+//! settings as a slider drag does).
 
 use egui::{Align2, Color32, FontId, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::camera_raw::CameraRaw;
@@ -127,7 +130,7 @@ impl CameraRawDialog {
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
-            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
+            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before, "draft": self.draft_shown,
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
@@ -183,6 +186,30 @@ impl CameraRawDialog {
     }
 
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
+        // Without a monitor transform: one pass from the floats to the screen's bytes, in
+        // parallel pieces (a slider drag shows a frame per step, and the copies through band
+        // buffers were a third of it).
+        if display.transform.is_none() && px.len() == w.saturating_mul(h) {
+            let mut pixels = vec![Color32::TRANSPARENT; px.len()];
+            let convert = |out: &mut [Color32], src: &[[f32; 4]]| {
+                let mut bytes = [[0u8; 4]; 256];
+                for (out, src) in out.chunks_mut(256).zip(src.chunks(256)) {
+                    let bytes = &mut bytes[..src.len()];
+                    display.rgba8_into(src, bytes);
+                    for (o, &[r, g, b, a]) in out.iter_mut().zip(bytes.iter()) {
+                        *o = Color32::from_rgba_unmultiplied(r, g, b, a);
+                    }
+                }
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                pixels.par_chunks_mut(PARALLEL_MIN_PIXELS).zip(px.par_chunks(PARALLEL_MIN_PIXELS)).for_each(|(o, s)| convert(o, s));
+            }
+            #[cfg(target_arch = "wasm32")]
+            convert(&mut pixels, px);
+            return egui::ColorImage::new([w, h], pixels);
+        }
         // Bands copied straight from `px`, converted in parallel (#4682), not a whole copy of the
         // proxy converted on one thread.
         super::camera_raw_detail_ui::display_image(Rect::new(0, 0, w as i32, h as i32), display, |r, out| {
@@ -197,9 +224,14 @@ impl CameraRawDialog {
     /// channel and the first frame use this, so a reply always describes its own settings; the
     /// dialog's own controls go through [`Self::request_render`].
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
+        self.render_as(ctx, false);
+    }
+
+    /// [`Self::render`], or with `draft` a frame as a slider drag makes (see [`ProxyJob::draft`]).
+    fn render_as(&mut self, ctx: &egui::Context, draft: bool) {
         // A render still running on the worker has older settings than this one.
         self.pending = None;
-        let frame = self.proxy_job(false).run();
+        let frame = self.proxy_job(draft).run();
         self.publish(ctx, frame);
         self.dirty = false;
     }
@@ -336,7 +368,8 @@ struct ProxyJob {
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     cache: std::sync::Arc<std::sync::Mutex<photocraft_algo::camera_raw::DevelopCache>>,
     source: u64,
-    /// A control is being dragged: Shadows and Highlights may reuse maps made for other settings.
+    /// A control is being dragged: Shadows and Highlights may reuse maps made for other settings,
+    /// and the colour stages go through colour tables (`photocraft_algo::camera_raw::develop_cached`).
     draft: bool,
 }
 
@@ -1012,8 +1045,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" | "auto" | "whiteBalanceAt" | "tab" | "applyPreset" | "presetAmount" | "savePreset" | "deletePreset" => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" => {
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" | "draft" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" | "draft" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -1123,14 +1156,16 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     let dirs = app.services.camera_raw_presets.clone();
     let Some(d) = app.camera_raw.as_mut() else { return Some(Err(tl!("Camera Raw isn't open").into())) };
     let mut extra = serde_json::Map::new();
+    // `draft`: develop as a slider drag does (colour tables; the next exact render replaces it).
+    let draft = ui.get("draft").and_then(Value::as_bool) == Some(true);
     if let Err(e) = control_requests(d, ui, &dirs, &mut extra) {
         if d.dirty {
-            d.render(ctx);
+            d.render_as(ctx, draft);
         }
         return Some(Err(e));
     }
     if d.dirty {
-        d.render(ctx);
+        d.render_as(ctx, draft);
     }
     // The control channel can read the status before the next frame draws.
     d.clear_recovered_error(&mut app.ui);
@@ -1753,6 +1788,40 @@ mod tests {
         let expected = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), px[0]));
         assert_eq!(preview.pixels[0].to_array(), expected.pixels[..4]);
         assert_ne!(preview.pixels[0].r(), 64, "linear light must be encoded before display");
+    }
+
+    #[test]
+    fn preview_image_matches_the_band_conversion() {
+        // The one-pass conversion (no monitor transform) against the band path, over several
+        // parallel pieces, with translucent, out-of-range and NaN values; plain and linear documents.
+        let (w, h) = (300, 120);
+        let px: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = match i % 11 {
+                    0 => f32::NAN,
+                    1 => -0.3,
+                    2 => 1.7,
+                    _ => (i % 509) as f32 / 508.0,
+                };
+                [v, (i % 97) as f32 / 96.0, 1.0 - (i % 61) as f32 / 60.0, (i % 4) as f32 / 3.0]
+            })
+            .collect();
+        let mut color = photocraft_engine::color_cmds::ColorState::default();
+        color.settings.monitor_profile = "srgb".into();
+        let plain = photocraft_doc::Document::new("t", photocraft_geom::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let mut linear = photocraft_doc::Document::new("t", photocraft_geom::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F32);
+        linear.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        for doc in [plain, linear] {
+            let display = color.canvas_display(&doc).unwrap();
+            assert!(display.transform.is_none());
+            let fast = CameraRawDialog::image(&px, w, h, &display);
+            let bands = super::super::camera_raw_detail_ui::display_image(Rect::new(0, 0, w as i32, h as i32), &display, |r, out| {
+                let start = (r.y0.max(0) as usize) * w;
+                out.copy_from_slice(&px[start..start + out.len()]);
+            });
+            assert_eq!(fast.size, bands.size);
+            assert!(fast.pixels == bands.pixels);
+        }
     }
 
     #[test]

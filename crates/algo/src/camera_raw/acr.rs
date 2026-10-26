@@ -16,12 +16,15 @@
 //!   The pivot in linear light is about 0.511 · G^0.34, G the geometric mean of the luminance
 //!   (fitted on the six charts within a few levels).
 
+use super::acr_vibrance_tables::{VIB_HUE, VIB_K, VIB_LEVELS, VIB_T};
+use super::acr_hsl_lum_tables::{HSL_LUM_C, HSL_LUM_L};
+use super::acr_hsl_tables::{HSL_SAT_GAIN, HSL_SHIFT, HSL_WEIGHTS};
 use super::acr_tables::{CONTRAST, EXPOSURE, PARAMETRIC_DARKS, PARAMETRIC_HIGHLIGHTS, PARAMETRIC_LIGHTS, PARAMETRIC_SHADOWS};
 use super::acr_grade_tables::{
     GRADE_GLOBAL, GRADE_HIGHLIGHTS, GRADE_HIGHLIGHTS_BALANCE, GRADE_LUM_GLOBAL, GRADE_LUM_HIGHLIGHTS, GRADE_LUM_MIDTONES, GRADE_LUM_SHADOWS, GRADE_MIDTONES, GRADE_MIDTONES_BALANCE,
     GRADE_SHADOWS, GRADE_SHADOWS_BALANCE, VIGNETTE,
 };
-use super::{CameraRaw, Encoding, Wheel, luma};
+use super::{CameraRaw, Curves, Encoding, Wheel, luma, rgb_to_hsv};
 use crate::photo_util::par_rows;
 
 type M3 = [[f32; 3]; 3];
@@ -256,24 +259,188 @@ pub(super) fn hue_preserving(px: &mut [[f32; 4]], w: usize, tone: &Tone, enc: En
     });
 }
 
-/// Vibrance's strength by hue (of the encoded ProPhoto pixel, 12 bins centred at 15°, 45°, …),
-/// fitted on Photoshop's +50: weakest on reds and oranges (skin), strongest on yellows to cyans.
-const VIBRANCE_HUE: [f32; 12] = [0.12, 0.41, 0.57, 0.63, 0.65, 0.61, 0.58, 0.66, 0.57, 0.56, 0.40, 0.20];
+/// White balance as measured on Photoshop (black-box, on a rendered image): ln of the gain on each
+/// linear ProPhoto channel at Temperature and at Tint −100, −50, −25, −10, 10, 25, 50, 100.
+/// Temperature −100 is extrapolated (Photoshop's result there leaves sRGB).
+#[allow(clippy::approx_constant)] // measured levels; some lie near mathematical constants
+const WB_TEMPERATURE: [(f32, [f32; 3]); 8] = [
+    (-100.0, [0.4343, 0.7433, 2.9871]),
+    (-50.0, [0.1646, 0.3402, 1.4377]),
+    (-25.0, [0.0298, 0.1386, 0.6630]),
+    (-10.0, [0.0050, 0.0465, 0.2486]),
+    (10.0, [0.2313, 0.1920, -0.0001]),
+    (25.0, [0.5529, 0.4625, 0.0033]),
+    (50.0, [0.9965, 0.8399, 0.0096]),
+    (100.0, [1.5431, 1.3240, 0.0222]),
+];
+#[allow(clippy::approx_constant)] // measured levels; some lie near mathematical constants
+const WB_TINT: [(f32, [f32; 3]); 8] = [
+    (-100.0, [0.3225, 1.1378, 0.0310]),
+    (-50.0, [0.1748, 0.4335, 0.0045]),
+    (-25.0, [0.0762, 0.1808, 0.0012]),
+    (-10.0, [0.0268, 0.0634, -0.0001]),
+    (10.0, [0.0350, -0.0001, 0.0651]),
+    (25.0, [0.0997, 0.0001, 0.1895]),
+    (50.0, [0.2433, -0.0005, 0.4790]),
+    (100.0, [0.7072, -0.0373, 1.5145]),
+];
 
-fn vibrance_by_hue(c: [f32; 3]) -> f32 {
-    let h = (3f32.sqrt() * (c[1] - c[2])).atan2(2.0 * c[0] - c[1] - c[2]).to_degrees().rem_euclid(360.0);
-    let x = ((h - 15.0) / 30.0).rem_euclid(12.0);
-    let i = (x as usize).min(11);
-    let t = x - i as f32;
-    VIBRANCE_HUE[i] * (1.0 - t) + VIBRANCE_HUE[(i + 1) % 12] * t
+/// ln of the white-balance gains (see [`WB_TEMPERATURE`]) before they are scaled so the smallest
+/// is 1: the two sliders' logs add.
+pub(super) fn white_balance_log(temperature: f32, tint: f32) -> [f32; 3] {
+    let at = |table: &[(f32, [f32; 3]); 8], v: f32| -> [f32; 3] {
+        let v = if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
+        let mut prev = (0.0f32, [0.0f32; 3]);
+        // The knots in order, with 0 (no change) between −10 and 10.
+        let knots = table.iter().take(4).copied().chain(std::iter::once((0.0, [0.0; 3]))).chain(table.iter().skip(4).copied());
+        for (i, (x, y)) in knots.enumerate() {
+            if v <= x {
+                if i == 0 {
+                    return y;
+                }
+                let t = (v - prev.0) / (x - prev.0).max(1e-6);
+                return std::array::from_fn(|c| prev.1[c] + (y[c] - prev.1[c]) * t);
+            }
+            prev = (x, y);
+        }
+        prev.1
+    };
+    let (a, b) = (at(&WB_TEMPERATURE, temperature), at(&WB_TINT, tint));
+    std::array::from_fn(|c| a[c] + b[c])
+}
+
+/// White balance on the document's pixels as measured on Photoshop: a gain per linear ProPhoto
+/// channel (the smallest 1, so nothing darkens), each channel rolled off toward white as Photoshop
+/// does, `g·x / (1 + (g − 1)·x^1.164)^0.99` (a darker channel takes the full gain; within 0.006 of
+/// Photoshop on its grey ramp).
+pub(super) fn white_balance(px: &mut [[f32; 4]], w: usize, temperature: f32, tint: f32, enc: Encoding) {
+    let l = white_balance_log(temperature, tint);
+    let low = l[0].min(l[1]).min(l[2]);
+    let g = l.map(|v| (v - low).exp());
+    let curves = enc.curves();
+    let space = Space::of(enc);
+    par_rows(px, w, 1, |_, row| {
+        for q in row.iter_mut() {
+            let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
+            let pro = apply(&space.to, lin);
+            let out: [f32; 3] = std::array::from_fn(|c| {
+                let x = pro[c].max(0.0);
+                g[c] * x / (1.0 + (g[c] - 1.0) * x.powf(1.164)).powf(0.99)
+            });
+            let back = apply(&space.from, out);
+            for c in 0..3 {
+                q[c] = curves.encode(back[c].max(0.0));
+            }
+        }
+    });
+}
+
+/// The linear sRGB colour `lin` to linear ProPhoto.
+pub(super) fn srgb_to_prophoto(lin: [f32; 3]) -> [f32; 3] {
+    apply(&Space::of(Encoding(0.0)).to, lin)
+}
+
+/// Calibration as measured on Photoshop (fitted on the chart, black-box): in linear ProPhoto each
+/// primary's Hue and Saturation move the other two channels' entries of that primary's column of a
+/// matrix, taking them off those rows' diagonal so white stays white. Per primary (red, green,
+/// blue), slider (hue, saturation) and level (−100, −50, 50, 100): the two entries, in channel order.
+#[allow(clippy::approx_constant)] // measured levels; some lie near mathematical constants
+const CALIBRATION: [[[[f32; 2]; 4]; 2]; 3] = [
+    [[[-0.265, 0.332], [-0.134, 0.160], [0.158, -0.132], [0.327, -0.258]], [[0.375, 0.380], [0.182, 0.185], [-0.175, -0.169], [-0.366, -0.341]]],
+    [[[0.342, -0.262], [0.169, -0.137], [-0.149, 0.164], [-0.290, 0.329]], [[0.422, 0.399], [0.215, 0.202], [-0.187, -0.158], [-0.360, -0.304]]],
+    [[[-0.318, 0.312], [-0.162, 0.155], [0.172, -0.140], [0.343, -0.260]], [[0.422, 0.403], [0.214, 0.202], [-0.182, -0.166], [-0.331, -0.297]]],
+];
+
+/// The Calibration matrix for the primaries' `(hue, saturation)` sliders (−100 … 100), acting on
+/// the document's linear RGB (see [`CALIBRATION`]); within 1.4–3.7 levels of Photoshop on the
+/// chart per slider. `None` when every slider is at 0.
+pub(super) fn calibration(primaries: [(f32, f32); 3], enc: Encoding) -> Option<M3> {
+    let fin = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) / 100.0 } else { 0.0 };
+    let mut m = [[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let mut any = false;
+    for (k, (hue, sat)) in primaries.into_iter().enumerate() {
+        for (kind, v) in [hue, sat].into_iter().map(fin).enumerate() {
+            if v == 0.0 {
+                continue;
+            }
+            any = true;
+            let t = &CALIBRATION[k][kind];
+            let (half, full) = if v < 0.0 { (t[1], t[0]) } else { (t[2], t[3]) };
+            let a = v.abs();
+            let e: [f32; 2] = if a <= 0.5 {
+                half.map(|x| x * a / 0.5)
+            } else {
+                std::array::from_fn(|i| half[i] + (full[i] - half[i]) * (a - 0.5) / 0.5)
+            };
+            let others = [0, 1, 2].into_iter().filter(|r| *r != k);
+            for (r, d) in others.zip(e) {
+                m[r][k] += d;
+                m[r][r] -= d;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let space = Space::of(enc);
+    Some(mul(&space.from, &mul(&m, &space.to)))
+}
+
+/// One level's Vibrance table at (saturation, encoded brightest channel, hue): ln k and ln tr.
+fn vibrance_at(level: usize, sv: f32, te: f32, hue: f32) -> (f32, f32) {
+    let x = (sv * 10.0 - 0.5).clamp(0.0, 9.0);
+    let y = (te * 8.0 - 0.5).clamp(0.0, 7.0);
+    let (x0, y0) = ((x as usize).min(8), (y as usize).min(6));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let bilinear = |t: &[[f32; 8]; 10]| {
+        t[x0][y0] * (1.0 - fx) * (1.0 - fy) + t[x0 + 1][y0] * fx * (1.0 - fy) + t[x0][y0 + 1] * (1.0 - fx) * fy + t[x0 + 1][y0 + 1] * fx * fy
+    };
+    let hx = (hue / 30.0 - 0.5).rem_euclid(12.0);
+    let h0 = (hx as usize).min(11);
+    let ht = hx - h0 as f32;
+    let hf = VIB_HUE[level][h0] * (1.0 - ht) + VIB_HUE[level][(h0 + 1) % 12] * ht;
+    (bilinear(&VIB_K[level]) * hf, bilinear(&VIB_T[level]) * hf)
+}
+
+/// Vibrance (−1 … 1) on a linear ProPhoto pixel, as measured on Photoshop: the pixel is scaled
+/// uniformly toward a grey (exactly so on the chart), its distance below the brightest channel by
+/// `k` and that channel by `tr`, both read from tables over the pixel's saturation and brightness
+/// (and, raising, its hue: reds and skin move least). Lowering takes nearly all the colour from
+/// pale colours and keeps much of it in strong ones, lightening them toward their brightest channel.
+fn vibrance_of(pro: [f32; 3], v: f32, srgb: &Curves) -> [f32; 3] {
+    let c = pro.map(|x| x.clamp(0.0, 1.0));
+    let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+    if mx <= 1e-6 || mx - mn <= 1e-6 {
+        return pro;
+    }
+    let sv = (mx - mn) / mx;
+    let te = srgb.encode(mx);
+    let hue = rgb_to_hsv(c)[0];
+    let a = v.abs() * 100.0;
+    // The levels of this direction, weakest first: 25, 50, 75, 100.
+    let side: [usize; 4] = if v < 0.0 { [3, 2, 1, 0] } else { [4, 5, 6, 7] };
+    let (mut lk, mut lt) = (0.0, 0.0);
+    let mut prev = (0.0f32, 0.0f32, 0.0f32);
+    for level in side {
+        let at = VIB_LEVELS[level].abs();
+        let (k1, t1) = vibrance_at(level, sv, te, hue);
+        if at >= a || level == side[3] {
+            let f = ((a - prev.0) / (at - prev.0).max(1e-6)).clamp(0.0, 1.0);
+            lk = prev.1 + (k1 - prev.1) * f;
+            lt = prev.2 + (t1 - prev.2) * f;
+            break;
+        }
+        prev = (at, k1, t1);
+    }
+    // The first column is centred at 5% saturation; toward grey the change fades out.
+    let (k, tr) = (lk.exp(), (lt * (sv / 0.05).min(1.0)).exp());
+    let top = pro[0].max(pro[1]).max(pro[2]);
+    pro.map(|x| (top * tr - (top - x) * k).max(0.0))
 }
 
 /// Vibrance and then Saturation (−100 … 100) as measured on Photoshop: Saturation scales a pixel's
-/// distance from its luminance in linear ProPhoto (within 2–3 levels on the chart). Raising
-/// Vibrance scales the distance below its brightest channel, in linear ProPhoto, by an amount that
-/// falls with the saturation and depends on the hue (2.8 levels); lowering it pulls the encoded
-/// ProPhoto channels toward their mean, about evenly (6.6 levels; Photoshop's is uneven in a way
-/// this doesn't follow).
+/// distance from its luminance in linear ProPhoto (within 1–3 levels on the chart); Vibrance is
+/// [`vibrance_of`] (within 0.6–1.5 levels lowering, 0.5–3.2 raising; the old models were 4–14).
 pub(super) fn vibrance_saturation(px: &mut [[f32; 4]], w: usize, vibrance: f32, saturation: f32, enc: Encoding) {
     let v = if vibrance.is_finite() { vibrance.clamp(-100.0, 100.0) / 100.0 } else { 0.0 };
     let s = if saturation.is_finite() { saturation.clamp(-100.0, 100.0) / 100.0 } else { 0.0 };
@@ -286,20 +453,7 @@ pub(super) fn vibrance_saturation(px: &mut [[f32; 4]], w: usize, vibrance: f32, 
             let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
             let mut pro = apply(&space.to, lin);
             if v != 0.0 {
-                let e = pro.map(|c| srgb.encode(c.clamp(0.0, 1.0)));
-                let (mx, mn) = (e[0].max(e[1]).max(e[2]), e[0].min(e[1]).min(e[2]));
-                if mx > 1e-6 && mx - mn > 1e-6 {
-                    if v > 0.0 {
-                        let k = 1.0 + v * vibrance_by_hue(e) * (1.0 - (mx - mn) / mx);
-                        let top = pro[0].max(pro[1]).max(pro[2]);
-                        pro = pro.map(|c| (top - (top - c) * k).max(0.0));
-                    } else {
-                        let k = 1.0 + v * 0.92;
-                        let mean = (e[0] + e[1] + e[2]) / 3.0;
-                        // Only the in-range part moves; the excess (float documents) stays.
-                        pro = std::array::from_fn(|c| srgb.decode(mean + (e[c] - mean) * k) + (pro[c] - srgb.decode(e[c])));
-                    }
-                }
+                pro = vibrance_of(pro, v, &srgb);
             }
             if s != 0.0 {
                 let l = y[0] * pro[0] + y[1] * pro[1] + y[2] * pro[2];
@@ -510,6 +664,120 @@ impl VignetteTone {
     }
 }
 
+/// RGB with hue `hue` (degrees), lightness `l` and chroma `c` (HSL's construction).
+fn from_hlc(hue: f32, l: f32, c: f32) -> [f32; 3] {
+    let hp = hue.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - ((hp % 2.0) - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
+}
+
+/// The eight bands' weights for a hue of linear ProPhoto (the measured table, interpolated).
+fn band_weights(hue: f32) -> [f32; 8] {
+    let x = if hue.is_finite() { hue.rem_euclid(360.0) / 5.0 } else { 0.0 };
+    let k0 = (x as usize).min(71);
+    let k1 = (k0 + 1) % 72;
+    let t = x - k0 as f32;
+    std::array::from_fn(|b| HSL_WEIGHTS[b][k0] * (1.0 - t) + HSL_WEIGHTS[b][k1] * t)
+}
+
+/// One band's Luminance at slider `v` (−1 … 1) for a pixel of lightness `l` and relative chroma
+/// `s`: ln of the lightness ratio and of the chroma ratio (the measured tables, interpolated
+/// between ±50 and ±100 and from 0).
+fn hsl_lum_at(band: usize, v: f32, l: f32, s: f32) -> (f32, f32) {
+    let x = (l * 12.0 - 0.5).clamp(0.0, 11.0);
+    let x0 = (x as usize).min(10);
+    let fx = x - x0 as f32;
+    // Columns: s = 0, then the centres of ten bins.
+    let s = s.clamp(0.0, 0.95);
+    let (y0, fy) = if s < 0.05 { (0, s / 0.05) } else { let y = s * 10.0 + 0.5; ((y as usize).min(9), y - (y as usize).min(9) as f32) };
+    let at = |t: &[[f32; 11]; 12]| {
+        t[x0][y0] * (1.0 - fx) * (1.0 - fy) + t[x0 + 1][y0] * fx * (1.0 - fy) + t[x0][y0 + 1] * (1.0 - fx) * fy + t[x0 + 1][y0 + 1] * fx * fy
+    };
+    let (half, full) = if v < 0.0 { (1, 0) } else { (2, 3) };
+    let a = v.abs();
+    let (l50, c50) = (at(&HSL_LUM_L[band][half]), at(&HSL_LUM_C[band][half]));
+    if a <= 0.5 {
+        let f = a / 0.5;
+        return (l50 * f, c50 * f);
+    }
+    let f = (a - 0.5) / 0.5;
+    (l50 + (at(&HSL_LUM_L[band][full]) - l50) * f, c50 + (at(&HSL_LUM_C[band][full]) - c50) * f)
+}
+
+/// The Color Mixer (HSL) as measured on Photoshop: it works on linear ProPhoto, its bands
+/// weigh a pixel by the hue there (the measured, overlapping weights), and it changes the pixel
+/// about its HSL lightness L = (max + min) / 2. Hue turns the hue by the band's measured span,
+/// keeping L and the chroma. Lowering Saturation scales the chroma about L (−100 is grey at L,
+/// which is why a desaturated colour keeps its brightness); raising it scales the chroma by the
+/// band's measured gain, keeping the brightest channel. Luminance changes L and the chroma by
+/// measured ratios over the pixel's lightness and relative chroma (greys don't move; darkening a
+/// pale colour deepens it, as a sky does on Photoshop). Within about 0.7 levels of Photoshop on the
+/// chart (all 144 single-band settings); the old HSV model was three.
+pub(super) fn hsl(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, enc: Encoding) {
+    let fin = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) / 100.0 } else { 0.0 };
+    let (hue, sat, lum) = (p.hsl_hue.map(fin), p.hsl_sat.map(fin), p.hsl_lum.map(fin));
+    let curves = enc.curves();
+    let space = Space::of(enc);
+    par_rows(px, w, 1, |_, row| {
+        for q in row.iter_mut() {
+            let lin = [0, 1, 2].map(|c| curves.decode(q[c]));
+            let pro = apply(&space.to, lin).map(|v| v.clamp(0.0, 1.0));
+            let (mx, mn) = (pro[0].max(pro[1]).max(pro[2]), pro[0].min(pro[1]).min(pro[2]));
+            let (l, c) = ((mx + mn) / 2.0, mx - mn);
+            if c <= 1e-6 {
+                continue;
+            }
+            let h = rgb_to_hsv(pro)[0];
+            let wt = band_weights(h);
+            let (mut dh, mut ks, mut dl, mut dc) = (0.0f32, 1.0f32, 0.0f32, 0.0f32);
+            let rel = c / (2.0 * l.min(1.0 - l)).max(1e-9);
+            for b in 0..8 {
+                if wt[b] <= 0.0 {
+                    continue;
+                }
+                if hue[b] != 0.0 {
+                    dh += wt[b] * HSL_SHIFT[b][usize::from(hue[b] > 0.0)] * hue[b].abs();
+                }
+                if sat[b] != 0.0 {
+                    ks += wt[b] * if sat[b] < 0.0 { sat[b] } else { HSL_SAT_GAIN[b] * sat[b] };
+                }
+                if lum[b] != 0.0 {
+                    let (a, c) = hsl_lum_at(b, lum[b], l, rel);
+                    dl += wt[b] * a;
+                    dc += wt[b] * c;
+                }
+            }
+            let ks = ks.max(0.0);
+            let (lr, cr) = (dl.exp(), dc.exp());
+            let (mut l2, mut c2) = (l * lr, c * ks * cr);
+            if ks > 1.0 {
+                // A raise keeps the brightest channel; the others deepen.
+                let top = l2 + c * cr / 2.0;
+                c2 = c2.min(top);
+                l2 = top - c2 / 2.0;
+            }
+            // Within ProPhoto's gamut, so the hue holds.
+            c2 = c2.min(2.0 * l2.clamp(0.0, 1.0).min(1.0 - l2.clamp(0.0, 1.0)));
+            let out = from_hlc(h + dh, l2, c2).map(|v| v.max(0.0));
+            // Back in the document's space a colour pushed out of its gamut clips, as on Photoshop.
+            let top = lin.iter().fold(1.0f32, |m, &v| m.max(v));
+            let back = apply(&space.from, out);
+            for ch in 0..3 {
+                q[ch] = curves.encode(back[ch].clamp(0.0, top));
+            }
+        }
+    });
+}
+
 /// Applies `tones` (red, green, blue; `None` leaves a channel) to each linear ProPhoto channel.
 pub(super) fn per_channel(px: &mut [[f32; 4]], w: usize, tones: &[Option<Tone>; 3], enc: Encoding) {
     let curves = enc.curves();
@@ -535,6 +803,85 @@ pub(super) fn per_channel(px: &mut [[f32; 4]], w: usize, tones: &[Option<Tone>; 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hsl_on(c: [u8; 3], kind: usize, band: usize, v: f32) -> [f32; 3] {
+        let mut p = CameraRaw::default();
+        [&mut p.hsl_hue, &mut p.hsl_sat, &mut p.hsl_lum][kind][band] = v;
+        let mut px = [[f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, 1.0]];
+        hsl(&mut px, 1, &p, Encoding::of(0.0));
+        [px[0][0] * 255.0, px[0][1] * 255.0, px[0][2] * 255.0]
+    }
+
+    #[test]
+    fn hsl_matches_photoshop_on_the_chart() {
+        // (chart pixel, kind 0 hue / 1 sat / 2 lum, band, slider, Photoshop's result)
+        // The pixels Photoshop moved most; the mean over the chart is about one level.
+        type Case = ([u8; 3], usize, usize, f32, [f32; 3]);
+        let cases: [Case; 5] = [
+            // A sky darkened by Blue Luminance deepens (it doesn't grey).
+            ([93, 142, 241], 2, 5, -44.0, [0.0, 86.0, 216.0]),
+            ([144, 181, 217], 2, 5, -44.0, [73.0, 137.0, 185.0]),
+            ([204, 132, 102], 1, 1, 100.0, [219.0, 106.0, 0.0]),
+            ([180, 248, 4], 0, 3, 100.0, [0.0, 255.0, 125.0]),
+            ([253, 18, 93], 1, 0, -100.0, [160.0, 160.0, 160.0]),
+        ];
+        for (c, kind, band, v, ps) in cases {
+            let got = hsl_on(c, kind, band, v);
+            assert!(got.iter().zip(ps).all(|(g, p)| (g - p).abs() < 18.0), "{c:?} {kind} {band} {v}: {got:?} vs {ps:?}");
+        }
+    }
+
+    #[test]
+    fn white_balance_and_calibration_match_photoshop() {
+        let run = |c: f32, f: &dyn Fn(&mut [[f32; 4]])| {
+            let mut px = [[c / 255.0, c / 255.0, c / 255.0, 1.0]];
+            f(&mut px);
+            [px[0][0] * 255.0, px[0][1] * 255.0, px[0][2] * 255.0]
+        };
+        // Greys 50 and 128 under Temperature +10, Tint −25 and Temperature −25 on Photoshop.
+        for (t, n, c, ps) in [
+            (10.0, 0.0, 50.0, [59.0, 55.0, 49.0]),
+            (10.0, 0.0, 128.0, [146.0, 138.0, 127.0]),
+            (0.0, -25.0, 128.0, [130.0, 140.0, 127.0]),
+            (-25.0, 0.0, 50.0, [40.0, 55.0, 73.0]),
+            (-25.0, 0.0, 128.0, [113.0, 137.0, 169.0]),
+        ] {
+            let got = run(c, &|px| white_balance(px, 1, t, n, Encoding::of(0.0)));
+            assert!(got.iter().zip(ps).all(|(g, p)| (g - p).abs() < 5.0), "{t} {n} {c}: {got:?} vs {ps:?}");
+        }
+        // Calibration keeps white and greys; a primary's slider changes its colours.
+        let m = calibration([(50.0, 0.0), (0.0, -40.0), (0.0, 0.0)], Encoding::of(0.0)).unwrap();
+        let grey = apply(&m, [0.3; 3]);
+        assert!(grey.iter().all(|v| (v - 0.3).abs() < 1e-4), "{grey:?}");
+        let red = apply(&m, [0.6, 0.05, 0.05]);
+        assert!((red[1] - 0.05).abs() > 0.02, "{red:?}");
+    }
+
+    #[test]
+    fn vibrance_matches_photoshop_on_a_photo() {
+        // Vibrance −50 on the scene: Photoshop lightens strong colours toward their brightest channel.
+        for (c, ps) in [([216u8, 26, 24], [195.0, 75.0, 75.0]), ([36, 61, 227], [117.0, 123.0, 218.0]), ([240, 227, 37], [231.0, 222.0, 131.0])] {
+            let mut px = [[f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, 1.0]];
+            vibrance_saturation(&mut px, 1, -50.0, 0.0, Encoding::of(0.0));
+            let got = [px[0][0] * 255.0, px[0][1] * 255.0, px[0][2] * 255.0];
+            assert!(got.iter().zip(ps).all(|(g, p)| (g - p).abs() < 6.0), "{c:?}: {got:?} vs {ps:?}");
+        }
+    }
+
+    #[test]
+    fn hsl_keeps_greys_and_a_neutral_setting() {
+        for kind in 0..3 {
+            let g = hsl_on([120, 120, 120], kind, 0, 100.0);
+            assert!(g.iter().all(|v| (v - 120.0).abs() < 0.05), "{kind}: {g:?}");
+        }
+        let n = hsl_on([200, 90, 40], 0, 0, 0.0);
+        assert!((n[0] - 200.0).abs() < 0.05 && (n[1] - 90.0).abs() < 0.05 && (n[2] - 40.0).abs() < 0.05, "{n:?}");
+        // Out-of-range and non-finite sliders don't break a pixel.
+        for v in [f32::NAN, f32::INFINITY, -1e9] {
+            let o = hsl_on([200, 90, 40], 2, 1, v);
+            assert!(o.iter().all(|x| x.is_finite() && *x >= 0.0), "{v}: {o:?}");
+        }
+    }
 
     #[test]
     fn the_spaces_round_trip_and_keep_grey() {

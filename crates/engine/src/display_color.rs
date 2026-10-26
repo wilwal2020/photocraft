@@ -69,6 +69,28 @@ impl CanvasDisplay {
         img
     }
 
+    /// [`Self::to_rgba8`] of straight RGBA `px` into `out` (the same length), on this thread,
+    /// for callers that already work in parallel pieces: no buffers of its own but the
+    /// transform's input.
+    pub fn rgba8_into(&self, px: &[[f32; 4]], out: &mut [[u8; 4]]) {
+        let alpha = |a: f32| (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        if self.encode_srgb {
+            let t = encode_table();
+            let code = |v: f32| t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255);
+            for (o, p) in out.iter_mut().zip(px) {
+                *o = [code(p[0]), code(p[1]), code(p[2]), alpha(p[3])];
+            }
+        } else {
+            for (o, p) in out.iter_mut().zip(px) {
+                *o = [alpha(p[0]), alpha(p[1]), alpha(p[2]), alpha(p[3])];
+            }
+        }
+        if let Some(t) = &self.transform {
+            let src = out.as_flattened().to_vec();
+            t.convert_u8(&src, 4, out.as_flattened_mut(), 4, true);
+        }
+    }
+
     /// GPU canvas: a CPU composite as the texture stores it (sRGB-encoded for linear
     /// composites; the display LUT does the rest). Values above 1.0 are encoded too (the sRGB
     /// curve extended), for the float canvas texture of 32-bit documents.

@@ -513,10 +513,12 @@ pub(crate) fn display_image(
     let band = |index: usize, out: &mut [Color32]| {
         let y0 = area.y0.saturating_add((index * band_rows) as i32);
         let rect = PixelRect::new(area.x0, y0, area.x1, y0.saturating_add((out.len() / width) as i32));
-        let mut buf = photocraft_compose::Buffer { rect, px: vec![[0.0; 4]; out.len()] };
-        read(rect, &mut buf.px);
-        let img = display.to_rgba8(&buf);
-        for (o, &[r, g, b, a]) in out.iter_mut().zip(img.pixels.as_chunks::<4>().0) {
+        let mut px = vec![[0.0; 4]; out.len()];
+        read(rect, &mut px);
+        // One pass into bytes on this thread (the bands are the parallel pieces).
+        let mut bytes = vec![[0u8; 4]; out.len()];
+        display.rgba8_into(&px, &mut bytes);
+        for (o, &[r, g, b, a]) in out.iter_mut().zip(&bytes) {
             *o = Color32::from_rgba_unmultiplied(r, g, b, a);
         }
     };

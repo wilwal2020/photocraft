@@ -293,6 +293,10 @@ pub enum Adjustment {
         amount: f32,
         size: f32,
         roughness: f32,
+        /// Photoshop's seed for its noise, kept so a PSD round trip gives Photoshop back the same
+        /// grain; PhotoCraft's own grain depends only on the pixel's position.
+        #[serde(default)]
+        seed: u32,
     },
     /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
     /// document snapshots (#4535).

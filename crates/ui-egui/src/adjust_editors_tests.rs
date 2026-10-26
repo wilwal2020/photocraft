@@ -944,7 +944,7 @@ fn grain_size_and_roughness_wait_for_an_amount() {
         h.query_all_by_label(label).last().unwrap_or_else(|| panic!("{label}")).accesskit_node().is_disabled()
     };
     let (id, adj) = layer(&h);
-    assert_eq!(adj, Adjustment::Grain { amount: 0.0, size: 34.0, roughness: 50.0 });
+    assert_eq!(adj, Adjustment::Grain { amount: 0.0, size: 34.0, roughness: 50.0, seed: 0 });
     assert!(!disabled(&h, "Amount:") && disabled(&h, "Size:") && disabled(&h, "Roughness:"));
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "amount": 1})).unwrap();
     h.run_steps(4);

@@ -455,3 +455,35 @@ fn parallel_plain_quantize_matches_the_scalar_rounding() {
         assert_eq!(*o, p.map(q), "{p:?}");
     }
 }
+
+#[test]
+fn bytes_on_one_thread_match_the_parallel_conversion() {
+    // `rgba8_into` against `to_rgba8`: plain, sRGB-encoded (linear) and through a monitor transform.
+    let n: usize = 2 * 16 * 1024 + 31;
+    let px: Vec<[f32; 4]> = (0..n)
+        .map(|i| {
+            let v = match i % 7 {
+                0 => f32::NAN,
+                1 => -0.25,
+                2 => 1.5,
+                _ => (i % 997) as f32 / 996.0,
+            };
+            [v, (i % 251) as f32 / 250.0, 1.0 - (i % 109) as f32 / 108.0, (i % 3) as f32 / 2.0]
+        })
+        .collect();
+    let buf = photocraft_compose::Buffer { rect: Rect::new(0, 0, n as i32, 1), px };
+    let mut s = Session::new();
+    let plain = rgb_doc(None, [0.5; 3], SampleType::U8);
+    let mut linear = Document::new("t", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    linear.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+    let mut displays = vec![s.color.canvas_display(&plain).unwrap(), s.color.canvas_display(&linear).unwrap()];
+    s.execute("edit.colorSettings", json!({"monitorProfile": "display-p3"})).unwrap();
+    displays.push(s.color.canvas_display(&plain).unwrap());
+    assert!(displays[0].is_identity() && displays[1].encode_srgb && displays[2].transform.is_some());
+    for d in displays {
+        let want = d.to_rgba8(&buf);
+        let mut got = vec![[0u8; 4]; n];
+        d.rgba8_into(&buf.px, &mut got);
+        assert_eq!(got.as_flattened(), want.pixels.as_slice());
+    }
+}

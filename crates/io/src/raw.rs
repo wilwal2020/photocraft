@@ -164,8 +164,8 @@ fn camera_name(make: Option<&str>, model: Option<&str>) -> String {
     }
 }
 
-/// Camera Raw's white-balance gains for Temperature / Tint (−100…100), the same the Camera
-/// Raw filter applies ([`photocraft_algo::camera_raw::white_balance_gains`]).
+/// White-balance gains on a raw's sensor data for Temperature / Tint (−100…100)
+/// ([`photocraft_algo::camera_raw::white_balance_gains`]).
 fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
     photocraft_algo::camera_raw::white_balance_gains(temperature.clamp(-100.0, 100.0), tint.clamp(-100.0, 100.0)).map(f64::from)
 }
