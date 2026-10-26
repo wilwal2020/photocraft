@@ -110,6 +110,12 @@ impl CanvasDisplay {
     }
 }
 
+/// [`CanvasDisplay::rgba8_into`]'s codes when `encode_srgb`: linear → sRGB-encoded 8-bit,
+/// indexed by the linear value in 1/65535 steps (for a GPU preview that writes the same bytes).
+pub fn srgb_encode_table() -> &'static [u8] {
+    encode_table()
+}
+
 /// Linear → sRGB-encoded 8-bit codes, indexed by the linear value in 1/65535 steps.
 fn encode_table() -> &'static [u8] {
     static T: OnceLock<Vec<u8>> = OnceLock::new();

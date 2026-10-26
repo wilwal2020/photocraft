@@ -79,7 +79,18 @@ impl Space {
         let from = inverse(&to).unwrap_or(identity);
         Space { to, from }
     }
+    /// The document's linear RGB to linear ProPhoto.
+    pub(super) fn matrix_to_prophoto(&self) -> &M3 {
+        &self.to
+    }
+    /// Linear ProPhoto to the document's linear RGB.
+    pub(super) fn matrix_from_prophoto(&self) -> &M3 {
+        &self.from
+    }
 }
+
+/// ProPhoto's luminance row (Y of XYZ).
+pub(super) const PROPHOTO_Y: [f32; 3] = PROPHOTO_XYZ[1];
 
 /// Table entries of a [`Tone`] curve over 0 … 1.
 const STEPS: usize = 4096;
@@ -238,6 +249,13 @@ impl Light {
     }
 }
 
+/// `tone` as its linear-light table (see [`Light`]) and the slope past 1: what the GPU develop
+/// reads (`camera_raw::gpu`).
+pub(super) fn light_lut(tone: &Tone) -> (Vec<f32>, f32) {
+    let light = Light::of(tone);
+    (light.lut, light.past)
+}
+
 /// Applies `tone` hue-preservingly in linear ProPhoto to straight RGBA pixels encoded with `enc`.
 pub(super) fn hue_preserving(px: &mut [[f32; 4]], w: usize, tone: &Tone, enc: Encoding) {
     let curves = enc.curves();
@@ -314,9 +332,7 @@ pub(super) fn white_balance_log(temperature: f32, tint: f32) -> [f32; 3] {
 /// does, `g·x / (1 + (g − 1)·x^1.164)^0.99` (a darker channel takes the full gain; within 0.006 of
 /// Photoshop on its grey ramp).
 pub(super) fn white_balance(px: &mut [[f32; 4]], w: usize, temperature: f32, tint: f32, enc: Encoding) {
-    let l = white_balance_log(temperature, tint);
-    let low = l[0].min(l[1]).min(l[2]);
-    let g = l.map(|v| (v - low).exp());
+    let g = white_balance_gains_prophoto(temperature, tint);
     let curves = enc.curves();
     let space = Space::of(enc);
     par_rows(px, w, 1, |_, row| {
@@ -333,6 +349,13 @@ pub(super) fn white_balance(px: &mut [[f32; 4]], w: usize, temperature: f32, tin
             }
         }
     });
+}
+
+/// The white-balance gains on the linear ProPhoto channels, the smallest 1 (see [`white_balance`]).
+pub(super) fn white_balance_gains_prophoto(temperature: f32, tint: f32) -> [f32; 3] {
+    let l = white_balance_log(temperature, tint);
+    let low = l[0].min(l[1]).min(l[2]);
+    l.map(|v| (v - low).exp())
 }
 
 /// The linear sRGB colour `lin` to linear ProPhoto.
@@ -438,6 +461,24 @@ fn vibrance_of(pro: [f32; 3], v: f32, srgb: &Curves) -> [f32; 3] {
     pro.map(|x| (top * tr - (top - x) * k).max(0.0))
 }
 
+/// Vibrance's measured tables, flat: k and tr by level, saturation and brightness; the hue factors
+/// by level; the levels (for the GPU develop, `camera_raw::gpu`).
+pub(super) fn vibrance_tables() -> [&'static [f32]; 4] {
+    [VIB_K.as_flattened().as_flattened(), VIB_T.as_flattened().as_flattened(), VIB_HUE.as_flattened(), &VIB_LEVELS]
+}
+
+/// The Color Mixer's measured tables, flat: band weights by hue, hue shifts, saturation gains,
+/// Luminance's lightness and chroma ratios (for the GPU develop, `camera_raw::gpu`).
+pub(super) fn hsl_tables() -> [&'static [f32]; 5] {
+    [
+        HSL_WEIGHTS.as_flattened(),
+        HSL_SHIFT.as_flattened(),
+        &HSL_SAT_GAIN,
+        HSL_LUM_L.as_flattened().as_flattened().as_flattened(),
+        HSL_LUM_C.as_flattened().as_flattened().as_flattened(),
+    ]
+}
+
 /// Vibrance and then Saturation (−100 … 100) as measured on Photoshop: Saturation scales a pixel's
 /// distance from its luminance in linear ProPhoto (within 1–3 levels on the chart); Vibrance is
 /// [`vibrance_of`] (within 0.6–1.5 levels lowering, 0.5–3.2 raising; the old models were 4–14).
@@ -505,7 +546,18 @@ fn grade_direction(hue: f32) -> [f32; 3] {
 /// Shadows colour adds its change (as it would to a grey of the pixel's luminance) and Highlights
 /// multiplies; Midtones and Global are between (fitted: half and 0.3 added). On the chart this
 /// is within 2–5 levels of Photoshop.
-pub(super) fn grade(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, enc: Encoding) {
+/// A coloured grading wheel: its strength, direction, mask, the share of the change added and
+/// whether it keeps the luminance.
+pub(super) struct GradeColour {
+    pub(super) strength: f32,
+    pub(super) dir: [f32; 3],
+    pub(super) mask: [f32; 65],
+    pub(super) add: f32,
+    pub(super) keep: bool,
+}
+
+/// What [`grade`] applies: the wheels' Luminance as one grey curve, and the coloured wheels.
+pub(super) fn grade_parts(p: &CameraRaw) -> (Option<Tone>, Vec<GradeColour>) {
     let wheels = [p.grade_shadows, p.grade_midtones, p.grade_highlights, p.grade_global];
     let lum = |t: &[(f32, [f32; 65])], wh: &Wheel| (wh.lum != 0.0).then(|| Tone::from_fn(|x| table_at(t, wh.lum, x)));
     let curves = [lum(&GRADE_LUM_SHADOWS, &wheels[0]), lum(&GRADE_LUM_MIDTONES, &wheels[1]), lum(&GRADE_LUM_HIGHLIGHTS, &wheels[2]), lum(&GRADE_LUM_GLOBAL, &wheels[3])];
@@ -522,20 +574,16 @@ pub(super) fn grade(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, enc: Encoding)
         grade_mask(&GRADE_HIGHLIGHTS, &GRADE_HIGHLIGHTS_BALANCE, p.grade_blending, p.grade_balance),
         GRADE_GLOBAL,
     ];
-    /// A coloured wheel: its strength, direction, mask, the share of the change added and whether
-    /// it keeps the luminance.
-    struct Colour<'a> {
-        strength: f32,
-        dir: [f32; 3],
-        mask: &'a [f32; 65],
-        add: f32,
-        keep: bool,
-    }
     let added = [1.0, 0.5, 0.0, 0.3];
-    let colours: Vec<Colour> = (0..4)
+    let colours = (0..4)
         .filter(|&k| wheels[k].sat.is_finite() && wheels[k].sat > 0.0)
-        .map(|k| Colour { strength: wheels[k].sat.min(100.0) / 100.0, dir: grade_direction(wheels[k].hue), mask: &masks[k], add: added[k], keep: k == 0 || k == 2 })
+        .map(|k| GradeColour { strength: wheels[k].sat.min(100.0) / 100.0, dir: grade_direction(wheels[k].hue), mask: masks[k], add: added[k], keep: k == 0 || k == 2 })
         .collect();
+    (tone, colours)
+}
+
+pub(super) fn grade(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, enc: Encoding) {
+    let (tone, colours) = grade_parts(p);
     let curves_enc = enc.curves();
     let srgb = Encoding(0.0).curves();
     let space = Space::of(enc);
@@ -551,7 +599,7 @@ pub(super) fn grade(px: &mut [[f32; 4]], w: usize, p: &CameraRaw, enc: Encoding)
                 let (fmx, fmn) = (f.at(mx), f.at(mn));
                 pro = if mx - mn > 1e-9 { pro.map(|v| fmn + (fmx - fmn) * (v - mn) / (mx - mn)) } else { [fmx; 3] };
             }
-            for Colour { strength, dir, mask, add, keep } in &colours {
+            for GradeColour { strength, dir, mask, add, keep } in &colours {
                 let a = strength * sample65(mask, level);
                 let mut g = dir.map(|d| (a * d).exp());
                 if *keep {
@@ -623,6 +671,11 @@ impl VignetteMask {
             width: width.max(1e-3),
         }
     }
+    /// Its parameters in order: the half sizes, the circle's radius, Roundness, the power, the
+    /// logistic's centre and width (for the GPU develop, `camera_raw::gpu`).
+    pub(super) fn parts(&self) -> [f32; 7] {
+        [self.ax, self.ay, self.circle, self.round, self.power, self.centre, self.width]
+    }
     /// The mask at pixel offset `(dx, dy)` from the image's centre.
     pub(super) fn at(&self, dx: f32, dy: f32) -> f32 {
         let (nx, ny) = ((dx / self.ax).abs(), (dy / self.ay).abs());
@@ -644,7 +697,7 @@ pub(super) struct VignetteTone {
 
 impl VignetteTone {
     pub(super) fn new(enc: Encoding) -> Self {
-        let rows = VIGNETTE.iter().map(|(a, c)| (*a, Light::of(&Tone::from_fn(|x| sample65(c, x))))).collect();
+        let rows = vignette_tones().iter().map(|(a, t)| (*a, Light::of(t))).collect();
         VignetteTone { rows, space: Space::of(enc) }
     }
     /// The curve at `amount` of linear light `v`.
@@ -662,6 +715,11 @@ impl VignetteTone {
         let out = if mx - mn > 1e-9 { pro.map(|v| fmn + (fmx - fmn) * (v - mn) / (mx - mn)) } else { [fmx; 3] };
         apply(&self.space.from, out)
     }
+}
+
+/// The Highlight Priority vignette's measured curves, by amount.
+pub(super) fn vignette_tones() -> Vec<(f32, Tone)> {
+    VIGNETTE.iter().map(|(a, c)| (*a, Tone::from_fn(|x| sample65(c, x)))).collect()
 }
 
 /// RGB with hue `hue` (degrees), lightness `l` and chroma `c` (HSL's construction).

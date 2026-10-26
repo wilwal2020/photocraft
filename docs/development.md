@@ -164,6 +164,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_TEXEL_GUARD=1` (or `=0`) | Force on (off) uploading egui's fully transparent texels as alpha 1/255. On by default only for Intel Iris Xe on DX12, whose driver shows stale memory in all-zero texture blocks: red squares in brush previews and tool icons (`ui-egui/src/texel_guard.rs`; check a GPU with `cargo run --release -p photocraft-gpu --example zero_block_probe -- dx12 400`) |
 | `PHOTOCRAFT_FX_NOCACHE=1` | Bypass the CPU layer-effect map cache (`compose::effect_maps`) |
 | `PHOTOCRAFT_CPU_COMPOSE=1` | Keep the wgpu canvas but composite on the CPU (compare GPU vs CPU renders, e.g. with the snapshot example) |
+| `PHOTOCRAFT_CAMERA_RAW_CPU=1` | Develop the Camera Raw dialog's preview on the CPU instead of the GPU (compare the two) |
 | `PHOTOCRAFT_LOCALE` | Override Auto's native UI language for this launch; unsupported tags use English. See [system language detection](localization.md#first-launch-and-system-language). |
 | `PHOTOCRAFT_FX_TRACE=1` | Print the CPU time spent on GPU effect shapes and distance fields per rebuild |
 | `PHOTOCRAFT_STROKE_TRACE=1` (or `=<file.csv>`; also `--stroke-trace <stderr|file.csv>`, or `ui.set {"strokeTrace": true|false}` at runtime, without a file) | Time every frame of each brush stroke; print a summary per stroke, and with a path also append each frame to that CSV (see [Stroke latency trace](#stroke-latency-trace)) |

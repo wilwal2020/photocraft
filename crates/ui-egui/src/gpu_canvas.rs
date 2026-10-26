@@ -204,6 +204,11 @@ impl GpuCanvas {
         }
     }
 
+    /// The render state the canvas draws with (its device, queue and egui's renderer).
+    pub fn render_state(&self) -> &RenderState {
+        &self.rs
+    }
+
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
     pub fn health(&self) -> &photocraft_gpu::DeviceHealth {
         &self.health
@@ -1043,7 +1048,18 @@ pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
 fn device_limits_for(backend: wgpu::Backend, supported: wgpu::Limits) -> wgpu::Limits {
     let base = if backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
     let base = base.or_worse_values_from(&supported);
-    wgpu::Limits { max_texture_dimension_2d: supported.max_texture_dimension_2d, max_buffer_size: supported.max_buffer_size, ..base }
+    // Camera Raw's GPU preview keeps a proxy's pixels and planes in storage buffers (a 2560 px
+    // proxy's planes pass the default 128 MiB binding).
+    wgpu::Limits {
+        max_texture_dimension_2d: supported.max_texture_dimension_2d,
+        max_buffer_size: supported.max_buffer_size,
+        max_storage_buffer_binding_size: if backend == wgpu::Backend::Gl {
+            base.max_storage_buffer_binding_size
+        } else {
+            supported.max_storage_buffer_binding_size.max(base.max_storage_buffer_binding_size)
+        },
+        ..base
+    }
 }
 
 /// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
@@ -2793,6 +2809,18 @@ mod tests {
             assert!(requested.check_limits(&supported));
             assert_eq!(requested, wgpu::Limits { max_texture_dimension_2d: 16_384, max_buffer_size: 1 << 30, ..base }, "{backend:?}");
         }
+    }
+
+    /// Camera Raw's GPU preview binds a proxy's planes as one storage buffer: the adapter's own
+    /// binding size is asked for (never on GL, which has no compute).
+    #[test]
+    fn device_limits_take_the_adapters_storage_binding_size() {
+        let supported = wgpu::Limits { max_storage_buffer_binding_size: 1 << 30, ..wgpu::Limits::default() };
+        let requested = device_limits_for(wgpu::Backend::Dx12, supported.clone());
+        assert!(requested.check_limits(&supported));
+        assert_eq!(requested.max_storage_buffer_binding_size, 1 << 30);
+        let gl = device_limits_for(wgpu::Backend::Gl, supported.clone());
+        assert_eq!(gl.max_storage_buffer_binding_size, wgpu::Limits::downlevel_webgl2_defaults().max_storage_buffer_binding_size);
     }
 
     #[test]

@@ -519,7 +519,10 @@ preset mixed with the settings it was applied over), `savePreset: {name, group?,
 reply's `savedPreset` its path) and `deletePreset` (a path in PhotoCraft's folder; Photoshop's
 presets are never written). `draft: true` develops the request's settings as a slider drag does
 (the colour stages through colour tables, within a fraction of a level; the reply's `draft` is then
-true, and the next request without it develops exactly). All parts of one request are validated before any is applied; a rejected request
+true, and the next request without it develops exactly). The reply's `gpu` is true when the frame
+shown was developed on the GPU (see `crates/ui-egui/src/camera_raw_gpu.rs`; with a wgpu canvas,
+unless `PHOTOCRAFT_CAMERA_RAW_CPU=1`); a GPU draft is exact but measured on a smaller copy, and its
+pixels (colour samplers, scopes) are read back with the settled frame. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,

@@ -353,14 +353,21 @@ pub(crate) fn amounts(whites: f32, blacks: f32, bp: f32, wp: f32) -> (f32, f32) 
 /// Applies Whites and Blacks (internal amounts `w`, `b`) to straight RGBA pixels (`width` per
 /// row) encoded with `enc`. Values above 1 (float documents) keep their excess.
 pub(crate) fn apply(px: &mut [[f32; 4]], width: usize, w: f32, b: f32, enc: Encoding) {
-    if w == 0.0 && b == 0.0 {
-        return;
+    if let Some(tone) = tone(w, b) {
+        super::acr::hue_preserving(px, width, &tone, enc);
     }
-    let tone = super::acr::Tone::from_fn(|v| {
+}
+
+/// Whites and Blacks at amounts `w` and `b` (see [`amounts`]) as one grey curve; `None` when
+/// both are 0.
+pub(crate) fn tone(w: f32, b: f32) -> Option<super::acr::Tone> {
+    if w == 0.0 && b == 0.0 {
+        return None;
+    }
+    Some(super::acr::Tone::from_fn(|v| {
         let v = if w != 0.0 { whites(v, w) } else { v };
         if b != 0.0 { blacks(v, b) } else { v }
-    });
-    super::acr::hue_preserving(px, width, &tone, enc);
+    }))
 }
 
 #[cfg(test)]

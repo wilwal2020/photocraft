@@ -457,14 +457,14 @@ pub(crate) fn apply(
     }
     // The change in log luminance, at full size.
     let d: Vec<f32> = par_map(o.v.len(), |i| o.v[i] - small.v[i]);
-    if let Some(r) = record {
-        // For a region's develop: the change as the guided filter's coefficients over the image.
-        let (ma, mb) = super::guided_coefficients(&small.v, &d, small.w, small.h, 2, 0.01);
-        *r = Some(Map { ma, mb, w: small.w, h: small.h });
-    }
     // Through the guided filter at every size (at the work copy's own size too), so a region's
     // develop from the coefficients ([`apply_map`]) gives the same.
-    let change = guided_upsample(&small, &d, &u);
+    let (ma, mb) = super::guided_coefficients(&small.v, &d, small.w, small.h, 2, 0.01);
+    let change = guided_upsample(&small, &ma, &mb, &u);
+    if let Some(r) = record {
+        // For a region's develop: the change as the guided filter's coefficients over the image.
+        *r = Some(Map { ma, mb, w: small.w, h: small.h });
+    }
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
             let gain = change[y * w + x].exp2();
@@ -485,6 +485,13 @@ pub(crate) struct Map {
     mb: Vec<f32>,
     w: usize,
     h: usize,
+}
+
+impl Map {
+    /// The coefficients `a` and `b` and the size of the grid they lie on.
+    pub(crate) fn parts(&self) -> (&[f32], &[f32], usize, usize) {
+        (&self.ma, &self.mb, self.w, self.h)
+    }
 }
 
 /// Shadows and Highlights on part of an image (`frame`) from the whole image's [`Map`].
@@ -528,20 +535,20 @@ fn shrink(u: &Plane, f: usize) -> Plane {
     Plane { w: sw, h: sh, v }
 }
 
-/// The change `d` computed on `small` brought to the size of `full`, following its edges: a local
+/// The change computed on `small` brought to the size of `full`, following its edges: a local
 /// linear model of the change against the log luminance (the guided filter of K. He, J. Sun,
-/// *Fast Guided Filter*, 2015), fitted on the small copy and evaluated on the full one.
-fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
+/// *Fast Guided Filter*, 2015), fitted on the small copy (its coefficients `ma`, `mb`) and
+/// evaluated on the full one.
+fn guided_upsample(small: &Plane, ma: &[f32], mb: &[f32], full: &Plane) -> Vec<f32> {
     let (sw, sh) = (small.w, small.h);
-    let (ma, mb) = super::guided_coefficients(&small.v, d, sw, sh, 2, 0.01);
     let (fx, fy) = (sw as f32 / full.w as f32, sh as f32 / full.h as f32);
     let mut out = vec![0.0f32; full.w * full.h];
     par_rows(&mut out, full.w, 1, |y, row| {
         let sy = (y as f32 + 0.5) * fy - 0.5;
         for (x, o) in row.iter_mut().enumerate() {
             let sx = (x as f32 + 0.5) * fx - 0.5;
-            let av = crate::photo_util::bilinear(&ma, sw, sh, 1, 0, sx, sy);
-            let bv = crate::photo_util::bilinear(&mb, sw, sh, 1, 0, sx, sy);
+            let av = crate::photo_util::bilinear(ma, sw, sh, 1, 0, sx, sy);
+            let bv = crate::photo_util::bilinear(mb, sw, sh, 1, 0, sx, sy);
             *o = av * full.v[y * full.w + x] + bv;
         }
     });

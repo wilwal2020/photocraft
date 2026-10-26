@@ -74,6 +74,10 @@ pub struct CameraRawDialog {
     pub(crate) viewport: Option<ERect>,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
+    /// The preview on the GPU (see `camera_raw_gpu`), where the device has one.
+    gpu: Option<super::camera_raw_gpu::GpuPreview>,
+    /// The frame shown came from the GPU (its texture is shown, not [`Self::tex`]).
+    gpu_shown: bool,
     before_tex: Option<TextureHandle>,
     before_display_key: Option<u64>,
     pub(crate) before_histogram: RgbHistogram,
@@ -130,7 +134,7 @@ impl CameraRawDialog {
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
-            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before, "draft": self.draft_shown,
+            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before, "draft": self.draft_shown, "gpu": self.gpu_shown,
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
@@ -249,6 +253,7 @@ impl CameraRawDialog {
             cache: self.cache.clone(),
             source: self.source,
             draft,
+            gpu: self.gpu.as_ref().map(super::camera_raw_gpu::GpuPreview::shared),
         }
     }
 
@@ -259,9 +264,16 @@ impl CameraRawDialog {
     }
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {
-        match &mut self.tex {
-            Some(t) => t.set(frame.image, egui::TextureOptions::LINEAR),
-            None => self.tex = Some(ctx.load_texture("camera-raw-after", frame.image, egui::TextureOptions::LINEAR)),
+        if let Some(image) = frame.image {
+            match &mut self.tex {
+                Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                None => self.tex = Some(ctx.load_texture("camera-raw-after", image, egui::TextureOptions::LINEAR)),
+            }
+        }
+        self.gpu_shown = frame.gpu;
+        if let Some(e) = &frame.gpu_error {
+            log::warn!("Camera Raw preview: the GPU failed, developing on the CPU from now on: {e}");
+            self.gpu = None;
         }
         if self.before_display_key != Some(frame.display.key) {
             let before = Self::image(&self.proxy, self.pw, self.ph, &frame.display);
@@ -274,10 +286,13 @@ impl CameraRawDialog {
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         // The frame it replaces goes back to the develop to write the next one into (unless a
-        // develop is using the cache right now: never wait for it here).
-        let old = std::mem::replace(&mut self.processed, frame.px);
-        if let Ok(mut cache) = self.cache.try_lock() {
-            cache.recycle(old);
+        // develop is using the cache right now: never wait for it here). A GPU frame made while a
+        // control moves isn't read back: the pixels of the last settled one stay until the next.
+        if let Some(px) = frame.px {
+            let old = std::mem::replace(&mut self.processed, px);
+            if let Ok(mut cache) = self.cache.try_lock() {
+                cache.recycle(old);
+            }
         }
         self.draft_shown = !frame.exact;
         (self.shown_params, self.shown_context) = (frame.params, frame.context);
@@ -371,11 +386,14 @@ struct ProxyJob {
     /// A control is being dragged: Shadows and Highlights may reuse maps made for other settings,
     /// and the colour stages go through colour tables (`photocraft_algo::camera_raw::develop_cached`).
     draft: bool,
+    /// The GPU preview, when the dialog has one (see `camera_raw_gpu`).
+    gpu: Option<std::sync::Arc<super::camera_raw_gpu::Shared>>,
 }
 
 /// A developed proxy, ready to show.
 struct ProxyFrame {
-    px: Vec<[f32; 4]>,
+    /// The developed pixels (`None`: a GPU frame made while a control moves, not read back).
+    px: Option<Vec<[f32; 4]>>,
     /// The settings developed (with the proxy's pixel scale) and what the develop measured.
     params: CameraRaw,
     context: std::sync::Arc<photocraft_algo::camera_raw::Context>,
@@ -383,9 +401,14 @@ struct ProxyFrame {
     exact: bool,
     histogram: RgbHistogram,
     histogram_ms: f64,
-    image: egui::ColorImage,
+    /// The preview's pixels for egui (`None`: the GPU wrote them into its texture).
+    image: Option<egui::ColorImage>,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     ms: f64,
+    /// Developed on the GPU.
+    gpu: bool,
+    /// The GPU failed (this frame was developed on the CPU instead).
+    gpu_error: Option<String>,
 }
 
 impl ProxyJob {
@@ -407,6 +430,41 @@ impl ProxyJob {
             px
         });
         let input = retoned.as_deref().unwrap_or(self.proxy.as_slice());
+        let mut gpu_error = None;
+        if let Some(gpu) = &self.gpu {
+            let job = super::camera_raw_gpu::Job {
+                input,
+                source,
+                size: (pw, ph),
+                params: &p,
+                float: self.float,
+                selection: self.selection.as_deref().map(Vec::as_slice),
+                display: &self.display,
+                cache: &self.cache,
+                draft: self.draft,
+            };
+            match gpu.develop(&job) {
+                Ok(Some(f)) => {
+                    return ProxyFrame {
+                        px: f.px,
+                        params: p,
+                        context: f.context,
+                        // While a control moves the pixels aren't read back (and the measurements
+                        // are a small copy's): a settled frame follows.
+                        exact: !self.draft,
+                        histogram: f.histogram,
+                        histogram_ms: 0.0,
+                        image: None,
+                        display: self.display,
+                        ms: crate::gpu_canvas::now_ms() - t0,
+                        gpu: true,
+                        gpu_error: None,
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => gpu_error = Some(e),
+            }
+        }
         let developed = {
             let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             photocraft_algo::camera_raw::develop_cached(input, pw, ph, &p, self.float, source, &mut cache, self.draft)
@@ -430,8 +488,8 @@ impl ProxyJob {
         let histogram_start = crate::gpu_canvas::now_ms();
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
-        let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, params: p, context, exact, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
+        let image = Some(CameraRawDialog::image(&px, pw, ph, &self.display));
+        ProxyFrame { px: Some(px), params: p, context, exact, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, gpu: false, gpu_error }
     }
 }
 
@@ -905,6 +963,8 @@ fn open_pixels(
         viewport: None,
         float,
         tex: None,
+        gpu: app.gpu.as_ref().filter(|g| g.fault().is_none()).and_then(|g| super::camera_raw_gpu::GpuPreview::new(g.render_state(), pw, ph)),
+        gpu_shown: false,
         before_tex: None,
         before_display_key: None,
         dirty: true,
@@ -1609,11 +1669,17 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 }
             }
         }
-        let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
+        let tex = if d.show_before {
+            d.before_tex.as_ref().map(TextureHandle::id)
+        } else if d.gpu_shown {
+            d.gpu.as_ref().map(|g| g.texture_id)
+        } else {
+            d.tex.as_ref().map(TextureHandle::id)
+        };
         if let Some(tex) = tex {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
-            preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            preview.painter().image(tex, r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
             // Zoomed in past the proxy's pixels, the visible region develops at full resolution from
             // the frame's settings and measurements, also while a control is dragged.
@@ -2507,3 +2573,7 @@ mod tests {
 #[cfg(test)]
 #[path = "camera_raw_identity_tests.rs"]
 mod identity_tests;
+
+#[cfg(test)]
+#[path = "camera_raw_gpu_tests.rs"]
+mod gpu_tests;

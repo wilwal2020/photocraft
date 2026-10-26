@@ -38,6 +38,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bounds;
+pub mod camera_raw;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -621,7 +622,7 @@ fn lru_victims<K>(mut pages: Vec<(u64, K, u64)>, total: u64, incoming: u64, budg
 /// Runs `f` inside GPU error scopes and returns the first error raised.
 /// Native wgpu reports validation/internal/OOM errors synchronously; where they only arrive
 /// asynchronously (WebGPU) none is reported.
-fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
+pub(crate) fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);

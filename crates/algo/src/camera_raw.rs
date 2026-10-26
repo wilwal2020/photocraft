@@ -67,6 +67,7 @@ mod acr_hsl_lum_tables;
 mod acr_hsl_tables;
 mod acr_vibrance_tables;
 mod colour_lut;
+pub mod gpu;
 mod acr_tables;
 mod local_tone;
 mod whites_blacks;
@@ -123,6 +124,10 @@ impl Curves {
             })
             .collect();
         Curves { exact, decode, encode }
+    }
+    /// The decode table (over 0 … 1) and the encode table (over the square root of 0 … 16).
+    pub(crate) fn tables(&self) -> (&[f32], &[f32]) {
+        (&self.decode, &self.encode)
     }
     #[inline]
     pub(crate) fn decode(&self, v: f32) -> f32 {
@@ -1342,16 +1347,10 @@ fn curves(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
     let enc = Encoding::of(p.encoding_gamma);
     let refine = p.curve_refine_saturation.clamp(0.0, 100.0) / 100.0;
     let before = (refine < 1.0).then(|| px.to_vec());
-    let parametric = [p.curve_shadows, p.curve_darks, p.curve_lights, p.curve_highlights].iter().any(|v| *v != 0.0).then(|| acr::parametric(p));
-    let master = (!is_linear(&p.point_curve)).then(|| acr::point(&p.point_curve));
-    let grey = match (parametric, master) {
-        (Some(a), Some(b)) => Some(b.after(&a)),
-        (a, b) => a.or(b),
-    };
+    let (grey, channels) = curve_tones(p);
     if let Some(t) = grey {
         acr::hue_preserving(px, w, &t, enc);
     }
-    let channels = [&p.point_curve_red, &p.point_curve_green, &p.point_curve_blue].map(|c| (!is_linear(c)).then(|| acr::point(c)));
     if channels.iter().any(Option::is_some) {
         acr::per_channel(px, w, &channels, enc);
     }
@@ -1371,6 +1370,19 @@ fn curves(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
             }
         });
     }
+}
+
+/// The tone curve's grey curve (the parametric curve, then the point curve) and the red, green and
+/// blue point curves (`None`: linear).
+fn curve_tones(p: &CameraRaw) -> (Option<acr::Tone>, [Option<acr::Tone>; 3]) {
+    let parametric = [p.curve_shadows, p.curve_darks, p.curve_lights, p.curve_highlights].iter().any(|v| *v != 0.0).then(|| acr::parametric(p));
+    let master = (!is_linear(&p.point_curve)).then(|| acr::point(&p.point_curve));
+    let grey = match (parametric, master) {
+        (Some(a), Some(b)) => Some(b.after(&a)),
+        (a, b) => a.or(b),
+    };
+    let channels = [&p.point_curve_red, &p.point_curve_green, &p.point_curve_blue].map(|c| (!is_linear(c)).then(|| acr::point(c)));
+    (grey, channels)
 }
 
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
@@ -1445,14 +1457,7 @@ fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame, 
             }
         });
     }
-    let fringes: Vec<(f32, f32, f32)> = [(p.defringe_purple_amount, p.defringe_purple_hue, 200.0, 340.0), (p.defringe_green_amount, p.defringe_green_hue, 40.0, 180.0)]
-        .into_iter()
-        .filter(|f| f.0 > 0.0)
-        .map(|(amount, range, lo, hi)| {
-            let (a, b) = (range[0].clamp(0.0, 100.0).min(range[1].clamp(0.0, 100.0)), range[1].clamp(0.0, 100.0).max(range[0].clamp(0.0, 100.0)));
-            (amount.clamp(0.0, 20.0) / 20.0, lo + (hi - lo) * a / 100.0, lo + (hi - lo) * b / 100.0)
-        })
-        .collect();
+    let fringes = fringes(p);
     if !fringes.is_empty() {
         // Fringes are coloured edges: pixels of those hues next to strong luminance edges lose
         // their colour. The edges are the luminance gradient spread over about two pixels.
@@ -1501,6 +1506,18 @@ fn optics(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, frame: Frame, 
             }
         });
     }
+}
+
+/// Defringe's active fringes: amount (0 … 1) and hue range (degrees).
+fn fringes(p: &CameraRaw) -> Vec<(f32, f32, f32)> {
+    [(p.defringe_purple_amount, p.defringe_purple_hue, 200.0, 340.0), (p.defringe_green_amount, p.defringe_green_hue, 40.0, 180.0)]
+        .into_iter()
+        .filter(|f| f.0 > 0.0)
+        .map(|(amount, range, lo, hi)| {
+            let (a, b) = (range[0].clamp(0.0, 100.0).min(range[1].clamp(0.0, 100.0)), range[1].clamp(0.0, 100.0).max(range[0].clamp(0.0, 100.0)));
+            (amount.clamp(0.0, 20.0) / 20.0, lo + (hi - lo) * a / 100.0, lo + (hi - lo) * b / 100.0)
+        })
+        .collect()
 }
 
 /// Stage 0, the Calibration panel: the primaries' hue and saturation as a matrix on linear light
