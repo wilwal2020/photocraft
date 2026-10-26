@@ -116,6 +116,7 @@ fn options(p: &Value) -> Result<FillOptions> {
         scaling: Scaling::from_name(scaling).ok_or_else(|| bad("`scalingMode` must be darkest, round or square"))?,
         anti_alias: flag(p, "antiAlias", true)?,
         image_border: flag(p, "imageBorder", false)?,
+        thin_lines: number(p, "thinLines", 0.0, 0.0..=f64::from(fill::MAX_THIN))?,
         match_color: None,
     })
 }
@@ -616,7 +617,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Fill Tool",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px (a click) | "lasso":[[x,y],…] (Enclose and Fill) | "stroke":[[x,y],…] with "size":px=20 (Paint Unfilled Area),"reference":"layer|all|selected|folder|reference"="layer","exclude":["layer"|"text"|"locked"]? (multi-layer references),"tolerance":0..100=10 (% colour margin),"contiguous":bool=true (Follow adjacent pixels),"closeGap":0..100=0 (px),"areaScaling":-100..100=0 (px),"scalingMode":"darkest|round|square"="darkest","antiAlias":bool=true,"imageBorder":bool=false,"layerBlocks":bool=false (multi-layer references: the editing layer's paint stops the fill at any tolerance, and the fill goes in behind it),"targetColor":"transparent|whiteAndTransparent"="transparent" (lasso/stroke),"contents":"foreground|background|color|transparent"="foreground","color":"#rrggbb"?,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target,"gesture":str? (a drag going on from its click: later clicks with the same gesture fill only areas like the first one's they haven't filled; pass the same \"coalesce\" to make the drag one undo step)} → {"filled":bool,"bounds":[x0,y0,x1,y1]?}"##,
+            params: r##"{"x":px,"y":px (a click) | "lasso":[[x,y],…] (Enclose and Fill) | "stroke":[[x,y],…] with "size":px=20 (Paint Unfilled Area),"reference":"layer|all|selected|folder|reference"="layer","exclude":["layer"|"text"|"locked"]? (multi-layer references),"tolerance":0..100=10 (% colour margin),"contiguous":bool=true (Follow adjacent pixels),"closeGap":0..100=0 (px),"thinLines":0..50=0 (px: ink up to this wide, hatching or speed lines, doesn't stop the fill),"areaScaling":-100..100=0 (px),"scalingMode":"darkest|round|square"="darkest","antiAlias":bool=true,"imageBorder":bool=false,"layerBlocks":bool=false (multi-layer references: the editing layer's paint stops the fill at any tolerance, and the fill goes in behind it),"targetColor":"transparent|whiteAndTransparent"="transparent" (lasso/stroke),"contents":"foreground|background|color|transparent"="foreground","color":"#rrggbb"?,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target,"gesture":str? (a drag going on from its click: later clicks with the same gesture fill only areas like the first one's they haven't filled; pass the same \"coalesce\" to make the drag one undo step)} → {"filled":bool,"bounds":[x0,y0,x1,y1]?}"##,
             enabled: crate::commands::has_paintable,
             run: run_fill,
             journal: true,

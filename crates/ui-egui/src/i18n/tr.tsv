@@ -4336,6 +4336,8 @@ cameraData	Lens	Lens
 	White and Transparent	Beyaz ve Saydam
 	Image Border	Görüntü Kenarı
 	The canvas edge closes gaps as a line does	Tuval kenarı boşlukları bir çizgi gibi kapatır
+	Ignore Thin Lines	İnce çizgileri yok say
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Bu genişliğe kadar olan çizgiler (tarama, hız çizgileri, ton noktaları) dolguyu durdurmaz: dolgu altlarından geçerek daha kalın çizgilere kadar devam eder. 0 kapalı
 	Reference layer: the Fill tool reads it	Başvuru katmanı: Doldurma Aracı bunu okur
 	Set as Reference Layer	Başvuru Katmanı Olarak Ayarla
 	Clear Reference Layer	Başvuru Katmanını Kaldır

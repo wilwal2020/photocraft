@@ -88,6 +88,8 @@ pub struct FillSettings {
     pub contiguous: bool,
     /// px; 0 = off.
     pub close_gap: f32,
+    /// Lines up to this wide (hatching, speed lines) don't stop the fill, px; 0 = off.
+    pub thin_lines: f32,
     /// px; negative shrinks.
     pub area_scaling: f32,
     /// darkest | round | square
@@ -167,6 +169,7 @@ impl Default for FillSettings {
             tolerance: 10.0,
             contiguous: true,
             close_gap: GAP_LEVELS[1],
+            thin_lines: 0.0,
             area_scaling: 1.0,
             scaling_mode: "darkest".into(),
             contents: "foreground".into(),
@@ -194,6 +197,7 @@ pub fn params(app: &PhotocraftApp) -> Value {
         "tolerance": o.tolerance,
         "contiguous": o.contiguous,
         "closeGap": o.close_gap,
+        "thinLines": o.thin_lines,
         "areaScaling": o.area_scaling,
         "scalingMode": o.scaling_mode,
         "antiAlias": o.anti_alias,
@@ -590,6 +594,12 @@ fn more_menu(tool: &mut FillToolOptions, ui: &mut Ui) {
         });
         ui.separator();
         widgets::checkbox(ui, &mut o.image_border, tl!("Image Border")).on_hover_text(tl!("The canvas edge closes gaps as a line does"));
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(tl!("Ignore Thin Lines"));
+            widgets::value_field(ui, &mut o.thin_lines, 0.0..=photocraft_algo::fill::MAX_THIN, "px", 58.0)
+                .on_hover_text(tl!("Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off"));
+        });
         if click {
             ui.separator();
             widgets::checkbox(ui, undo_widens, tl!("Undo widens Close Gap"))

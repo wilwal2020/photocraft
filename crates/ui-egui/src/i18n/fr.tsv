@@ -3624,6 +3624,8 @@ curves	Smooth	Lisser
 	White and Transparent	Blanc et transparent
 	Image Border	Bord de l’image
 	The canvas edge closes gaps as a line does	Le bord de la zone de travail ferme les trous comme un trait
+	Ignore Thin Lines	Ignorer les traits fins
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Les traits jusqu'à cette épaisseur (hachures, lignes de vitesse, points de trame) n'arrêtent pas le remplissage : il continue dessous jusqu'aux traits plus épais. 0 le désactive
 	Reference layer: the Fill tool reads it	Calque de référence : l’outil Remplissage le lit
 	Set as Reference Layer	Définir comme calque de référence
 	Clear Reference Layer	Annuler le calque de référence

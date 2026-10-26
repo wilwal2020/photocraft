@@ -4221,6 +4221,8 @@ navigator	Zoom	Zvětšení
 	White and Transparent	Bílá a průhledná
 	Image Border	Okraj obrazu
 	The canvas edge closes gaps as a line does	Okraj plátna uzavírá mezery jako čára
+	Ignore Thin Lines	Ignorovat tenké čáry
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Čáry až do této šířky (šrafování, rychlostní čáry, rastrové body) výplň nezastaví: pokračuje pod nimi až k silnějším čarám. 0 = vypnuto
 	Reference layer: the Fill tool reads it	Referenční vrstva: čte ji nástroj Výplň
 	Set as Reference Layer	Nastavit jako referenční vrstvu
 	Clear Reference Layer	Zrušit referenční vrstvu

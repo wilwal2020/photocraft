@@ -4733,6 +4733,8 @@ shape	Appearance	Aspetto
 	White and Transparent	Bianco e trasparente
 	Image Border	Bordo immagine
 	The canvas edge closes gaps as a line does	Il bordo della tela chiude gli spazi come una linea
+	Ignore Thin Lines	Ignora linee sottili
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Le linee fino a questa larghezza (tratteggio, linee cinetiche, punti retinati) non fermano il riempimento: prosegue sotto di esse fino alle linee più marcate. 0 lo disattiva
 	Reference layer: the Fill tool reads it	Livello di riferimento: lo legge lo strumento Riempimento
 	Set as Reference Layer	Imposta come livello di riferimento
 	Clear Reference Layer	Rimuovi livello di riferimento

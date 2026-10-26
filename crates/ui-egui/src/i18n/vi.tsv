@@ -4102,6 +4102,8 @@ curves	Smooth	Làm mượt
 	White and Transparent	Trắng và trong suốt
 	Image Border	Viền ảnh
 	The canvas edge closes gaps as a line does	Mép canvas đóng khe hở như một nét
+	Ignore Thin Lines	Bỏ qua nét mảnh
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Các nét có độ rộng tới mức này (gạch bóng, nét tốc độ, chấm tram) không chặn vùng tô: vùng tô chạy tiếp bên dưới tới các nét đậm hơn. 0 là tắt
 	Reference layer: the Fill tool reads it	Lớp tham chiếu: công cụ Tô màu đọc lớp này
 	Set as Reference Layer	Đặt làm lớp tham chiếu
 	Clear Reference Layer	Bỏ lớp tham chiếu

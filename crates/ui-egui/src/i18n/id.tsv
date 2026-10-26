@@ -3628,6 +3628,8 @@ curves	Smooth	Haluskan
 	White and Transparent	Putih dan Transparan
 	Image Border	Batas Gambar
 	The canvas edge closes gaps as a line does	Tepi kanvas menutup celah seperti garis
+	Ignore Thin Lines	Abaikan Garis Tipis
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Garis hingga selebar ini (arsir, garis kecepatan, titik tone) tidak menghentikan isian: isian berlanjut di bawahnya hingga garis yang lebih tebal. 0 berarti mati
 	Reference layer: the Fill tool reads it	Layer referensi: dibaca oleh Alat Isian
 	Set as Reference Layer	Atur sebagai Layer Referensi
 	Clear Reference Layer	Hapus Layer Referensi

@@ -4569,6 +4569,8 @@ navigator	Zoom	Zoom
 	White and Transparent	Blanco y transparente
 	Image Border	Borde de la imagen
 	The canvas edge closes gaps as a line does	El borde del lienzo cierra huecos como una línea
+	Ignore Thin Lines	Ignorar líneas finas
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Las líneas de hasta este grosor (tramado, líneas de velocidad, puntos de trama) no detienen el relleno: continúa por debajo hasta las líneas más gruesas. 0 lo desactiva
 	Reference layer: the Fill tool reads it	Capa de referencia: la lee la herramienta Relleno
 	Set as Reference Layer	Establecer como capa de referencia
 	Clear Reference Layer	Quitar capa de referencia

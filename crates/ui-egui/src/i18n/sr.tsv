@@ -4667,6 +4667,8 @@ shape	Appearance	Izgled
 	White and Transparent	Bela i providna
 	Image Border	Ivica slike
 	The canvas edge closes gaps as a line does	Ivica platna zatvara praznine kao linija
+	Ignore Thin Lines	Zanemari tanke linije
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Linije do ove širine (šrafura, linije brzine, tačke rastera) ne zaustavljaju popunu: ona ide ispod njih do debljih linija. 0 je isključeno
 	Reference layer: the Fill tool reads it	Referentni sloj: alatka za popunjavanje ga čita
 	Set as Reference Layer	Postavi kao referentni sloj
 	Clear Reference Layer	Ukloni referentni sloj

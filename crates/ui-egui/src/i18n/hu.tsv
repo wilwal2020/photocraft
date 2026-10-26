@@ -4524,6 +4524,8 @@ cameraRaw	Yellow	Sárga
 	White and Transparent	Fehér és átlátszó
 	Image Border	Képszegély
 	The canvas edge closes gaps as a line does	A vászon széle vonalként zárja a réseket
+	Ignore Thin Lines	Vékony vonalak figyelmen kívül hagyása
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Az ennél nem szélesebb vonalak (sraffozás, sebességvonalak, rasztpontok) nem állítják meg a kitöltést: alattuk halad tovább a vastagabb vonalakig. 0 = ki
 	Reference layer: the Fill tool reads it	Referenciaréteg: a Kitöltés eszköz olvassa
 	Set as Reference Layer	Beállítás referenciarétegként
 	Clear Reference Layer	Referenciaréteg megszüntetése

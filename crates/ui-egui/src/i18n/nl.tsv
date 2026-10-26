@@ -4367,6 +4367,8 @@ curves	Smooth	Vloeiend maken
 	White and Transparent	Wit en transparant
 	Image Border	Afbeeldingsrand
 	The canvas edge closes gaps as a line does	De canvasrand sluit gaten zoals een lijn
+	Ignore Thin Lines	Dunne lijnen negeren
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Lijnen tot deze breedte (arcering, snelheidslijnen, rasterpunten) stoppen de vulling niet: die loopt eronder door tot de dikkere lijnen. 0 is uit
 	Reference layer: the Fill tool reads it	Referentielaag: het vulgereedschap leest deze
 	Set as Reference Layer	Instellen als referentielaag
 	Clear Reference Layer	Referentielaag opheffen

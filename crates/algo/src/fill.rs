@@ -4,11 +4,17 @@
 //!
 //! Gaps close with a watershed on the distance to the lines. Pixels at least half the gap away
 //! from every line are *open*, and the lines alone split them into areas. The pixels nearer a
-//! line then join those areas, every area flooding outward from its open middle in order of
-//! distance, so two areas that leak into each other through a gap meet at its narrowest point.
-//! A pixel both reach at once is the seam that closes the gap: it belongs to neither area, and a
-//! fill covers the seam pixels beside it as it covers a line, so two fills meet without a speck
-//! between them.
+//! line then join those areas, farthest from the lines first, so two areas that leak into each
+//! other through a gap meet at its narrowest point; a spot narrower than the gap (a strap, the
+//! specks between hatching strokes) starts an area of its own at its deepest pixel. A pixel two
+//! areas reach at once is the seam that closes the gap: it belongs to neither area, and a fill
+//! covers the seam pixels beside it as it covers a line, so two fills meet without a speck
+//! between them. An area that barely rises above the passage or holds only a few pixels is a
+//! jagged edge or a speck, and joins its neighbour instead; those thresholds don't depend on the
+//! gap, so a higher Close Gap only ever closes more, never fills more than a lower one.
+//!
+//! Ignore Thin Lines takes ink up to a width for free paper (an opening of the ink), so a fill
+//! runs on under hatching, speed lines and tone dots and stops at the bolder lines.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -19,6 +25,8 @@ use crate::selection::{Region, edt, region_from_marks};
 
 /// The widest gap Close Gap closes, in pixels.
 pub const MAX_GAP: f32 = 100.0;
+/// The widest lines Ignore Thin Lines passes, in pixels.
+pub const MAX_THIN: f32 = 50.0;
 /// The most Area Scaling grows or shrinks a fill, in pixels.
 pub const MAX_SCALE: f32 = 100.0;
 /// The largest Paint Unfilled Area brush radius, in pixels.
@@ -85,6 +93,9 @@ pub struct FillOptions {
     pub anti_alias: bool,
     /// Refer to image border: the canvas edge closes gaps as a line does.
     pub image_border: bool,
+    /// Ignore thin lines: ink up to this many pixels across (hatching, speed lines, screentone
+    /// dots) doesn't stop the fill, which runs on under it to the bolder lines (0: off).
+    pub thin_lines: f32,
     /// The colour a click must be like, when it goes on from an earlier one (a drag filling each
     /// area it reaches): a seed further from it than the colour margin fills nothing, and the
     /// fill follows this colour rather than the seed's.
@@ -93,7 +104,7 @@ pub struct FillOptions {
 
 impl Default for FillOptions {
     fn default() -> Self {
-        Self { tolerance: 10.0, contiguous: true, close_gap: 0.0, scale: 0.0, scaling: Scaling::Darkest, anti_alias: true, image_border: false, match_color: None }
+        Self { tolerance: 10.0, contiguous: true, close_gap: 0.0, scale: 0.0, scaling: Scaling::Darkest, anti_alias: true, image_border: false, thin_lines: 0.0, match_color: None }
     }
 }
 
@@ -134,6 +145,7 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     let open = |i: usize| strength.get(i).is_some_and(|s| *s <= margin) && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA));
     let free: Vec<bool> = crate::par::map(strength.len(), strength.len() >= 65_536, open);
     let gap = finite(o.close_gap, MAX_GAP);
+    let thin = thin_ink(&strength, margin, w, h, o.thin_lines, block);
     if !o.contiguous {
         let mut fill = free.clone();
         scale(&mut fill, &strength, &free, w, h, o);
@@ -145,8 +157,11 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     // The seed's area before any gap is closed. Closing gaps only splits it, and Area Scaling
     // reaches a few pixels past it, so the rest works on its box and a margin: a click on a page
     // costs what the spot clicked costs, not what the page does.
+    // Thin lines the fill may pass join the spot (the watershed below decides which it does).
+    let passable: Option<Vec<bool>> = thin.as_ref().map(|t| free.iter().zip(t).map(|(f, t)| *f || *t).collect());
     let mut spot = vec![false; free.len()];
-    let (x0, y0, x1, y1) = flood(&free, &mut spot, w, h, si, true)?;
+    let (x0, y0, x1, y1) = flood(passable.as_deref().unwrap_or(&free), &mut spot, w, h, si, true)?;
+    drop(passable);
     let amount = if o.scale.is_finite() { o.scale.clamp(-MAX_SCALE, MAX_SCALE).abs() } else { 0.0 };
     let tucks = if block.is_some() { TUCK as usize } else { 0 };
     let pad = (gap / 2.0).ceil() as usize + amount.ceil() as usize + tucks + 4;
@@ -158,16 +173,18 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     let strength: Vec<u8> = crop8(&strength);
     let block: Option<Vec<u8>> = block.map(crop8);
     let (spot, free) = (crop(&spot), crop(&free));
+    let thin: Option<Vec<bool>> = thin.map(|t| crop(&t));
     let csi = (si / w - cy0) * cw + si % w - cx0;
     let carea = Rect::new(area.x0 + cx0 as i32, area.y0 + cy0 as i32, area.x0 + cx1 as i32, area.y0 + cy1 as i32);
-    let mut fill = if gap < 1.0 {
+    let mut fill = if gap < 1.0 && thin.is_none() {
         spot
     } else {
         // Inside the spot, the nearest pixel outside it is always a line pixel, so taking every
         // other pixel for a line changes no distance there: the areas come out as they do over
         // the whole page, and the narrow-spot climb can't step across a thin diagonal line into
         // the next spot.
-        let (labels, seed_label) = areas(&spot, cw, ch, gap, [o.image_border; 4], Some(csi));
+        let soft = thin.as_deref().map(|t| (t, thin_rise(o.thin_lines)));
+        let (labels, seed_label) = areas(&spot, cw, ch, gap, [o.image_border; 4], Some(csi), soft);
         let l = seed_label?;
         let mut fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
         cover_seams(&mut fill, &labels, &spot, cw, ch);
@@ -178,6 +195,43 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
         tuck(&mut fill, b, cw, ch);
     }
     to_region(&fill, cw, ch, carea, o.anti_alias)
+}
+
+/// Ignore Thin Lines: the ink (pixels past the colour margin, not the editing layer's blocking
+/// paint) no more than `width` pixels across: what an opening (an erosion by half the width, then a
+/// dilation back, with a pixel's slack for the soft edges of the lines that stay) removes. `None`
+/// with the option off.
+///
+/// The fill may pass thin ink, but doesn't take it for paper: to the watershed ([`areas`]) it is a
+/// passage of no depth, and the fill crosses it only where what lies behind is a sliver no deeper
+/// than [`thin_rise`] (between hatching strokes, speed lines, tone dots). Two real areas a thin
+/// line parts (a face and the background) stay apart.
+fn thin_ink(strength: &[u8], margin: u8, w: usize, h: usize, width: f32, block: Option<&[u8]>) -> Option<Vec<bool>> {
+    let width = finite(width, MAX_THIN);
+    if width < 1.0 {
+        return None;
+    }
+    let r = (width + 1.0) / 2.0;
+    let paper: Vec<bool> = strength.iter().map(|s| *s <= margin).collect();
+    // How deep into the ink each ink pixel lies; the lines deeper than half the width keep.
+    let depth = edt(&paper, w, h);
+    if depth.len() != strength.len() {
+        return None;
+    }
+    let core: Vec<bool> = paper.iter().zip(&depth).map(|(p, d)| !p && *d > r).collect();
+    let near = edt(&core, w, h);
+    if near.len() != strength.len() {
+        return None;
+    }
+    let blocked = |i: usize| block.is_some_and(|b| b.get(i).is_some_and(|a| *a >= BLOCK_ALPHA));
+    Some(paper.iter().zip(&near).enumerate().map(|(i, (p, n))| !p && *n > r + 1.0 && !blocked(i)).collect())
+}
+
+/// How deep (distance from the lines, px) an area behind a thin line must be to stop a fill that
+/// ignores lines up to `width` across: three times the width, so the slivers between hatching
+/// strokes and speed lines join the area and the shapes thin outlines draw stay apart.
+fn thin_rise(width: f32) -> f32 {
+    (3.0 * finite(width, MAX_THIN)).max(4.0)
 }
 
 /// The editing layer's paint (`block`) is at least as far from the filled colour as it is opaque,
@@ -217,6 +271,15 @@ pub fn enclosed_region_blocked(img: &[[u8; 4]], area: Rect, inside: &[bool], tar
     if inside.len() != w * h {
         return None;
     }
+    // Transparent areas inside an opaque reference (line art scanned or drawn on its own white
+    // paper, multiplied over the colours) don't exist, and the fill found nothing at all: then the
+    // white is the paper, and white and transparent areas fill.
+    let margin = margin(o.tolerance);
+    let target = if target == Target::Transparent && !img.iter().zip(inside).any(|(p, i)| *i && difference(*p, [0; 4]) <= margin) {
+        Target::WhiteAndTransparent
+    } else {
+        target
+    };
     let block = block.filter(|b| b.len() == img.len());
     // Only areas wholly inside the lasso fill, so the work is done on its box and a margin, not
     // the page. An area reaching into the margin leaves the lasso there. The margin is wide enough
@@ -264,12 +327,21 @@ fn enclosed_in(img: &[[u8; 4]], area: Rect, inside: &[bool], w: usize, h: usize,
         Target::Transparent => strengths(img, |p| difference(p, [0; 4])),
         Target::WhiteAndTransparent => strengths(img, darkness),
     };
-    blocked_strength(&mut strength, block);
     let margin = margin(o.tolerance);
+    blocked_strength(&mut strength, block);
     let free: Vec<bool> =
         strength.iter().enumerate().map(|(i, s)| *s <= margin && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA))).collect();
     let gap = finite(o.close_gap, MAX_GAP);
-    let labels = if gap < 1.0 { components(&free, w, h) } else { areas(&free, w, h, gap, border, None).0 };
+    let thin = thin_ink(&strength, margin, w, h, o.thin_lines, block);
+    let passable: Vec<bool> = match &thin {
+        Some(t) => free.iter().zip(t).map(|(f, t)| *f || *t).collect(),
+        None => free.clone(),
+    };
+    let labels = if gap < 1.0 && thin.is_none() {
+        components(&free, w, h)
+    } else {
+        areas(&passable, w, h, gap, border, None, thin.as_deref().map(|t| (t, thin_rise(o.thin_lines)))).0
+    };
     let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
     let mut leaves = vec![false; count];
     for (l, inside) in labels.iter().zip(inside) {
@@ -281,8 +353,8 @@ fn enclosed_in(img: &[[u8; 4]], area: Rect, inside: &[bool], w: usize, h: usize,
         }
     }
     let mut fill: Vec<bool> = labels.iter().map(|l| *l != 0 && !leaves.get(*l as usize).copied().unwrap_or(true)).collect();
-    if gap >= 1.0 {
-        cover_seams(&mut fill, &labels, &free, w, h);
+    if gap >= 1.0 || thin.is_some() {
+        cover_seams(&mut fill, &labels, &passable, w, h);
     }
     scale(&mut fill, &strength, &free, w, h, o);
     if let Some(b) = block {
@@ -504,25 +576,33 @@ fn climb(dist: &[f32], free: &[bool], w: usize, h: usize, mut i: usize) -> usize
 /// The areas of `free` pixels, split by the lines (the other pixels) with gaps up to `gap`
 /// pixels closed (see the module docs): labels from 1, 0 on lines and seams. With `seed`, also
 /// the label of the seed's area. A seed in a spot narrower than the gap lowers the gap to fit,
-/// so a click always fills the spot it lands in.
-fn areas(free: &[bool], w: usize, h: usize, gap: f32, border: [bool; 4], seed: Option<usize>) -> (Vec<u32>, Option<u32>) {
+/// so a click always fills the spot it lands in. `thin`: the free pixels that are thin ink (see
+/// [`thin_ink`]) and how deep an area behind them must be to stay apart.
+fn areas(free: &[bool], w: usize, h: usize, gap: f32, border: [bool; 4], seed: Option<usize>, thin: Option<(&[bool], f32)>) -> (Vec<u32>, Option<u32>) {
     if border == [true; 4] {
-        return watershed(free, w, h, gap, seed);
+        return watershed(free, w, h, gap, seed, thin);
     }
     // An edge that is not a line (`border`: left, top, right, bottom): the canvas carries on blank
     // beyond it, far enough for any gap between a line and the edge to stay open.
+    // The margin carries on what the edge holds: a line reaching the edge goes on beyond it, so
+    // two areas never join round its end through the margin (with thin lines passable, both
+    // sides of such a line are often in the spot), while blank at the edge stays blank.
     let pad = (gap / 2.0).ceil() as usize + 2;
     let [l, t, r, b] = border.map(|line| if line { 0 } else { pad });
     let (pw, ph) = (w + l + r, h + t + b);
-    let mut padded = vec![true; pw * ph];
-    for (y, row) in free.chunks_exact(w).enumerate() {
-        let at = (y + t) * pw + l;
-        if let Some(dst) = padded.get_mut(at..at + w) {
-            dst.copy_from_slice(row);
-        }
-    }
+    let extend = |m: &[bool]| -> Vec<bool> {
+        (0..ph)
+            .flat_map(|py| {
+                let y = py.saturating_sub(t).min(h.saturating_sub(1));
+                (0..pw).map(move |px| (y, px.saturating_sub(l).min(w.saturating_sub(1))))
+            })
+            .map(|(y, x)| m.get(y * w + x).copied().unwrap_or(false))
+            .collect()
+    };
+    let padded = extend(free);
     let seed = seed.map(|s| (s / w + t) * pw + s % w + l);
-    let (labels, seed_label) = watershed(&padded, pw, ph, gap, seed);
+    let thin = thin.map(|(m, rise)| (extend(m), rise));
+    let (labels, seed_label) = watershed(&padded, pw, ph, gap, seed, thin.as_ref().map(|(m, rise)| (m.as_slice(), *rise)));
     let mut out = Vec::with_capacity(w * h);
     for y in 0..h {
         let at = (y + t) * pw + l;
@@ -533,9 +613,12 @@ fn areas(free: &[bool], w: usize, h: usize, gap: f32, border: [bool; 4], seed: O
 }
 
 /// [`areas`] with the canvas edge as a line.
-fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -> (Vec<u32>, Option<u32>) {
+fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, thin: Option<(&[bool], f32)>) -> (Vec<u32>, Option<u32>) {
     let n = free.len();
-    let lines: Vec<bool> = free.iter().map(|f| !f).collect();
+    // Thin ink a fill may pass is free, but distances are measured to it as to any line: it is a
+    // passage of no depth.
+    let is_thin = |i: usize| thin.is_some_and(|(m, _)| m.get(i) == Some(&true));
+    let lines: Vec<bool> = free.iter().enumerate().map(|(i, f)| !f || is_thin(i)).collect();
     let dist = edt(&lines, w, h);
     if dist.len() != n {
         let labels = components(free, w, h);
@@ -546,16 +629,21 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -
     let mut r = (gap + 2.0) / 2.0;
     let top = seed.filter(|s| free.get(*s) == Some(&true)).map(|s| climb(&dist, free, w, h, s));
     if let Some(t) = top {
-        r = r.min(dist.get(t).copied().unwrap_or(r));
+        r = r.min(dist.get(t).copied().unwrap_or(r)).max(1.0);
     }
+    // Pixels at least `r` from the lines: two of them joined through such pixels are joined by a
+    // passage wider than the gap, so they are one area.
     let open: Vec<bool> = free.iter().zip(&dist).map(|(f, d)| *f && *d >= r).collect();
     let mut labels = components(&open, w, h);
     drop(open);
-    // Each area's deepest point and how big its deep part is. Where two areas meet, the
-    // shallower one is kept apart only if it rises well above the meeting point and its deep
-    // part is bigger than a few gaps: a real spot behind a gap. Along a stroke that tapers to a
-    // point, jagged edges widen it past the gap now and then; those bits are small or barely rise,
-    // and join the area they belong to, so the fill runs on to the tip.
+    // Each area's deepest point and how many pixels it holds. Where two areas meet (always
+    // through a passage narrower than the gap), the shallower one is kept apart only if it rises
+    // well above the meeting point and holds more than a few pixels: a real spot behind a gap.
+    // Along a stroke that tapers to a point, jagged edges widen it now and then; those bits barely
+    // rise, and join the area they belong to, so the fill runs on to the tip. Neither threshold
+    // depends on the gap, so a wider gap only ever keeps more apart: a higher Close Gap never
+    // fills more than a lower one (it once did: the thresholds grew with the gap, and the open
+    // middles they measured shrank, so real spots behind a gap counted as jagged bits).
     let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
     let mut peak = vec![0f32; count];
     let mut size = vec![0usize; count];
@@ -565,37 +653,42 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -
             *n += 1;
         }
     }
-    let small = (8.0 * r * r) as usize;
     let mut parent: Vec<u32> = (0..count as u32).collect();
-    let rise = (r * 0.4).max(1.0);
     const SEAM: u32 = u32::MAX;
-    let key = |d: f32| (d.clamp(0.0, 1e6) * 64.0) as u32;
     let labelled = |labels: &[u32], j: usize| labels.get(j).is_some_and(|l| *l != 0 && *l != SEAM);
-    let mut queued = vec![false; n];
-    let mut heap: BinaryHeap<(u32, Reverse<u64>, usize)> = BinaryHeap::new();
-    let mut seq = 0u64;
-    for i in 0..n {
-        if free.get(i) == Some(&true) && labels.get(i) == Some(&0) && neighbours(i, w, h).into_iter().flatten().any(|j| labelled(&labels, j)) {
-            if let Some(q) = queued.get_mut(i) {
-                *q = true;
-            }
-            heap.push((key(dist.get(i).copied().unwrap_or(0.0)), Reverse(seq), i));
-            seq += 1;
-        }
-    }
-    // Farthest from the lines first; equally far, first come first served.
-    while let Some((_, _, i)) = heap.pop() {
+    // Every other pixel, farthest from the lines first (equally far, in page order), so a spot
+    // narrower than the gap starts an area of its own at its deepest pixel instead of being
+    // flooded by whichever neighbour reaches it first (through the gap it should stay closed by).
+    for i in by_depth(free, &labels, &dist) {
         let here = dist.get(i).copied().unwrap_or(0.0);
         let mut met: Vec<u32> = Vec::new();
+        let mut beside_seam = false;
         for j in neighbours(i, w, h).into_iter().flatten() {
             if labelled(&labels, j) {
                 let root = find(&mut parent, labels.get(j).copied().unwrap_or(0));
                 if !met.contains(&root) {
                     met.push(root);
                 }
+            } else if labels.get(j) == Some(&SEAM) {
+                beside_seam = true;
             }
         }
         if met.is_empty() {
+            // Below a seam only: part of the seam. Else a local top: a new area.
+            let label = if beside_seam {
+                SEAM
+            } else {
+                parent.push(parent.len() as u32);
+                peak.push(here);
+                size.push(0);
+                (parent.len() - 1) as u32
+            };
+            if let Some(v) = labels.get_mut(i) {
+                *v = label;
+            }
+            if let Some(n) = size.get_mut(label as usize) {
+                *n += 1;
+            }
             continue;
         }
         // The deepest area takes in the ones that barely rise above this meeting point.
@@ -604,7 +697,12 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -
         let mut seam = false;
         for &other in &met[1..] {
             let (o, g) = (other as usize, got as usize);
-            if peak.get(o).copied().unwrap_or(0.0) - here < rise || size.get(o).copied().unwrap_or(0) < small {
+            // Across thin ink (no depth) only a deep area stays apart; elsewhere [`RISE`].
+            let rise = match thin {
+                Some((_, deep)) if is_thin(i) => deep,
+                _ => RISE,
+            };
+            if peak.get(o).copied().unwrap_or(0.0) - here < rise || size.get(o).copied().unwrap_or(0) < SMALL {
                 if let Some(p) = parent.get_mut(o) {
                     *p = got;
                 }
@@ -620,17 +718,8 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -
         if let Some(v) = labels.get_mut(i) {
             *v = if seam { SEAM } else { got };
         }
-        if seam {
-            continue;
-        }
-        for j in neighbours(i, w, h).into_iter().flatten() {
-            if free.get(j) == Some(&true) && labels.get(j) == Some(&0) && queued.get(j) == Some(&false) {
-                if let Some(q) = queued.get_mut(j) {
-                    *q = true;
-                }
-                heap.push((key(dist.get(j).copied().unwrap_or(0.0)), Reverse(seq), j));
-                seq += 1;
-            }
+        if !seam && let Some(n) = size.get_mut(got as usize) {
+            *n += 1;
         }
     }
     for l in &mut labels {
@@ -638,6 +727,41 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>) -
     }
     let seed_label = top.and_then(|t| labels.get(t).copied()).filter(|l| *l != 0);
     (labels, seed_label)
+}
+
+/// How far an area must rise above the passage it meets another through to be kept apart, in
+/// pixels of distance from the lines (twice that in width): less is a jagged edge.
+const RISE: f32 = 2.0;
+/// The fewest pixels an area behind a gap holds to be kept apart: fewer is a speck.
+const SMALL: usize = 64;
+
+/// The free pixels `labels` leaves unlabelled, farthest from the lines (`dist`) first and equally
+/// far in page order: a bucket sort on the distance in 1/64 px steps.
+fn by_depth(free: &[bool], labels: &[u32], dist: &[f32]) -> Vec<usize> {
+    let key = |d: f32| (d.clamp(0.0, 4096.0) * 64.0) as usize;
+    let todo = |i: usize| free.get(i) == Some(&true) && labels.get(i) == Some(&0);
+    let top = (0..free.len()).filter(|&i| todo(i)).map(|i| key(dist.get(i).copied().unwrap_or(0.0))).max();
+    let Some(top) = top else { return Vec::new() };
+    let mut start = vec![0usize; top + 2];
+    for i in (0..free.len()).filter(|&i| todo(i)) {
+        if let Some(s) = start.get_mut(top - key(dist.get(i).copied().unwrap_or(0.0)) + 1) {
+            *s += 1;
+        }
+    }
+    for k in 1..start.len() {
+        start[k] += start[k - 1];
+    }
+    let mut out = vec![0usize; start.last().copied().unwrap_or(0)];
+    for i in (0..free.len()).filter(|&i| todo(i)) {
+        let b = top - key(dist.get(i).copied().unwrap_or(0.0));
+        if let Some(s) = start.get_mut(b)
+            && let Some(o) = out.get_mut(*s)
+        {
+            *o = i;
+            *s += 1;
+        }
+    }
+    out
 }
 
 /// The area label `l` was merged into (union-find, with path halving).

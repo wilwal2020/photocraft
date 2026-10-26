@@ -4397,6 +4397,8 @@ layerLabel	No Color	Sem cor
 	White and Transparent	Branco e transparente
 	Image Border	Borda da imagem
 	The canvas edge closes gaps as a line does	A borda da tela fecha lacunas como uma linha
+	Ignore Thin Lines	Ignorar linhas finas
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Linhas até esta largura (hachuras, linhas de velocidade, pontos de retícula) não param o preenchimento: ele continua por baixo até as linhas mais grossas. 0 desativa
 	Reference layer: the Fill tool reads it	Camada de referência: a ferramenta Preenchimento a lê
 	Set as Reference Layer	Definir como camada de referência
 	Clear Reference Layer	Remover camada de referência

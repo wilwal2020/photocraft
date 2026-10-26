@@ -3589,6 +3589,8 @@ curves	Smooth	Сгладить
 	White and Transparent	Белый и прозрачный
 	Image Border	Край изображения
 	The canvas edge closes gaps as a line does	Край холста закрывает зазоры, как линия
+	Ignore Thin Lines	Игнорировать тонкие линии
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Линии не шире этого значения (штриховка, линии скорости, точки скринтона) не останавливают заливку: она проходит под ними до более толстых линий. 0 — выключено
 	Reference layer: the Fill tool reads it	Опорный слой: его учитывает инструмент «Заливка»
 	Set as Reference Layer	Сделать опорным слоем
 	Clear Reference Layer	Отменить опорный слой

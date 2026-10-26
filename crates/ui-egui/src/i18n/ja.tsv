@@ -4288,6 +4288,8 @@ curves	Smooth	スムーズ
 	White and Transparent	白と透明
 	Image Border	画像の端
 	The canvas edge closes gaps as a line does	キャンバスの端を線と同じように扱って隙間を閉じます
+	Ignore Thin Lines	細い線を無視
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	この幅までの線（ハッチング、効果線、トーンの網点）では塗りが止まらず、その下を通ってより太い線まで塗ります。0 でオフ
 	Reference layer: the Fill tool reads it	参照レイヤー：塗りつぶしツールが参照します
 	Set as Reference Layer	参照レイヤーに設定
 	Clear Reference Layer	参照レイヤーを解除

@@ -3238,6 +3238,8 @@ curves	Smooth	平滑
 	White and Transparent	白色和透明
 	Image Border	影像邊緣
 	The canvas edge closes gaps as a line does	畫布邊緣像線條一樣封閉間隙
+	Ignore Thin Lines	忽略細線
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	不超過此寬度的線條（排線、速度線、網點）不會阻擋填充：填充會從其下方延伸到更粗的線條為止。0 為關閉
 	Reference layer: the Fill tool reads it	參考圖層：填色工具會讀取它
 	Set as Reference Layer	設為參考圖層
 	Clear Reference Layer	取消參考圖層

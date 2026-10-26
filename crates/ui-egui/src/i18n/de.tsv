@@ -3632,6 +3632,8 @@ curves	Smooth	Glätten
 	White and Transparent	Weiß und transparent
 	Image Border	Bildrand
 	The canvas edge closes gaps as a line does	Der Arbeitsflächenrand schließt Lücken wie eine Linie
+	Ignore Thin Lines	Dünne Linien ignorieren
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Linien bis zu dieser Breite (Schraffur, Speedlines, Rasterpunkte) stoppen die Füllung nicht: Sie läuft darunter weiter bis zu den kräftigeren Linien. 0 ist aus
 	Reference layer: the Fill tool reads it	Referenzebene: das Füllwerkzeug liest sie
 	Set as Reference Layer	Als Referenzebene festlegen
 	Clear Reference Layer	Referenzebene aufheben

@@ -4227,6 +4227,8 @@ curves	Smooth	Wygładź
 	White and Transparent	Biały i przezroczysty
 	Image Border	Krawędź obrazu
 	The canvas edge closes gaps as a line does	Krawędź obszaru roboczego zamyka luki jak linia
+	Ignore Thin Lines	Ignoruj cienkie linie
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Linie do tej szerokości (kreskowanie, linie ruchu, punkty rastra) nie zatrzymują wypełnienia: biegnie pod nimi aż do grubszych linii. 0 wyłącza
 	Reference layer: the Fill tool reads it	Warstwa odniesienia: czyta ją narzędzie Wypełnienie
 	Set as Reference Layer	Ustaw jako warstwę odniesienia
 	Clear Reference Layer	Usuń warstwę odniesienia

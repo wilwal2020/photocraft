@@ -4308,6 +4308,8 @@ curves	Smooth	Εξομάλυνση
 	White and Transparent	Λευκό και διαφανές
 	Image Border	Περίγραμμα εικόνας
 	The canvas edge closes gaps as a line does	Το άκρο του καμβά κλείνει κενά όπως μια γραμμή
+	Ignore Thin Lines	Παράβλεψη λεπτών γραμμών
+	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	Γραμμές έως αυτό το πλάτος (διαγράμμιση, γραμμές ταχύτητας, κουκκίδες τόνου) δεν σταματούν το γέμισμα: συνεχίζει κάτω από αυτές ως τις πιο έντονες γραμμές. 0 = ανενεργό
 	Reference layer: the Fill tool reads it	Επίπεδο αναφοράς: το διαβάζει το εργαλείο γεμίσματος
 	Set as Reference Layer	Ορισμός ως επιπέδου αναφοράς
 	Clear Reference Layer	Κατάργηση επιπέδου αναφοράς

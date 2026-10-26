@@ -215,9 +215,44 @@ fn white_and_transparent_fills_line_art_on_paper() {
     img.outline(5, 5, 20, 20);
     let lasso = lasso_mask(&[(2.0, 2.0), (25.0, 2.0), (25.0, 25.0), (2.0, 25.0)], img.area());
     let o = hard();
-    assert!(enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none(), "paper isn't transparent");
     let r = enclosed_region(&img.px, img.area(), &lasso, Target::WhiteAndTransparent, &o).unwrap();
     assert!(filled(&r, 10, 10) && !filled(&r, 5, 10) && !filled(&r, 3, 3));
+    // Transparent finds no transparency on the paper (scanned line art multiplied over the
+    // colours): it fills the white as White and Transparent does, instead of nothing.
+    let t = enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).unwrap();
+    assert_eq!(t.mask, r.mask);
+    // Where there is transparency, Transparent keeps to it.
+    let mut mixed = Img::new(30, 30, CLEAR);
+    mixed.outline(5, 5, 20, 20);
+    for y in 6..20 {
+        for x in 6..20 {
+            mixed.set(x, y, [255, 255, 255, 255]);
+        }
+    }
+    assert!(enclosed_region(&mixed.px, mixed.area(), &lasso, Target::Transparent, &o).is_none(), "the white box isn't transparent");
+}
+
+/// Hatching: specks between the strokes narrower than Close Gap are areas of their own, so
+/// Enclose and Fill and Paint Unfilled Area fill them (they had no pixel half the gap from the
+/// lines, and dropped out, so on hatching those tools filled nothing).
+#[test]
+fn specks_narrower_than_the_gap_still_fill() {
+    let mut img = Img::new(40, 30, [255, 255, 255, 255]);
+    img.outline(5, 5, 34, 24);
+    for x in (8..33).step_by(3) {
+        for y in 5..25 {
+            img.set(x, y, INK);
+        }
+    }
+    let lasso = lasso_mask(&[(2.0, 2.0), (37.0, 2.0), (37.0, 27.0), (2.0, 27.0)], img.area());
+    for gap in [0.0, 4.0, 10.0] {
+        let o = FillOptions { close_gap: gap, ..hard() };
+        let r = enclosed_region(&img.px, img.area(), &lasso, Target::WhiteAndTransparent, &o).unwrap_or_else(|| panic!("gap {gap}: nothing filled"));
+        for x in [6, 10, 13, 31] {
+            assert!(filled(&r, x, 15), "gap {gap}: the speck at x {x}");
+        }
+        assert!(!filled(&r, 8, 15) && !filled(&r, 2, 2), "gap {gap}: lines and outside stay");
+    }
 }
 
 #[test]
@@ -300,7 +335,7 @@ fn click_region_whole_page(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &Fi
     let mut fill = if gap < 1.0 {
         spot
     } else {
-        let (labels, seed_label) = areas(&spot, w, h, gap, [o.image_border; 4], Some(si));
+        let (labels, seed_label) = areas(&spot, w, h, gap, [o.image_border; 4], Some(si), None);
         let l = seed_label?;
         let mut fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
         cover_seams(&mut fill, &labels, &spot, w, h);
@@ -526,4 +561,113 @@ fn the_editing_layers_paint_closes_an_enclosed_area() {
     let r = enclosed_region_blocked(&img.px, img.area(), &lasso, Target::Transparent, &o, Some(&block)).unwrap();
     assert!(filled(&r, 20, 20));
     assert!(enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none_or(|r| !filled(&r, 20, 20)), "without the block the inside leaks out past the lasso");
+}
+
+/// A real page's clicks at every Close Gap level (`PHOTOCRAFT_FILL_PAGE=<page.rgba>` with
+/// `<page>.seeds`, one `x y` per line, and `PHOTOCRAFT_FILL_PAGE_W`): a higher Close Gap must never
+/// fill more than a lower one. `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn a_real_page_fills_less_as_close_gap_rises() {
+    let Ok(path) = std::env::var("PHOTOCRAFT_FILL_PAGE") else { return };
+    let w: usize = std::env::var("PHOTOCRAFT_FILL_PAGE_W").unwrap().parse().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let px: Vec<[u8; 4]> = bytes.as_chunks::<4>().0.to_vec();
+    let h = px.len() / w;
+    let area = Rect::new(0, 0, w as i32, h as i32);
+    let seeds: Vec<(i32, i32)> = std::fs::read_to_string(path.replace(".rgba", ".seeds"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once(' ').map(|(x, y)| (x.parse().unwrap(), y.parse().unwrap())))
+        .collect();
+    let gaps = [0.0f32, 2.0, 4.0, 6.0, 10.0, 16.0];
+    let count = |r: &Option<Region>| r.as_ref().map_or(0usize, |r| r.mask.iter().filter(|v| **v >= 128).count());
+    let (mut bad, mut mild) = (0, 0);
+    let t0 = std::time::Instant::now();
+    for (k, &seed) in seeds.iter().enumerate() {
+        let n: Vec<usize> = gaps
+            .iter()
+            .map(|&g| count(&click_region(&px, area, seed, &FillOptions { close_gap: g, scale: 1.0, anti_alias: false, ..FillOptions::default() })))
+            .collect();
+        if let Some(dir) = std::env::var_os("PHOTOCRAFT_FILL_PAGE_DUMP") {
+            // The gap-16 fill as raw marks, to look at.
+            if let Some(r) = click_region(&px, area, seed, &FillOptions { close_gap: 16.0, scale: 1.0, anti_alias: false, ..FillOptions::default() }) {
+                let b = r.bbox;
+                let mut out = format!("{} {} {} {}
+", b.x0, b.y0, b.x1, b.y1).into_bytes();
+                out.extend(r.mask.iter().map(|v| u8::from(*v >= 128)));
+                std::fs::write(std::path::Path::new(&dir).join(format!("new{k}_16.bin")), out).unwrap();
+            }
+        }
+        let grows = (0..gaps.len()).any(|i| (i + 1..gaps.len()).any(|j| n[i] > 0 && n[j] as f64 > n[i] as f64 * 1.05 + 200.0));
+        let any = (0..gaps.len()).any(|i| (i + 1..gaps.len()).any(|j| n[i] > 0 && n[j] as f64 > n[i] as f64 * 1.01 + 50.0));
+        bad += usize::from(grows);
+        mild += usize::from(any);
+        if grows || any || std::env::var_os("PHOTOCRAFT_FILL_PAGE_ALL").is_some() {
+            eprintln!("{k:2} {seed:?} {n:?}{}", if grows { "  <-- GROWS" } else { "" });
+        }
+    }
+    eprintln!("{bad} of {} clicks fill clearly more at a higher Close Gap, {mild} grow by >1 %; {:.1} s", seeds.len(), t0.elapsed().as_secs_f32());
+}
+
+/// Ignore Thin Lines: hatching across a box with a bold outline splits it into strips; with the
+/// option the fill runs under the hatching to the outline, and no further.
+#[test]
+fn ignore_thin_lines_fills_under_hatching_to_the_bold_lines() {
+    let mut img = Img::new(60, 50, [255, 255, 255, 255]);
+    // A 4 px outline round 10..50 × 10..40, and 1 px hatching across it every 4 px.
+    for y in 10..40 {
+        for x in 10..50 {
+            if !(14..46).contains(&x) || !(14..36).contains(&y) {
+                img.set(x, y, INK);
+            }
+        }
+    }
+    for x in (16..46).step_by(4) {
+        for y in 14..36 {
+            img.set(x, y, INK);
+        }
+    }
+    let strip = img.click(15, 25, hard()).unwrap();
+    assert!(filled(&strip, 15, 25) && !filled(&strip, 18, 25), "without the option, one strip");
+    for gap in [0.0, 4.0] {
+        let o = FillOptions { thin_lines: 2.0, close_gap: gap, ..hard() };
+        let all = img.click(15, 25, o).unwrap();
+        for x in [15, 16, 18, 30, 44] {
+            assert!(filled(&all, x, 25), "gap {gap}: ({x}, 25), under and between the hatching");
+        }
+        assert!(!filled(&all, 12, 25) && !filled(&all, 5, 5) && !filled(&all, 55, 45), "gap {gap}: the bold outline still stops it");
+    }
+    // Lines as wide as the outline are bold enough to be ignored too: the fill reaches outside.
+    let wide = img.click(15, 25, FillOptions { thin_lines: 8.0, ..hard() }).unwrap();
+    assert!(filled(&wide, 5, 5));
+    // Hostile widths are clamped, never a panic.
+    for t in [f32::NAN, -3.0, 1e9] {
+        let _ = img.click(15, 25, FillOptions { thin_lines: t, ..hard() });
+    }
+}
+
+/// Ignore Thin Lines passes the slivers between hatching strokes, but a thin line between two
+/// real areas (a face's outline against the background) still parts them.
+#[test]
+fn ignore_thin_lines_keeps_real_areas_a_thin_line_parts() {
+    let mut img = Img::new(120, 60, [255, 255, 255, 255]);
+    // A 2 px line down x = 60..62 parting two 60 px areas; 1 px hatching every 4 px in the left one.
+    for y in 0..60 {
+        img.set(60, y, INK);
+        img.set(61, y, INK);
+    }
+    for x in (20..44).step_by(4) {
+        for y in 10..50 {
+            img.set(x, y, INK);
+        }
+    }
+    for gap in [0.0, 4.0] {
+        let o = FillOptions { thin_lines: 3.0, close_gap: gap, ..hard() };
+        let left = img.click(5, 30, o).unwrap();
+        for x in [5, 20, 22, 30, 42, 50] {
+            assert!(filled(&left, x, 30), "gap {gap}: ({x}, 30), the hatched area is one");
+        }
+        assert!(!filled(&left, 70, 30) && !filled(&left, 110, 5), "gap {gap}: the thin line still parts the two areas");
+    }
 }
