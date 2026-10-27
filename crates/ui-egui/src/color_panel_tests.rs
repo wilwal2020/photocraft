@@ -501,3 +501,36 @@ fn every_slider_mode_recolours_the_selected_shape() {
         assert_eq!(shape_fill(h.state()), [255, 255, 255], "{mode:?}");
     }
 }
+
+/// The hue strip has Photoshop's arrow on each side, both pointing in at the strip at the hue.
+#[test]
+fn hue_strip_has_an_arrow_on_each_side() {
+    let strip = Rect::from_min_size(pos2(100.0, 10.0), vec2(14.0, 120.0));
+    let [left, right] = crate::panels::strip_arrows(strip, 40.0);
+    assert!(left.iter().all(|p| p.x <= strip.left()) && right.iter().all(|p| p.x >= strip.right()));
+    assert_eq!((left[0].y, right[0].y), (40.0, 40.0), "the tips sit at the hue");
+    assert_eq!(left[0].x, strip.left() - 1.0);
+    assert_eq!(right[0].x, strip.right() + 1.0);
+}
+
+/// The cubes fill their group, so their scroll area never draws a bar over the hue strip; the
+/// slider modes keep theirs.
+#[test]
+fn the_cubes_hide_the_scroll_bar_and_the_sliders_keep_it() {
+    use egui::scroll_area::ScrollBarVisibility;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for pro in [true, false] {
+        let tab = Group::Color.tabs(pro).iter().position(|name| *name == "Color").unwrap();
+        for (mode, bar) in [
+            (ColorPanelMode::HueCube, ScrollBarVisibility::AlwaysHidden),
+            (ColorPanelMode::BrightnessCube, ScrollBarVisibility::AlwaysHidden),
+            (ColorPanelMode::RgbSliders, ScrollBarVisibility::VisibleWhenNeeded),
+            (ColorPanelMode::ColorWheel, ScrollBarVisibility::VisibleWhenNeeded),
+        ] {
+            app.ui.color_panel.mode = mode;
+            assert_eq!(crate::panels::body_scroll_bar(&app, pro, Group::Color, tab), bar, "{mode:?}");
+        }
+        app.ui.color_panel.mode = ColorPanelMode::HueCube;
+        assert_eq!(crate::panels::body_scroll_bar(&app, pro, Group::Properties, 0), ScrollBarVisibility::VisibleWhenNeeded);
+    }
+}

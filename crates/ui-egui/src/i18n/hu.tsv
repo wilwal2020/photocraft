@@ -4723,6 +4723,9 @@ cameraRaw	Yellow	Sárga
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Minta: rögzített színek
+	Sample: the colours used last	Minta: legutóbb használt színek
+	Play once for each selected layer	Lejátszás egyszer minden kijelölt rétegre
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Több kijelölt rétegnél a Lejátszás sorban mindegyiken lefuttatja a műveletet, mindig csak azt a réteget kijelölve
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	MI-eltávolítás
 	Remove what is selected with Nano Banana ({key})	A kijelölés eltávolítása a Nano Bananával ({key})

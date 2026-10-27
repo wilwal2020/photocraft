@@ -35,6 +35,23 @@ pub(crate) fn icon_part(ctx: &egui::Context, part: icon::Part, p: Pos2) -> Curso
     CursorIcon::None
 }
 
+/// Several icons as one pointer (drawn in order, later on top), as [`icon_part`]: an OS cursor
+/// bitmap where the platform takes one, else painted at `p`.
+pub(crate) fn icon_parts(ctx: &egui::Context, parts: &[icon::Part], p: Pos2) -> CursorIcon {
+    let Some(first) = parts.first() else { return CursorIcon::Default };
+    ctx.data_mut(|d| d.insert_temp(shown_id(), first.name));
+    if native(ctx)
+        && let Some(image) = icon::image(parts, native_scale(ctx))
+    {
+        ctx.set_cursor_image(Some(image));
+        return CursorIcon::None;
+    }
+    for part in parts {
+        crate::icons::cursor(ctx, part.name, p, -part.at / part.size, part.size, part.mirrored);
+    }
+    CursorIcon::None
+}
+
 fn shown_id() -> egui::Id {
     egui::Id::new("photocraft-tool-cursor-icon")
 }

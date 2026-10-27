@@ -227,6 +227,7 @@ pub mod stack_dialog;
 pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trace;
+mod slow_frames;
 pub mod stroke_trail;
 pub mod stroke_ui;
 pub mod stylus;
@@ -1071,6 +1072,10 @@ pub struct PhotocraftApp {
     /// After #4472 (astigmata).
     pub min_frame_ms: Option<f64>,
     last_frame_start_ms: f64,
+    /// When the frame before and this one started (`raw_input_hook`), and when a slow frame was
+    /// last logged (`slow_frames`).
+    frame_starts: [f64; 2],
+    slow_frame_logged: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -1240,6 +1245,8 @@ impl PhotocraftApp {
             background_jobs: false,
             min_frame_ms: None,
             last_frame_start_ms: 0.0,
+            frame_starts: [0.0; 2],
+            slow_frame_logged: f64::NEG_INFINITY,
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
@@ -2496,6 +2503,7 @@ impl eframe::App for PhotocraftApp {
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
+        self.frame_starts = [self.frame_starts[1], frame_start];
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
         if let Some(window_frame) = self.services.window_frame.as_mut() {
@@ -2711,6 +2719,19 @@ impl PhotocraftApp {
             self.perf.record_gpu(t);
         }
         self.perf.frame(ui_ms);
+        let slow = slow_frames::Frame {
+            start: self.frame_starts[1],
+            build: ui_ms,
+            refresh: self.perf.frame_refresh_ms,
+            refresh_kind: self.perf.last_refresh,
+            cpu_prev: frame.info().cpu_usage.map(f64::from),
+            held: ctx.input(|i| i.pointer.any_down()),
+            tool: format!("{:?}", self.active_tool()),
+            document: self.session.active().map(|d| (d.doc.size.width, d.doc.size.height)),
+        };
+        if let Some(line) = slow_frames::report(&slow, self.frame_starts[0], &mut self.slow_frame_logged, &self.perf.spans) {
+            log::warn!("{line}");
+        }
         fill_tool_ui::tick(self);
         if self.stroke_trace.enabled() {
             self.stroke_trace.canvas(self.perf.frame_refresh_ms);

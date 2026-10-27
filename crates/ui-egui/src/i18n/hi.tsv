@@ -623,3 +623,6 @@ cameraRaw	White Balance	व्हाइट बैलेंस
 	Outline the layer under the pointer, or hovered in the Layers panel, on the canvas	पॉइंटर के नीचे की लेयर, या लेयर्स पैनल में होवर की गई लेयर, को कैनवास पर रेखांकित करें
 	Ignore Thin Lines	पतली रेखाओं को अनदेखा करें
 	Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off	इतनी चौड़ाई तक की रेखाएँ (हैचिंग, स्पीड लाइनें, टोन बिंदु) भराव को नहीं रोकतीं: यह उनके नीचे से मोटी रेखाओं तक चलता रहता है। 0 का अर्थ बंद
+	Sample: the colours used last	नमूना: पिछली बार उपयोग किए गए रंग
+	Play once for each selected layer	प्रत्येक चयनित लेयर के लिए एक बार चलाएँ
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	कई लेयर चयनित होने पर, चलाएँ हर लेयर पर बारी-बारी से एक्शन चलाता है, हर बार केवल वही लेयर चयनित रहती है

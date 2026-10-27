@@ -253,7 +253,7 @@ fn a_click_below_the_layers_deselects_them() {
 /// Background (which has nothing to load), it stays the plain pointer.
 #[test]
 fn command_over_a_thumbnail_shows_the_load_cursor() {
-    use egui::{CursorIcon, Event, pos2, vec2};
+    use egui::{Event, pos2, vec2};
 
     use crate::tool_feedback::Badge;
     assert_eq!(crate::panels::thumb_load_badge(Modifiers::COMMAND), None);
@@ -278,14 +278,23 @@ fn command_over_a_thumbnail_shows_the_load_cursor() {
         h.hover_at(pos2(row.left() + 46.0, row.center().y));
         h.event(Event::ModifiersChanged(modifiers));
         h.run_steps(2);
-        let icon = h.output().platform_output.cursor_icon;
+        let shown = crate::tool_cursor::shown_icon(&h.ctx);
         h.event(Event::ModifiersChanged(Modifiers::NONE));
         h.run_steps(1);
-        icon
+        shown
     };
     for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::ALT] {
-        assert_eq!(cursor(&mut h, shape, m), CursorIcon::PointingHand, "{m:?}");
+        assert_eq!(cursor(&mut h, shape, m), Some("pointer"), "{m:?}");
     }
-    assert_ne!(cursor(&mut h, shape, Modifiers::NONE), CursorIcon::PointingHand, "a plain click selects the layer");
-    assert_ne!(cursor(&mut h, background, Modifiers::COMMAND), CursorIcon::PointingHand, "the Background has nothing to load");
+    assert_ne!(cursor(&mut h, shape, Modifiers::NONE), Some("pointer"), "a plain click selects the layer");
+    assert_ne!(cursor(&mut h, background, Modifiers::COMMAND), Some("pointer"), "the Background has nothing to load");
+    // Photoshop's signs (user report): the hand and marquee, then + / − / × for the mode.
+    let names = |m: Modifiers| crate::panels::thumb_load_parts(m).iter().map(|p| p.name).collect::<Vec<_>>();
+    assert_eq!(names(Modifiers::COMMAND), ["pointer", "square-dashed"]);
+    assert_eq!(names(Modifiers::COMMAND | Modifiers::SHIFT), ["pointer", "square-dashed", "plus"]);
+    assert_eq!(names(Modifiers::COMMAND | Modifiers::ALT), ["pointer", "square-dashed", "minus"]);
+    assert_eq!(names(Modifiers::COMMAND | Modifiers::SHIFT | Modifiers::ALT), ["pointer", "square-dashed", "x"]);
+    for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT | Modifiers::ALT] {
+        assert!(crate::tool_cursor::icon::image(&crate::panels::thumb_load_parts(m), 1.0).is_some(), "it draws as a cursor bitmap");
+    }
 }

@@ -689,6 +689,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
         crate::panels::offer_color_field_fill(ui, pro, *group, tab);
         egui::ScrollArea::vertical()
             .id_salt(("shared-panel-body", id))
+            .scroll_bar_visibility(crate::panels::body_scroll_bar(app, pro, *group, tab))
             .auto_shrink([false, false])
             .show(ui, |ui| crate::panels::dock_body(app, ui, *group, tab));
     }

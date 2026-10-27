@@ -231,7 +231,41 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, name: &str, shortcut: &st
 /// Replay edits synchronously, with view steps handled by the shell in the same order.
 /// Engine steps keep the headless action semantics (no dialogs or background jobs).
 pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
-    play_owned(app, params, None)
+    // Play once for each selected layer (Action Options): one pass per layer, each with that
+    // layer alone selected, then the layers are selected again. A pass that stops for a step's
+    // dialog ends the run there, with that layer selected.
+    let action = actions_cmds::playback_plan(&app.session, params).ok().map(|(a, _)| a);
+    let layers = match action.as_ref().map(|a| actions_cmds::each_layer_targets(&app.session, a, params)).transpose() {
+        Ok(layers) => layers.flatten(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let Some(layers) = layers else { return play_owned(app, params, None) };
+    let before = actions_cmds::LayerSelection::of(&app.session);
+    let mut ran = 0u64;
+    let mut out = json!({"action": action.map(|a| a.name)});
+    for id in &layers {
+        if app.session.select_layer(*id).is_err() {
+            continue;
+        }
+        out = play_owned(app, params, None)?;
+        ran += out.get("ran").and_then(Value::as_u64).unwrap_or(0);
+        if out.get("failed").is_some() || out.get("paused").is_some() {
+            out["layer"] = json!(id.0);
+            out["ran"] = json!(ran);
+            if out.get("failed").is_some()
+                && let Some(b) = before
+            {
+                b.restore(&mut app.session);
+            }
+            return Ok(out);
+        }
+    }
+    if let Some(b) = before {
+        b.restore(&mut app.session);
+    }
+    out["ran"] = json!(ran);
+    out["layers"] = json!(layers.len());
+    Ok(out)
 }
 
 /// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes

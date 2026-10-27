@@ -4868,6 +4868,9 @@ shape	Appearance	Izgled
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Uzorak: snimljene boje
+	Sample: the colours used last	Uzorak: poslednje korišćene boje
+	Play once for each selected layer	Pusti jednom za svaki izabrani sloj
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Kada je izabrano više slojeva, Pusti izvršava radnju na svakom od njih redom, sa izabranim samo tim slojem
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI uklanjanje
 	Remove what is selected with Nano Banana ({key})	Ukloni izabrano pomoću Nano Banana ({key})

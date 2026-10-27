@@ -1,6 +1,6 @@
 //! Chrome around the canvas: title bar, options bar, toolbar, status bar, dock cards, Properties.
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerContent, LayerId};
 use photocraft_engine::history_source_cmds::HistorySource;
@@ -3471,14 +3471,29 @@ pub(crate) fn thumb_load_badge(m: egui::Modifiers) -> Option<crate::tool_feedbac
     crate::tool_feedback::Badge::from_mode(crate::channels_panel::load_operation(m))
 }
 
-/// The cursor over a thumbnail ⌘-click loads as a selection: a pointing hand, with the selection
-/// mode's badge (#7824).
+/// The cursor over a thumbnail ⌘-click loads as a selection, as Photoshop's (#7824; user report):
+/// a pointing hand with a marquee square, and the selection mode's sign beside it (+ add, − subtract,
+/// × intersect). One OS cursor bitmap, so it moves with the pointer.
 fn thumb_load_cursor(ctx: &egui::Context, p: Pos2, m: egui::Modifiers) {
-    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-    if let Some(badge) = thumb_load_badge(m) {
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("thumb-load-badge")));
-        crate::tool_feedback::draw_badge(&painter, p, badge, false);
+    ctx.set_cursor_icon(crate::tool_cursor::icon_parts(ctx, &thumb_load_parts(m), p));
+}
+
+/// The parts of [`thumb_load_cursor`] for modifiers `m`.
+pub(crate) fn thumb_load_parts(m: egui::Modifiers) -> Vec<crate::tool_cursor::icon::Part> {
+    use crate::tool_cursor::icon::Part;
+    use crate::tool_feedback::Badge;
+    // The tip of the pointing finger is at (8, 2) of the icon's 24-unit box.
+    let mut parts = vec![Part::at_hotspot("pointer", vec2(8.0, 2.0) / 24.0, 20.0), Part { at: vec2(9.0, 12.0), ..Part::at_hotspot("square-dashed", Vec2::ZERO, 11.0) }];
+    let sign = match thumb_load_badge(m) {
+        Some(Badge::Add) => Some("plus"),
+        Some(Badge::Subtract) => Some("minus"),
+        Some(Badge::Intersect) => Some("x"),
+        _ => None,
+    };
+    if let Some(name) = sign {
+        parts.push(Part { at: vec2(19.0, 12.0), ..Part::at_hotspot(name, Vec2::ZERO, 9.0) });
     }
+    parts
 }
 
 /// `layer.select` mode for a click with these modifiers (Photoshop: ⌘-click toggles, ⇧-click
@@ -4720,6 +4735,23 @@ pub(crate) fn offer_color_field_fill(ui: &egui::Ui, pro: bool, group: crate::doc
     }
 }
 
+/// The Color tab shows the Hue or Brightness Cube, sized to its group: its scroll area hides the
+/// scroll bar, which would only flash up over the hue strip while the group resizes (user report).
+pub(crate) fn color_field_fills(app: &PhotocraftApp, pro: bool, group: crate::dock::Group, tab: usize) -> bool {
+    group == crate::dock::Group::Color
+        && group.tabs(pro).get(tab) == Some(&"Color")
+        && matches!(app.ui.color_panel.mode, crate::state::ColorPanelMode::HueCube | crate::state::ColorPanelMode::BrightnessCube)
+}
+
+/// The scroll bar of a dock body's scroll area: hidden for a [`color_field_fills`] tab.
+pub(crate) fn body_scroll_bar(app: &PhotocraftApp, pro: bool, group: crate::dock::Group, tab: usize) -> egui::scroll_area::ScrollBarVisibility {
+    if color_field_fills(app, pro, group, tab) {
+        egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+    } else {
+        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+    }
+}
+
 /// Height of the Color field: the group body's height (when docked or floating), so dragging the
 /// group taller or shorter resizes the field, as in Photoshop; with a `readout` (the themes other
 /// than Photoshop's), less the hex/RGB readout, which folds onto a second line in a narrow dock.
@@ -4820,8 +4852,10 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
         let y = strip.top() + (1.0 - if brightness { hsva.v } else { hsva.h }) * strip.height();
-        let tri = vec![pos2(strip.right() + 1.0, y), pos2(strip.right() + 6.0, y - 4.0), pos2(strip.right() + 6.0, y + 4.0)];
-        ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
+        // Photoshop's arrows on both sides of the strip, pointing at it.
+        for tri in strip_arrows(strip, y) {
+            ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), t.text, Stroke::NONE));
+        }
         if field_pick.is_some() || strip_pick.is_some() {
             if bg_active {
                 app.session.tools.background = hsva_srgb(hsva);
@@ -4856,6 +4890,14 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     crate::apply_color::track_focus(ui.ctx());
+}
+
+/// The Color field strip's two arrows at height `y`: one on each side, pointing in at the strip.
+pub(crate) fn strip_arrows(strip: Rect, y: f32) -> [[Pos2; 3]; 2] {
+    [
+        [pos2(strip.left() - 1.0, y), pos2(strip.left() - 6.0, y - 4.0), pos2(strip.left() - 6.0, y + 4.0)],
+        [pos2(strip.right() + 1.0, y), pos2(strip.right() + 6.0, y - 4.0), pos2(strip.right() + 6.0, y + 4.0)],
+    ]
 }
 
 /// A smooth-shaded `n` x `n` grid over `rect`, coloured by `color(x, y)` with x and y in 0..1

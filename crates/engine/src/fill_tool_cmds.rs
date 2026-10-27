@@ -528,6 +528,14 @@ fn region_blocked(s: &Session, p: &Value) -> Result<(Option<Region>, bool)> {
     let enclosing = lasso.is_some() || stroke.is_some();
     let (area, img) = reference_image(s, r, exclusions(p)?, p, enclosing && target == Target::Transparent)?;
     let block = layer_block(s, p, r)?;
+    // A click on the layer's own paint recolours it (user report: purple clicked with orange
+    // turned orange only at its soft edges): the paint doesn't block that fill
+    // (`click_region_blocked`), so it goes over the paint, not behind it.
+    let on_paint = !enclosing
+        && seed.is_some_and(|(x, y)| {
+            area.contains(x, y)
+                && block.as_ref().and_then(|b| b.get((y - area.y0) as usize * area.width() as usize + (x - area.x0) as usize)).is_some_and(|a| *a >= fill::BLOCK_ALPHA)
+        });
     let region = if let Some(pts) = lasso {
         fill::enclosed_region_blocked(&img, area, &fill::lasso_mask(&pts, area), target, &o, block.as_deref())
     } else if let Some(pts) = stroke {
@@ -549,7 +557,7 @@ fn region_blocked(s: &Session, p: &Value) -> Result<(Option<Region>, bool)> {
             st.filled.push(r.clone());
         }
     }
-    Ok((region, block.is_some()))
+    Ok((region, block.is_some() && !on_paint))
 }
 
 fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {

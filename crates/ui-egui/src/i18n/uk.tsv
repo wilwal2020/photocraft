@@ -4523,6 +4523,9 @@ curves	Smooth	Згладити
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Зразок: записані кольори
+	Sample: the colours used last	Зразок: останні використані кольори
+	Play once for each selected layer	Виконувати по разу для кожного вибраного шару
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Якщо вибрано кілька шарів, «Виконати» застосовує операцію до кожного по черзі, вибираючи лише цей шар
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Видалення ШІ
 	Remove what is selected with Nano Banana ({key})	Видалити виділене за допомогою Nano Banana ({key})

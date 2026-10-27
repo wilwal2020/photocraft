@@ -4509,6 +4509,9 @@ curves	Smooth	Εξομάλυνση
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Δείγμα: καταγεγραμμένα χρώματα
+	Sample: the colours used last	Δείγμα: τα χρώματα που χρησιμοποιήθηκαν τελευταία
+	Play once for each selected layer	Αναπαραγωγή μία φορά για κάθε επιλεγμένο επίπεδο
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Με πολλά επιλεγμένα επίπεδα, η Αναπαραγωγή εκτελεί την ενέργεια σε καθένα με τη σειρά, με επιλεγμένο μόνο εκείνο το επίπεδο
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Αφαίρεση με AI
 	Remove what is selected with Nano Banana ({key})	Αφαίρεση της επιλογής με το Nano Banana ({key})

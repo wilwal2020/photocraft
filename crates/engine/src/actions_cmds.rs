@@ -22,6 +22,7 @@
 
 use std::collections::BTreeSet;
 
+use photocraft_doc::LayerId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -54,6 +55,10 @@ pub struct Action {
     /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// Action Options › Play once for each selected layer (user request): with several layers
+    /// selected, Play runs the action once per layer, each time with that layer alone selected.
+    #[serde(default, rename = "eachLayer", skip_serializing_if = "std::ops::Not::not")]
+    pub each_layer: bool,
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
@@ -61,7 +66,7 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new(), each_layer: false }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -436,7 +441,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, "actions.get")?;
     let action = &s.actions.list[idx];
     let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
-    Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color}))
+    Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color, "eachLayer": action.each_layer}))
 }
 
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
@@ -629,7 +634,72 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
     })
 }
 
+/// The layers a Play runs `action` on one after another: with Play once for each selected layer
+/// (the action's option, or `"eachLayer"` in `p`) and several layers selected, those layers
+/// (bottom to top), else `None` (one run, on the selection as it is). Only an action played on its
+/// own: one called from another plays on the layer its caller is on.
+pub fn each_layer_targets(s: &Session, action: &Action, p: &Value) -> Result<Option<Vec<LayerId>>> {
+    let on = match p.get("eachLayer") {
+        None | Some(Value::Null) => action.each_layer,
+        Some(v) => v.as_bool().ok_or_else(|| bad("actions.play", "\"eachLayer\" must be true or false"))?,
+    };
+    if !on || s.actions.playing > 0 {
+        return Ok(None);
+    }
+    let selected = s.active().map(|d| d.selected_layers()).unwrap_or_default();
+    Ok((selected.len() > 1).then_some(selected))
+}
+
+/// The layer selection before an each-layer Play ([`each_layer_targets`]), put back when it ends.
+pub struct LayerSelection {
+    active: Option<LayerId>,
+    selected: Vec<LayerId>,
+    anchor: Option<LayerId>,
+}
+
+impl LayerSelection {
+    pub fn of(s: &Session) -> Option<Self> {
+        s.active().map(|d| Self { active: d.active_layer, selected: d.selected_layers.clone(), anchor: d.layer_anchor })
+    }
+
+    /// Put it back, without the layers a pass deleted (the first one left takes over as active).
+    pub fn restore(self, s: &mut Session) {
+        let Some(d) = s.active() else { return };
+        let selected: Vec<LayerId> = self.selected.into_iter().filter(|id| d.doc.layer(*id).is_some()).collect();
+        let active = self.active.filter(|id| d.doc.layer(*id).is_some()).or_else(|| selected.first().copied());
+        if active.is_some() {
+            let _ = s.restore_layer_selection(active, &selected, self.anchor);
+        }
+    }
+}
+
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
+    let (action, _) = playback_plan(s, p)?;
+    let Some(layers) = each_layer_targets(s, &action, p)? else { return play_once(s, p) };
+    let before = LayerSelection::of(s);
+    let mut ran = 0u64;
+    let mut out = json!({"action": action.name});
+    for id in &layers {
+        // A pass may delete or merge the layers after it: those are skipped.
+        if s.select_layer(*id).is_err() {
+            continue;
+        }
+        out = play_once(s, p)?;
+        ran += out.get("ran").and_then(Value::as_u64).unwrap_or(0);
+        if out.get("failed").is_some() {
+            out["layer"] = json!(id.0);
+            break;
+        }
+    }
+    if let Some(b) = before {
+        b.restore(s);
+    }
+    out["ran"] = json!(ran);
+    out["layers"] = json!(layers.len());
+    Ok(out)
+}
+
+fn play_once(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let limit = step_limit(p)?;
     let recording = begin_playback(s, &action)?;
@@ -873,6 +943,20 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"action": name, "color": color}))
 }
 
+fn set_each_layer(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.setEachLayer";
+    not_playing(s, cmd)?;
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    let on = p.get("on").and_then(Value::as_bool).ok_or_else(|| bad(cmd, "needs \"on\": true or false"))?;
+    let Some(action) = s.actions.list.get_mut(idx) else {
+        return Err(bad(cmd, "no such action"));
+    };
+    action.each_layer = on;
+    let name = action.name.clone();
+    s.actions.touch();
+    Ok(json!({"action": name, "eachLayer": on}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -930,7 +1014,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?, "steps":count?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps plays only that many (Photoshop's Ctrl+Play plays the selected step alone); steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index, "from":step?, "steps":count?, "eachLayer":bool? (default: the action's option, actions.setEachLayer)} → {action, ran, failed?:{step, id, error}, layers?:count, layer?:id (where it failed)}. eachLayer with several layers selected plays once per layer, each alone selected, then selects them all again. step and from are 0-based; steps plays only that many (Photoshop's Ctrl+Play plays the selected step alone); steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
             enabled: always,
             run: play,
             journal: false,
@@ -973,6 +1057,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"action":name|index, "color":""|"red"|"orange"|"yellow"|"green"|"blue"|"violet"|"gray"} → {action, color}. The Button Mode colour. Empty clears it."##,
             enabled: always,
             run: set_color,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.setEachLayer",
+            label: "Play Action Once for Each Selected Layer",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index, "on":bool} → {action, eachLayer}. Action Options › Play once for each selected layer: with several layers selected, actions.play runs the action once per layer (bottom to top), each time with that layer alone selected, then selects them all again."##,
+            enabled: always,
+            run: set_each_layer,
             journal: false,
         },
     ]

@@ -5010,6 +5010,9 @@ shape	Appearance	Оформление
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Выборка: записанные цвета
+	Sample: the colours used last	Выборка: последние использованные цвета
+	Play once for each selected layer	Выполнять по разу для каждого выбранного слоя
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Если выбрано несколько слоёв, «Выполнить» применяет операцию к каждому по очереди, выбирая только этот слой
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Удаление ИИ
 	Remove what is selected with Nano Banana ({key})	Удалить выделенное с помощью Nano Banana ({key})

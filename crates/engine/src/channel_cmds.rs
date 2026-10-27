@@ -1114,6 +1114,15 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     let p = &targeted;
+    if mode == SelectionMode::Replace
+        && let Some(selection) = transparency_selection(s, p, cmd)?
+    {
+        let selected = s.edit("Load Transparency", |doc, _| {
+            doc.selection = (selection.tile_count() > 0).then_some(selection);
+            Ok(doc.selection.is_some())
+        })?;
+        return Ok(json!({ "selected": selected }));
+    }
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -1127,6 +1136,22 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
+}
+
+/// A layer's transparency as a new selection, straight from its tiles (`sel::alpha_selection`):
+/// ⌘-clicking a layer thumbnail on a large page read the whole canvas into planes first. `None`
+/// for anything else `p` loads (another channel or document, inverted), which goes through
+/// [`source`].
+fn transparency_selection(s: &Session, p: &Value, cmd: &str) -> Result<Option<photocraft_raster::Surface>> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if p.get("document").is_some_and(|d| !d.is_null()) || p.get("invert").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(None);
+    }
+    if p.get("channel").and_then(|v| parse_ref(v, &st.doc)) != Some(ChanRef::Transparency) {
+        return Ok(None);
+    }
+    let Some(id) = source_layer(&st.doc, p, cmd)?.or(st.active_layer) else { return Ok(None) };
+    Ok(st.doc.layer(id).and_then(|l| l.surface()).and_then(|surf| sel::alpha_selection(surf, st.doc.bounds())))
 }
 
 // ---------------------------------------------------------------------------------------------

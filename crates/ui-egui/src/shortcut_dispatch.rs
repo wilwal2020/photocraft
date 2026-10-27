@@ -290,8 +290,8 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
 /// type or shape layer the key did nothing. A selection, a single channel or Quick Mask keeps Clear.
 /// With the active layer's mask targeted the key edits the mask, never the layer's pixels: a
 /// selection is filled with the background colour in the mask (Photoshop's Delete on a mask), and
-/// with no selection the mask itself is deleted, as Layer › Layer Mask › Delete, unless several
-/// layers are selected: then they are deleted.
+/// with no selection the mask itself is deleted (the second mask when that is targeted), as Layer ›
+/// Layer Mask › Delete, unless several layers are selected: then they are deleted.
 pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     if id != "edit.clear" {
         return id;
@@ -308,7 +308,9 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     // layer targets its mask, so the first press used to delete only that mask.
     let several = st.selected_layers().len() > 1;
     if mask && (composite || layer_mask) && !(several && composite && st.doc.selection.is_none()) {
-        let cmd = if st.doc.selection.is_some() { "edit.fillBackground" } else { "layer.layerMask.delete" };
+        // The second mask targeted is the one deleted (user report: Delete took the first).
+        let delete = if app.mask_target_name() == "secondMask" { photocraft_engine::second_mask_cmds::DELETE } else { "layer.layerMask.delete" };
+        let cmd = if st.doc.selection.is_some() { "edit.fillBackground" } else { delete };
         return cmd.into();
     }
     if st.doc.selection.is_some() || !composite {

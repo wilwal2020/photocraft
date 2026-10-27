@@ -381,3 +381,42 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
     assert!(h.state().ui.brush_picker_list.renaming.is_none());
     assert!(document_state(&h) == before, "pixels, selection, layers and history are unchanged");
 }
+
+/// User report: the canvas menu sometimes didn't open. A right press that drifts (a pen's jitter)
+/// or is held past egui's click time still opens the tool's menu, the brush picker, or the layers
+/// under the pointer, where it was pressed; an Alt+right-drag still resizes the brush instead.
+#[test]
+fn a_slow_or_drifting_right_click_still_opens_the_menu() {
+    for (tool, popup, mods) in [(Tool::RectMarquee, Popup::Tool, Modifiers::NONE), (Tool::Brush, Popup::Brush, Modifiers::NONE), (Tool::Move, Popup::Layers, Modifiers::NONE)] {
+        for (drift, hold) in [(vec2(14.0, 9.0), 2), (vec2(0.0, 0.0), 90)] {
+            let mut h = harness(tool, false, 1.0);
+            let at = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect).center();
+            h.event(Event::PointerMoved(at));
+            h.run_steps(2);
+            press(&mut h, at, PointerButton::Secondary, true, mods);
+            h.run_steps(1);
+            h.event(Event::PointerMoved(at + drift));
+            h.run_steps(hold);
+            press(&mut h, at + drift, PointerButton::Secondary, false, mods);
+            h.run_steps(3);
+            assert!(is_open(&h, popup), "{tool:?}, drift {drift:?}, held {hold} frames");
+        }
+    }
+    // Alt+right-drag with the Brush resizes it and opens nothing.
+    let mut h = harness(Tool::Brush, false, 1.0);
+    let at = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect).center();
+    let size = h.state().session.tools.brush.size;
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    h.event(Event::PointerMoved(at));
+    h.run_steps(2);
+    press(&mut h, at, PointerButton::Secondary, true, Modifiers::ALT);
+    h.run_steps(1);
+    for k in 1..6 {
+        h.event(Event::PointerMoved(at + vec2(10.0 * k as f32, 0.0)));
+        h.run_steps(1);
+    }
+    press(&mut h, at + vec2(50.0, 0.0), PointerButton::Secondary, false, Modifiers::ALT);
+    h.run_steps(3);
+    assert!(!is_open(&h, Popup::Brush), "a resize, not a click");
+    assert_ne!(h.state().session.tools.brush.size, size, "the brush was resized");
+}

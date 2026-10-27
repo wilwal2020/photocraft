@@ -3480,6 +3480,9 @@ curves	Smooth	平滑
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	采样：已记录的颜色
+	Sample: the colours used last	采样：上次使用的颜色
+	Play once for each selected layer	为每个选中的图层播放一次
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	选中多个图层时，播放会依次对每个图层运行该动作，每次只选中该图层
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI 移除
 	Remove what is selected with Nano Banana ({key})	用 Nano Banana 移除所选内容 ({key})

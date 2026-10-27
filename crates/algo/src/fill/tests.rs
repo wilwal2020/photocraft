@@ -671,3 +671,69 @@ fn ignore_thin_lines_keeps_real_areas_a_thin_line_parts() {
         assert!(!filled(&left, 70, 30) && !filled(&left, 110, 5), "gap {gap}: the thin line still parts the two areas");
     }
 }
+
+/// Where a click's time goes on a real page (ignored; the page as in
+/// [`a_real_page_fills_less_as_close_gap_rises`]): each stage of [`click_region_blocked`] timed.
+#[test]
+#[ignore]
+fn a_real_page_click_stage_timings() {
+    use std::time::Instant;
+    let Ok(path) = std::env::var("PHOTOCRAFT_FILL_PAGE") else { return };
+    let w: usize = std::env::var("PHOTOCRAFT_FILL_PAGE_W").unwrap().parse().unwrap();
+    let px: Vec<[u8; 4]> = std::fs::read(&path).unwrap().as_chunks::<4>().0.to_vec();
+    let h = px.len() / w;
+    let area = Rect::new(0, 0, w as i32, h as i32);
+    let seeds: Vec<usize> = std::fs::read_to_string(path.replace(".rgba", ".seeds"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once(' ').map(|(x, y)| y.parse::<usize>().unwrap() * w + x.parse::<usize>().unwrap()))
+        .collect();
+    let o = FillOptions { close_gap: 4.0, scale: 1.0, ..FillOptions::default() };
+    let mut total = [0f64; 8];
+    for &si in &seeds {
+        let mut ms = [0f64; 8];
+        let mut t = Instant::now();
+        let mut lap = |k: usize, t: &mut Instant| {
+            ms[k] += t.elapsed().as_secs_f64() * 1000.0;
+            *t = Instant::now();
+        };
+        let margin = margin(o.tolerance);
+        let target = premul(px[si]);
+        let strength = strengths(&px, |p| difference(p, target));
+        let free: Vec<bool> = crate::par::map(strength.len(), true, |i| strength[i] <= margin);
+        lap(0, &mut t);
+        let mut spot = vec![false; free.len()];
+        let (x0, y0, x1, y1) = flood(&free, &mut spot, w, h, si, true).unwrap();
+        lap(1, &mut t);
+        let pad = 2 + 1 + 4;
+        let (cx0, cy0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
+        let (cx1, cy1) = ((x1 + pad + 1).min(w), (y1 + pad + 1).min(h));
+        let (cw, ch) = (cx1 - cx0, cy1 - cy0);
+        let crop = |v: &[bool]| -> Vec<bool> { (cy0..cy1).flat_map(|y| v[y * w + cx0..y * w + cx1].iter().copied()).collect() };
+        let cs: Vec<u8> = (cy0..cy1).flat_map(|y| strength[y * w + cx0..y * w + cx1].iter().copied()).collect();
+        let (spot, free) = (crop(&spot), crop(&free));
+        let csi = (si / w - cy0) * cw + si % w - cx0;
+        lap(2, &mut t);
+        let (labels, seed_label) = areas(&spot, cw, ch, 4.0, [false; 4], Some(csi), None);
+        lap(3, &mut t);
+        let l = seed_label.unwrap();
+        let mut fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
+        cover_seams(&mut fill, &labels, &spot, cw, ch);
+        lap(4, &mut t);
+        scale(&mut fill, &cs, &free, cw, ch, &o);
+        lap(5, &mut t);
+        let carea = Rect::new(cx0 as i32, cy0 as i32, cx1 as i32, cy1 as i32);
+        let r = to_region(&fill, cw, ch, carea, true);
+        lap(6, &mut t);
+        let whole = Instant::now();
+        let r2 = click_region(&px, area, ((si % w) as i32, (si / w) as i32), &o);
+        ms[7] = whole.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(r.map(|r| r.bbox), r2.map(|r| r.bbox));
+        eprintln!("{cw:5}x{ch:<5} strength {:4.0} flood {:4.0} crop {:4.0} areas {:5.0} seams {:4.0} scale {:4.0} region {:4.0} | whole {:5.0} ms", ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6], ms[7]);
+        for k in 0..8 {
+            total[k] += ms[k];
+        }
+    }
+    let n = seeds.len() as f64;
+    eprintln!("mean: strength {:.0} flood {:.0} crop {:.0} areas {:.0} seams {:.0} scale {:.0} region {:.0} | whole {:.0} ms", total[0] / n, total[1] / n, total[2] / n, total[3] / n, total[4] / n, total[5] / n, total[6] / n, total[7] / n);
+}

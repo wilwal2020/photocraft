@@ -71,7 +71,7 @@ pub fn action_options(app: &mut PhotocraftApp, index: usize) -> Option<u64> {
     let a = app.session.actions.list.get(index)?;
     let key = app.session.prefs().shortcuts.get(&crate::actions::shortcut_id(&a.name)).cloned().unwrap_or_default();
     let (n, shift, ctrl) = actions_cmds::parse_action_key(&key).unwrap_or((0, false, false));
-    let fields = json!({"action": a.name, "name": a.name, "key": n, "shift": shift, "ctrl": ctrl, "color": a.color, "otherKey": !key.is_empty() && n == 0});
+    let fields = json!({"action": a.name, "name": a.name, "key": n, "shift": shift, "ctrl": ctrl, "color": a.color, "otherKey": !key.is_empty() && n == 0, "eachLayer": a.each_layer});
     Some(open(app, "actionOptions", "Action Options", fields))
 }
 
@@ -259,6 +259,11 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
         "actionOptions" => {
             name_row(ui, fields);
             key_rows(ui, fields);
+            let mut each = flag(fields, "eachLayer");
+            widgets::checkbox(ui, &mut each, tl!("Play once for each selected layer")).on_hover_text(tl!(
+                "With several layers selected, Play runs the action on each of them in turn, with only that layer selected"
+            ));
+            fields.insert("eachLayer".into(), json!(each));
         }
         "playback" => {
             let mut mode = text(fields, "mode");
@@ -440,6 +445,7 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
             if !key.is_empty() || !flag(fields, "otherKey") {
                 crate::actions::assign_shortcut(app, &name, &key)?;
             }
+            app.run("actions.setEachLayer", json!({"action": name, "on": flag(fields, "eachLayer")}))?;
             app.run("actions.setColor", json!({"action": name, "color": text(fields, "color")}))
         }
         "playback" => {

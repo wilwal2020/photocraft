@@ -1250,6 +1250,10 @@ pub struct TransformSession {
     /// skew and rotation with any vertical skew, so the bar keeps showing the typed one.
     #[serde(default)]
     pub skew_v: f64,
+    /// Free Transform with several layers selected: all of them (`layer` is the active one), which
+    /// the box moves together, as in Photoshop. Empty for one layer.
+    #[serde(default)]
+    pub layers: Vec<u64>,
 }
 
 /// Content-Aware Scale's options bar: Amount, Protect and Protect Skin Tones.

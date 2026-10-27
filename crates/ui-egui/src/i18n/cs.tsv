@@ -4555,6 +4555,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Vzorek: zaznamenané barvy
+	Sample: the colours used last	Vzorek: naposledy použité barvy
+	Play once for each selected layer	Přehrát jednou pro každou vybranou vrstvu
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Je-li vybráno více vrstev, Přehrát spustí akci postupně na každé z nich, vždy jen s touto vrstvou vybranou
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI odstranění
 	Remove what is selected with Nano Banana ({key})	Odstranit vybrané pomocí Nano Banana ({key})

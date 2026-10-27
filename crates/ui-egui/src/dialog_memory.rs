@@ -1,6 +1,8 @@
 //! Small dialog choices remembered across restarts (`Preferences::dialog_choices`): Select ›
 //! Color Range's Selection Preview and Edit › Generative Fill's model (user report: neither came
-//! back after a restart). A hand-edited file can't break them: an unknown value keeps the default.
+//! back after a restart), and the settings and colours Color Range last selected with (user
+//! report: it should remember them, as Photoshop's does). A hand-edited file can't break them: an
+//! unknown value keeps the default.
 
 use serde_json::{Map, Value, json};
 
@@ -8,6 +10,12 @@ use crate::PhotocraftApp;
 
 const PREVIEW: &str = "colorRangePreview";
 const MODEL: &str = "generativeFillModel";
+const COLOR_RANGE: &str = "colorRange";
+
+/// Color Range's numeric settings that come back at the next opening.
+const COLOR_RANGE_NUMBERS: &[&str] = &["fuzziness", "range", "toneFuzziness", "shadowsLevel", "highlightsLevel", "midtonesLow", "midtonesHigh"];
+/// Its on/off settings.
+const COLOR_RANGE_FLAGS: &[&str] = &["localized", "invert"];
 
 /// The models Generative Fill's dialog offers here (Nano Banana is online only).
 pub fn generative_models() -> &'static [&'static str] {
@@ -32,6 +40,63 @@ fn set(app: &mut PhotocraftApp, key: &str, v: Value) {
     let mut m = app.session.prefs().dialog_choices.as_object().cloned().unwrap_or_else(Map::new);
     m.insert(key.into(), v);
     app.session.prefs.edit(|p| p.dialog_choices = Value::Object(m));
+}
+
+/// After Color Range's OK: remember its settings (`fields`, the dialog's) and the colours it
+/// sampled, as the CIE Lab box an action records (`labRange`): eyedropper points are positions
+/// in this document, which mean nothing in the next one. Localized clusters need positions, so
+/// they fall back to the foreground colour next time.
+pub fn used_color_range(app: &mut PhotocraftApp, fields: &Map<String, Value>, params: &Value) {
+    let mut keep = sanitized_color_range(fields);
+    keep.remove("labRange");
+    let sampled = params.get("select").and_then(Value::as_str) == Some("sampledColors");
+    let localized = params.get("localized").and_then(Value::as_bool) == Some(true);
+    if sampled && !localized {
+        let recorded = photocraft_engine::selection_cmds::recorded_color_range(&app.session, params.clone());
+        if let Some(range) = recorded.get("labRange").filter(|r| lab_range(r)) {
+            keep.insert("labRange".into(), range.clone());
+        }
+    }
+    let keep = Value::Object(keep);
+    if app.session.prefs().dialog_choices.get(COLOR_RANGE) != Some(&keep) {
+        set(app, COLOR_RANGE, keep);
+    }
+}
+
+/// The Color Range settings remembered by [`used_color_range`], checked: only known keys with
+/// values of the right kind come back.
+pub fn color_range(app: &PhotocraftApp) -> Map<String, Value> {
+    app.session.prefs().dialog_choices.get(COLOR_RANGE).and_then(Value::as_object).map(sanitized_color_range).unwrap_or_default()
+}
+
+fn sanitized_color_range(f: &Map<String, Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    if let Some(select) = f.get("select").and_then(Value::as_str).filter(|s| crate::color_range_ui::SELECTS.iter().any(|(id, _)| id == s)) {
+        out.insert("select".into(), json!(select));
+    }
+    for key in COLOR_RANGE_NUMBERS {
+        if let Some(v) = f.get(*key).and_then(Value::as_f64).filter(|v| v.is_finite() && (-1000.0..=1000.0).contains(v)) {
+            out.insert((*key).into(), json!(v));
+        }
+    }
+    for key in COLOR_RANGE_FLAGS {
+        if let Some(v) = f.get(*key).and_then(Value::as_bool) {
+            out.insert((*key).into(), json!(v));
+        }
+    }
+    if let Some(view) = f.get("__view").and_then(Value::as_str).filter(|v| matches!(*v, "selection" | "image")) {
+        out.insert("__view".into(), json!(view));
+    }
+    if let Some(range) = f.get("labRange").filter(|r| lab_range(r)) {
+        out.insert("labRange".into(), range.clone());
+    }
+    out
+}
+
+/// `{"min": [L, a, b], "max": [L, a, b]}` of finite numbers.
+fn lab_range(v: &Value) -> bool {
+    let corner = |k: &str| v.get(k).and_then(Value::as_array).is_some_and(|a| a.len() == 3 && a.iter().all(|x| x.as_f64().is_some_and(f64::is_finite)));
+    corner("min") && corner("max")
 }
 
 /// Remember Color Range's Selection Preview when it changes. Cheap: one string compare a frame.

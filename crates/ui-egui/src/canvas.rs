@@ -4393,13 +4393,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
         // Skew, Distort, Perspective, Warp), or rotate or flip the box.
         let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
-        if response.secondary_clicked()
-            && transforming
-            && let Some(p) = response.interact_pointer_pos()
-        {
+        if transforming && let Some(p) = buttons.right_click {
             crate::canvas_tool_menu::open_transform(app, &ctx, [p.x, p.y]);
         }
-        let lasso_retracted = response.secondary_clicked()
+        let lasso_retracted = buttons.right_click.is_some()
             && match tool {
                 Tool::Lasso | Tool::FreeformPen => crate::lasso_ui::undo_last_vertex(app),
                 Tool::PolygonLasso => polygon_retract(app),
@@ -4414,17 +4411,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // Right-click on a guide where it could be dragged (the Move tool, or ⌘ with a selection
         // tool): select it and open the guide menu, as Photoshop does.
-        let guide_menu = response.secondary_clicked()
-            && !lasso_retracted
+        let guide_menu = !lasso_retracted
             && !transforming
-            && response.interact_pointer_pos().is_some_and(|p| crate::canvas_tool_menu::open_guide(app, &ctx, tool, mods, [p.x, p.y], xf.to_doc(p)));
+            && buttons.right_click.is_some_and(|p| crate::canvas_tool_menu::open_guide(app, &ctx, tool, mods, [p.x, p.y], xf.to_doc(p)));
         // Right-click with the Move tool, or ⌘/Ctrl+right-click: the layers under the pointer.
-        if response.secondary_clicked()
-            && !lasso_retracted
+        if !lasso_retracted
             && !transforming
             && !guide_menu
             && crate::layer_pick_ui::is_gesture(tool, mods)
-            && let Some(p) = response.interact_pointer_pos()
+            && let Some(p) = buttons.right_click
         {
             let d = xf.to_doc(p);
             app.ui.canvas_tool_menu = None;
@@ -4433,12 +4428,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 crate::canvas_tool_menu::open_pasteboard(app, &ctx, tool, [p.x, p.y]);
             }
         }
-        if response.secondary_clicked()
-            && !lasso_retracted
+        if !lasso_retracted
             && !transforming
             && !guide_menu
             && !crate::layer_pick_ui::is_gesture(tool, mods)
-            && let Some(p) = response.interact_pointer_pos()
+            && let Some(p) = buttons.right_click
         {
             // Outside the image: the pasteboard colour menu (#2462), else the tool's own. The view
             // menu belongs to the selected Zoom or Hand, not to Space or a held zoom key.

@@ -204,6 +204,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         return begin_lone(app, ctx, doc, surf, target);
     }
     let id = st.active_layer.ok_or("no active layer")?;
+    let several = several_layers(st);
+    if several.len() > 1 {
+        return begin_several(app, ctx, doc, id, several);
+    }
     let layer = doc.layer(id).ok_or("no layer")?;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
@@ -279,6 +283,115 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        layers: Vec::new(),
+    });
+    start_steps(app);
+    Ok(())
+}
+
+/// The selected layers a Free Transform moves together, bottom to top: those with something to
+/// move (an adjustment layer needs a mask), without any inside a selected group, which moves them.
+fn several_layers(st: &photocraft_engine::DocState) -> Vec<LayerId> {
+    let selected = st.selected_layers();
+    if selected.len() < 2 {
+        return selected;
+    }
+    let doc = &st.doc;
+    let inside = |id: LayerId| selected.iter().any(|g| *g != id && doc.layer(*g).is_some_and(|l| l.is_group() && contains(l, id)));
+    selected
+        .iter()
+        .copied()
+        .filter(|id| !inside(*id))
+        .filter(|id| doc.layer(*id).is_some_and(|l| !matches!(l.content, LayerContent::Adjustment(_)) || l.mask.is_some()))
+        .collect()
+}
+
+/// Free Transform with several layers selected (user report: only the active one moved): one box
+/// around all of their content, previewing them moved together, as Photoshop does; OK runs one
+/// `edit.transform` with `"layers"`. With a selection each pixel layer moves its selected pixels.
+fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, active: LayerId, ids: Vec<LayerId>) -> Result<(), String> {
+    use photocraft_engine::transform_cmds as tc;
+    if ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+        return Err(LOCKED.into());
+    }
+    let b = ids.iter().filter_map(|id| doc.layer(*id)).fold(photocraft_geom::Rect::EMPTY, |r, l| r.union(&tc::transform_frame(&doc, l)));
+    if b.is_empty() {
+        return Err("Could not transform: the layers are empty".into());
+    }
+    crate::type_tool::commit(app);
+    let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+    let session = app.ui.alloc_id();
+    // The document under the box leaves the moving pixels out; the moving ones are the layers
+    // alone (only their selected pixels, with a selection), composited together.
+    let mut pd = (*doc).clone();
+    let mut moving = (*doc).clone();
+    solo_layers(&mut moving.layers, &ids);
+    for &id in &ids {
+        let lifted = match (doc.selection.as_ref(), doc.layer(id)) {
+            (Some(sel), Some(l)) if !tc::moves_whole(l) => l.surface().map(|surf| tc::split_selected(surf, sel)).transpose().map_err(|e| e.to_string())?,
+            _ => None,
+        };
+        match lifted {
+            Some((lifted, rest)) => {
+                if let Some(surf) = pd.layer_mut(id).and_then(|l| l.surface_mut()) {
+                    *surf = rest;
+                }
+                if let Some(surf) = moving.layer_mut(id).and_then(|l| l.surface_mut()) {
+                    *surf = lifted;
+                }
+            }
+            None => {
+                if let Some(l) = pd.layer_mut(id) {
+                    l.visible = false;
+                }
+            }
+        }
+    }
+    let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
+    // What covers the topmost of them draws over the moving pixels.
+    let top = ids.last().copied().unwrap_or(active);
+    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, top, max_side);
+    above.hide_in(&mut pd.layers);
+    let (image, uv) = composite_image(&moving, b, max_side);
+    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+    app.transform_preview = Some(TransformPreview {
+        session,
+        doc: Arc::new(pd),
+        texture,
+        // The composite has each layer's opacity, fill and style already.
+        opacity: 1.0,
+        above: Some(above),
+        styled: None,
+        follow: None,
+        committing: None,
+        gesture: None,
+        warp_drag: None,
+        split_tool: None,
+        split_pointer: None,
+        split_placing: false,
+        split_quick: false,
+        steps: Steps::default(),
+        tool: app.ui.tool,
+        path: None,
+        content_aware: None,
+    });
+    app.ui.transform = Some(TransformSession {
+        session,
+        layer: active.0,
+        rect,
+        quad: corners(rect),
+        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+        interpolation: "bicubic".into(),
+        warp: None,
+        selection: false,
+        target: None,
+        path: None,
+        made: None,
+        mode: Default::default(),
+        content_aware: None,
+        skew_v: 0.0,
+        layers: ids.iter().map(|id| id.0).collect(),
     });
     start_steps(app);
     Ok(())
@@ -380,6 +493,7 @@ pub(crate) fn begin_content_aware(
         mode: Default::default(),
         content_aware: Some(Default::default()),
         skew_v: 0.0,
+        layers: Vec::new(),
     });
     start_steps(app);
     Ok(())
@@ -505,6 +619,7 @@ fn begin_lone(
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        layers: Vec::new(),
     });
     start_steps(app);
     Ok(())
@@ -558,6 +673,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        layers: Vec::new(),
     });
     start_steps(app);
     Ok(())
@@ -643,6 +759,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        layers: Vec::new(),
     });
     start_steps(app);
     Ok(())
@@ -675,8 +792,9 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let existing =
         app.session.active().and_then(|d| d.doc.layer(LayerId(app.ui.transform.as_ref()?.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
     let Some(t) = app.ui.transform.as_mut() else { return };
-    // Warp moves layers and paths (#3027): a lone mask or channel keeps the box.
-    if t.warp.is_some() || t.target.is_some() {
+    // Warp moves layers and paths (#3027): a lone mask or channel keeps the box, and so do
+    // several layers (Warp moves one).
+    if t.warp.is_some() || t.target.is_some() || !t.layers.is_empty() {
         return;
     }
     if t.quad == corners(t.rect)
@@ -1005,19 +1123,24 @@ fn show_only(layers: &mut [photocraft_doc::Layer], keep: &[LayerId]) {
 /// Hide every layer but `id` and the groups holding it, and unclip those, so a render shows that
 /// layer alone (the Free Transform preview, Liquify's one-layer backdrop).
 pub(crate) fn solo_layer(layers: &mut [photocraft_doc::Layer], id: LayerId) {
+    solo_layers(layers, &[id]);
+}
+
+/// [`solo_layer`] for several layers: they show together, and nothing else.
+fn solo_layers(layers: &mut [photocraft_doc::Layer], ids: &[LayerId]) {
     for l in layers {
-        if l.id == id {
+        if ids.contains(&l.id) {
             l.clipped = false;
             continue;
         }
         match &mut l.content {
-            LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)) => {
+            LayerContent::Group(g) if g.children.iter().any(|c| ids.iter().any(|id| contains(c, *id))) => {
                 l.clipped = false;
                 // Isolate the child, not the artboard's paper. Keep the board for clipping.
                 if let Some(board) = &mut g.artboard {
                     board.background = photocraft_doc::ArtboardBackground::Transparent;
                 }
-                solo_layer(&mut g.children, id);
+                solo_layers(&mut g.children, ids);
             }
             _ => l.visible = false,
         }
@@ -1095,6 +1218,9 @@ pub fn commit(app: &mut PhotocraftApp) {
         let mut p = json!({"layer": t.layer, "rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
         if let Some(target) = &t.target {
             p["target"] = target.clone();
+        }
+        if !t.layers.is_empty() {
+            p["layers"] = json!(t.layers);
         }
         app.run("edit.transform", p)
     };
@@ -1392,8 +1518,9 @@ pub(crate) enum Hit {
     Outside,
 }
 
-/// The nearest handle within `tol` (on a small box their grab areas overlap), else inside or
-/// outside the box.
+/// The nearest handle within `tol` (on a small box their grab areas overlap), else a side of the
+/// box within `tol` anywhere along it (as Photoshop, which scales from the whole side, not just
+/// its middle handle: user report), else inside or outside the box.
 pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     let d = |a: [f64; 2]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt();
     let mid = |i: usize| {
@@ -1402,11 +1529,32 @@ pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     };
     let handles = (0..4).map(|i| (t.quad[i], Hit::Corner(i))).chain((0..4).map(|i| (mid(i), Hit::Edge(i)))).chain([(t.pivot, Hit::Pivot)]);
     let nearest = handles.map(|(q, h)| (d(q), h)).filter(|(dist, _)| *dist < tol).min_by(|a, b| a.0.total_cmp(&b.0));
-    match nearest {
-        Some((_, h)) => h,
+    // A narrower band than the handles' (about 5 screen points), so a press just inside a small
+    // box still moves it.
+    let band = tol * SIDE_BAND;
+    let side = || {
+        (0..4)
+            .map(|i| (segment_distance(p, t.quad[i], t.quad[(i + 1) % 4]), Hit::Edge(i)))
+            .filter(|(dist, _)| *dist < band)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, h)| h)
+    };
+    match nearest.map(|(_, h)| h).or_else(side) {
+        Some(h) => h,
         None if inside(&t.quad, p) => Hit::Inside,
         None => Hit::Outside,
     }
+}
+
+/// The part of the handle tolerance a side of the box is grabbed within, away from its handles.
+const SIDE_BAND: f64 = 0.4;
+
+/// How far `p` is from the segment `a`–`b`.
+fn segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
 }
 
 fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
@@ -3296,6 +3444,7 @@ mod tests {
             mode: Default::default(),
             content_aware: None,
             skew_v: 0.0,
+            layers: Vec::new(),
         }
     }
 
@@ -4016,6 +4165,25 @@ mod tests {
         assert_eq!(hit(&s, [8.0, -1.0], 12.0), Hit::Edge(0));
         assert_eq!(hit(&s, [8.0, 8.0], 12.0), Hit::Pivot);
         assert_eq!(hit(&s, [40.0, 40.0], 12.0), Hit::Outside);
+    }
+
+    /// User report: a side is grabbed anywhere along it, not only at its middle handle, as in
+    /// Photoshop, and dragging it there scales as the middle handle does.
+    #[test]
+    fn a_side_scales_from_anywhere_along_it() {
+        let s = session();
+        assert_eq!(hit(&s, [20.0, -2.0], 8.0), Hit::Edge(0), "the top, far from its handle");
+        assert_eq!(hit(&s, [98.0, 35.0], 8.0), Hit::Edge(1), "the right side");
+        assert_eq!(hit(&s, [70.0, 52.0], 8.0), Hit::Edge(2));
+        assert_eq!(hit(&s, [-3.0, 10.0], 8.0), Hit::Edge(3));
+        assert_eq!(hit(&s, [20.0, 6.0], 8.0), Hit::Inside, "a few points inside still moves the box");
+        assert_eq!(hit(&s, [2.0, 1.0], 8.0), Hit::Corner(0), "corners still win at the ends");
+        assert_eq!(hit(&s, [20.0, 20.0], 8.0), Hit::Inside);
+        assert_eq!(hit(&s, [20.0, -20.0], 8.0), Hit::Outside);
+        let none = egui::Modifiers::NONE;
+        assert!(close(drag_in(TransformMode::Free, [20.0, 0.0], [20.0, -50.0], none), drag_in(TransformMode::Free, [50.0, 0.0], [50.0, -50.0], none)));
+        let q = drag_in(TransformMode::Free, [20.0, 0.0], [20.0, -50.0], none);
+        assert!((q[3][1] - q[0][1] - 100.0).abs() < 1e-6, "twice the height: {q:?}");
     }
 
     #[test]
@@ -5103,6 +5271,44 @@ mod tests {
         assert!(crate::canvas_tool_menu::open_transform(&mut app, &ctx, [10.0, 10.0]));
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
         assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+    }
+
+    /// User report: with several layers selected Free Transform moved only one. The box frames
+    /// them all, both leave the canvas under it, and OK moves them together in one step.
+    #[test]
+    fn free_transform_moves_every_selected_layer() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 16, 16));
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint", |doc, _| {
+                doc.layer_mut(b).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 32, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+        let steps = app.session.active().unwrap().history.entries().len();
+        begin(&mut app, &egui::Context::default()).unwrap();
+        let t = app.ui.transform.clone().unwrap();
+        assert_eq!(t.rect, [8.0, 8.0, 40.0, 40.0], "one box around both");
+        assert_eq!(t.layers.len(), 2);
+        let pd = &app.transform_preview.as_ref().unwrap().doc;
+        assert!(!pd.layer(a).unwrap().visible && !pd.layer(b).unwrap().visible, "both move");
+        // Move the box 10 px right.
+        app.ui.transform.as_mut().unwrap().quad = corners([18.0, 8.0, 50.0, 40.0]);
+        commit(&mut app);
+        assert!(app.ui.transform.is_none());
+        let doc = &app.session.active().unwrap().doc;
+        let bounds = |id: LayerId| doc.layer(id).unwrap().surface().unwrap().content_bounds();
+        assert_eq!(bounds(a), photocraft_geom::Rect::new(18, 8, 26, 16));
+        assert_eq!(bounds(b), photocraft_geom::Rect::new(42, 32, 50, 40));
+        assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1, "one step");
+        // One layer selected: as before.
+        app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        begin(&mut app, &egui::Context::default()).unwrap();
+        assert!(app.ui.transform.as_ref().unwrap().layers.is_empty());
+        assert_eq!(app.ui.transform.as_ref().unwrap().rect, [18.0, 8.0, 26.0, 16.0]);
     }
 
     fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {

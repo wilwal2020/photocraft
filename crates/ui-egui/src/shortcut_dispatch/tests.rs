@@ -573,6 +573,27 @@ fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
     }
 }
 
+/// With the second mask targeted, Delete with no selection deletes that mask, never the first
+/// (user report).
+#[test]
+fn delete_with_the_second_mask_targeted_deletes_the_second_mask() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let s = &mut h.state_mut().session;
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute(photocraft_engine::second_mask_cmds::ADD, json!({"layer": layer.0})).unwrap();
+    let _ = s.execute("select.deselect", json!({}));
+    assert!(s.active().unwrap().doc.selection.is_none());
+    (h.state_mut().ui.mask_target, h.state_mut().ui.second_mask_target) = (true, true);
+    h.run_steps(2);
+    press(&mut h, "Delete");
+    assert_eq!(logged(&h), [photocraft_engine::second_mask_cmds::DELETE]);
+    let l = h.state().session.active().unwrap().doc.layer(layer).unwrap();
+    assert!(l.mask.is_some(), "the first mask stays");
+    assert!(l.second_mask.is_none(), "the second mask is gone");
+}
+
 /// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).
 #[test]
 fn delete_without_a_selection_deletes_every_selected_layer() {

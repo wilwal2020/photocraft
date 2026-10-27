@@ -129,6 +129,43 @@ fn surface_from_masks(area: Rect, new: &[f32], prev: Option<&[f32]>, f: impl Fn(
     s
 }
 
+/// The selection Load Transparency (⌘-click on a layer thumbnail) makes from `layer` over
+/// `area`: each pixel's alpha, as [`combine`] makes it from the alpha plane, but built tile by tile
+/// from the layer's own tiles. A canvas-sized plane first cost a 22 MP page about 350 MB of
+/// buffers (user report: Photoshop's is faster). `None` for a layer whose untouched pixels aren't
+/// transparent (no alpha, or another default): read it as a plane then. Nothing selected is a
+/// surface with no tiles.
+pub fn alpha_selection(layer: &Surface, area: Rect) -> Option<Surface> {
+    if !layer.format().alpha || layer.default_pixel().last().copied() != Some(0.0) {
+        return None;
+    }
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let ts = TILE_SIZE as usize;
+    let coords: Vec<TileCoord> = layer.tiles().map(|(c, _)| *c).filter(|c| !c.rect().intersect(&area).is_empty()).collect();
+    let (full, blank) = (s.solid_tile(&[1.0]), s.solid_tile(&[0.0]));
+    let built = par_map(coords.len(), |k| {
+        let tc = coords.get(k)?;
+        let tr = tc.rect().intersect(&area);
+        let span = tr.width() as usize;
+        let mut px = vec![[0.0f32; 4]; span * tr.height() as usize];
+        layer.read_rgba_into(tr, &mut px);
+        let mut tile = Arc::clone(&blank);
+        let data = Arc::make_mut(&mut tile).bytes_mut();
+        let (mut lo, mut hi) = (if tr == tc.rect() { u8::MAX } else { 0 }, 0u8);
+        for (y, row) in (tr.y0..tr.y1).zip(px.chunks_exact(span.max(1))) {
+            let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+            let Some(dst) = data.get_mut(o..o + span) else { continue };
+            for (d, p) in dst.iter_mut().zip(row) {
+                *d = coverage8(p[3]);
+            }
+            (lo, hi) = dst.iter().fold((lo, hi), |(lo, hi), b| (lo.min(*b), hi.max(*b)));
+        }
+        (hi > 0).then(|| (*tc, if lo == u8::MAX { Arc::clone(&full) } else { tile }))
+    });
+    s.put_tiles(built.into_iter().flatten());
+    Some(s)
+}
+
 /// Builds a GRAY8 selection surface from a mask over `area` (missing samples are 0).
 pub fn mask_to_surface(m: &[f32], area: Rect) -> Surface {
     surface_from_masks(area, m, None, |_, v| v)
@@ -905,6 +942,31 @@ pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tile-by-tile Load Transparency makes exactly the selection the plane path does: soft
+    /// alpha, opaque tiles, empty ones, pixels past the canvas, at each depth; a layer without
+    /// alpha is left to the plane path.
+    #[test]
+    fn alpha_selection_matches_the_alpha_plane() {
+        let area = Rect::new(0, 0, 700, 300);
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let mut layer = Surface::new(fmt);
+            layer.fill_rect(Rect::new(0, 0, 600, 260), &[1.0, 0.0, 0.0, 1.0]);
+            layer.fill_rect(Rect::new(40, 20, 90, 50), &[0.0, 0.0, 1.0, 0.37]);
+            layer.fill_rect(Rect::new(650, 280, 900, 400), &[0.0, 1.0, 0.0, 0.8]);
+            layer.fill_rect(Rect::new(-50, -50, 10, 10), &[0.0, 0.0, 0.0, 0.0]);
+            let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
+            layer.read_rgba_into(area, &mut px);
+            let plane: Vec<f32> = px.iter().map(|p| p[3]).collect();
+            let want = combine(None, &plane, area, SelectionMode::Replace).unwrap();
+            let got = alpha_selection(&layer, area).unwrap();
+            assert_eq!(mask_from_surface(Some(&got), area), mask_from_surface(Some(&want), area), "{fmt:?}");
+            assert_eq!(got.tile_count(), want.tile_count(), "{fmt:?}");
+        }
+        assert_eq!(alpha_selection(&Surface::new(PixelFormat::RGBA8), area).map(|s| s.tile_count()), Some(0), "nothing selected");
+        assert!(alpha_selection(&Surface::new(PixelFormat::GRAY8), area).is_none(), "no alpha");
+        assert!(alpha_selection(&Surface::with_default(PixelFormat::RGBA8, &[1.0; 4]), area).is_none(), "opaque where untouched");
+    }
 
     fn img(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 4]) -> Vec<[f32; 4]> {
         (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| f(x, y)).collect()

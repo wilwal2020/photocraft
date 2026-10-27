@@ -140,12 +140,16 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
         return None;
     }
     let block = block.filter(|b| b.len() == img.len() && b.get(si).is_some_and(|a| *a < BLOCK_ALPHA));
-    let mut strength = strengths(img, |p| difference(p, target));
-    blocked_strength(&mut strength, block);
-    let open = |i: usize| strength.get(i).is_some_and(|s| *s <= margin) && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA));
-    let free: Vec<bool> = crate::par::map(strength.len(), strength.len() >= 65_536, open);
+    let open = |i: usize| img.get(i).is_some_and(|p| difference(*p, target) <= margin) && block.is_none_or(|b| b.get(i).is_some_and(|a| *a < BLOCK_ALPHA));
+    let free: Vec<bool> = crate::par::map(img.len(), img.len() >= 65_536, open);
     let gap = finite(o.close_gap, MAX_GAP);
-    let thin = thin_ink(&strength, margin, w, h, o.thin_lines, block);
+    // How far each pixel is from the clicked colour: all over for Ignore Thin Lines and a fill
+    // that doesn't follow adjacent pixels, else (below) only around the spot clicked, which is
+    // all the rest reads.
+    let whole = !o.contiguous || finite(o.thin_lines, MAX_THIN) >= 1.0;
+    let mut strength = if whole { strengths(img, |p| difference(p, target)) } else { Vec::new() };
+    blocked_strength(&mut strength, block);
+    let thin = if whole { thin_ink(&strength, margin, w, h, o.thin_lines, block) } else { None };
     if !o.contiguous {
         let mut fill = free.clone();
         scale(&mut fill, &strength, &free, w, h, o);
@@ -168,10 +172,24 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     let (cx0, cy0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
     let (cx1, cy1) = ((x1 + pad + 1).min(w), (y1 + pad + 1).min(h));
     let (cw, ch) = (cx1 - cx0, cy1 - cy0);
-    let crop = |v: &[bool]| -> Vec<bool> { (cy0..cy1).flat_map(|y| v.get(y * w + cx0..y * w + cx1).unwrap_or(&[]).iter().copied()).collect() };
-    let crop8 = |v: &[u8]| -> Vec<u8> { (cy0..cy1).flat_map(|y| v.get(y * w + cx0..y * w + cx1).unwrap_or(&[]).iter().copied()).collect() };
-    let strength: Vec<u8> = crop8(&strength);
+    fn rows<T: Copy>(v: &[T], w: usize, (cx0, cy0, cx1, cy1): (usize, usize, usize, usize)) -> Vec<T> {
+        let mut out = Vec::with_capacity((cx1 - cx0) * (cy1 - cy0));
+        for y in cy0..cy1 {
+            out.extend_from_slice(v.get(y * w + cx0..y * w + cx1).unwrap_or(&[]));
+        }
+        out
+    }
+    let cut = (cx0, cy0, cx1, cy1);
+    let crop = |v: &[bool]| -> Vec<bool> { rows(v, w, cut) };
+    let crop8 = |v: &[u8]| -> Vec<u8> { rows(v, w, cut) };
     let block: Option<Vec<u8>> = block.map(crop8);
+    let strength: Vec<u8> = if whole {
+        crop8(&strength)
+    } else {
+        let mut s: Vec<u8> = crate::par::map(cw * ch, cw * ch >= 65_536, |i| img.get((cy0 + i / cw) * w + cx0 + i % cw).map_or(255, |p| difference(*p, target)));
+        blocked_strength(&mut s, block.as_deref());
+        s
+    };
     let (spot, free) = (crop(&spot), crop(&free));
     let thin: Option<Vec<bool>> = thin.map(|t| crop(&t));
     let csi = (si / w - cy0) * cw + si % w - cx0;
@@ -468,6 +486,10 @@ fn margin(tolerance: f32) -> u8 {
 }
 
 fn premul(p: [u8; 4]) -> [i32; 4] {
+    // Most reference pixels are opaque (line art on paper): nothing to scale.
+    if p[3] == u8::MAX {
+        return [i32::from(p[0]), i32::from(p[1]), i32::from(p[2]), 255];
+    }
     let a = i32::from(p[3]);
     let m = |c: u8| (i32::from(c) * a + 127) / 255;
     [m(p[0]), m(p[1]), m(p[2]), a]
@@ -591,13 +613,17 @@ fn areas(free: &[bool], w: usize, h: usize, gap: f32, border: [bool; 4], seed: O
     let [l, t, r, b] = border.map(|line| if line { 0 } else { pad });
     let (pw, ph) = (w + l + r, h + t + b);
     let extend = |m: &[bool]| -> Vec<bool> {
-        (0..ph)
-            .flat_map(|py| {
-                let y = py.saturating_sub(t).min(h.saturating_sub(1));
-                (0..pw).map(move |px| (y, px.saturating_sub(l).min(w.saturating_sub(1))))
-            })
-            .map(|(y, x)| m.get(y * w + x).copied().unwrap_or(false))
-            .collect()
+        let mut out = Vec::with_capacity(pw * ph);
+        for py in 0..ph {
+            let y = py.saturating_sub(t).min(h.saturating_sub(1));
+            let row = m.get(y * w..y * w + w).unwrap_or(&[]);
+            let (first, last) = (row.first().copied().unwrap_or(false), row.last().copied().unwrap_or(false));
+            out.extend(std::iter::repeat_n(first, l));
+            out.extend_from_slice(row);
+            out.extend(std::iter::repeat_n(last, r));
+            out.resize((py + 1) * pw, false);
+        }
+        out
     };
     let padded = extend(free);
     let seed = seed.map(|s| (s / w + t) * pw + s % w + l);
@@ -661,18 +687,24 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
     // flooded by whichever neighbour reaches it first (through the gap it should stay closed by).
     for i in by_depth(free, &labels, &dist) {
         let here = dist.get(i).copied().unwrap_or(0.0);
-        let mut met: Vec<u32> = Vec::new();
+        // The areas the pixel's 4-neighbours belong to (at most four: no allocation per pixel).
+        let mut roots = [0u32; 4];
+        let mut found = 0;
         let mut beside_seam = false;
         for j in neighbours(i, w, h).into_iter().flatten() {
             if labelled(&labels, j) {
                 let root = find(&mut parent, labels.get(j).copied().unwrap_or(0));
-                if !met.contains(&root) {
-                    met.push(root);
+                if !roots[..found].contains(&root)
+                    && let Some(slot) = roots.get_mut(found)
+                {
+                    *slot = root;
+                    found += 1;
                 }
             } else if labels.get(j) == Some(&SEAM) {
                 beside_seam = true;
             }
         }
+        let met = &mut roots[..found];
         if met.is_empty() {
             // Below a seam only: part of the seam. Else a local top: a new area.
             let label = if beside_seam {
@@ -695,7 +727,7 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
         met.sort_by(|a, b| peak.get(*b as usize).copied().unwrap_or(0.0).total_cmp(&peak.get(*a as usize).copied().unwrap_or(0.0)));
         let got = met[0];
         let mut seam = false;
-        for &other in &met[1..] {
+        for &other in met.iter().skip(1) {
             let (o, g) = (other as usize, got as usize);
             // Across thin ink (no depth) only a deep area stays apart; elsewhere [`RISE`].
             let rise = match thin {
@@ -739,21 +771,22 @@ const SMALL: usize = 64;
 /// far in page order: a bucket sort on the distance in 1/64 px steps.
 fn by_depth(free: &[bool], labels: &[u32], dist: &[f32]) -> Vec<usize> {
     let key = |d: f32| (d.clamp(0.0, 4096.0) * 64.0) as usize;
-    let todo = |i: usize| free.get(i) == Some(&true) && labels.get(i) == Some(&0);
-    let top = (0..free.len()).filter(|&i| todo(i)).map(|i| key(dist.get(i).copied().unwrap_or(0.0))).max();
-    let Some(top) = top else { return Vec::new() };
+    // One pass over the plane: the rest only reads the pixels to sort.
+    let todo: Vec<(usize, usize)> =
+        free.iter().zip(labels).enumerate().filter(|(_, (f, l))| **f && **l == 0).map(|(i, _)| (i, key(dist.get(i).copied().unwrap_or(0.0)))).collect();
+    let Some(top) = todo.iter().map(|(_, k)| *k).max() else { return Vec::new() };
     let mut start = vec![0usize; top + 2];
-    for i in (0..free.len()).filter(|&i| todo(i)) {
-        if let Some(s) = start.get_mut(top - key(dist.get(i).copied().unwrap_or(0.0)) + 1) {
+    for (_, k) in &todo {
+        if let Some(s) = start.get_mut(top - k + 1) {
             *s += 1;
         }
     }
     for k in 1..start.len() {
         start[k] += start[k - 1];
     }
-    let mut out = vec![0usize; start.last().copied().unwrap_or(0)];
-    for i in (0..free.len()).filter(|&i| todo(i)) {
-        let b = top - key(dist.get(i).copied().unwrap_or(0.0));
+    let mut out = vec![0usize; todo.len()];
+    for &(i, k) in &todo {
+        let b = top - k;
         if let Some(s) = start.get_mut(b)
             && let Some(o) = out.get_mut(*s)
         {

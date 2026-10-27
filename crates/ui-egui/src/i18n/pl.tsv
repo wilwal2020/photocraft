@@ -4430,6 +4430,9 @@ curves	Smooth	Wygładź
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Próbka: zarejestrowane kolory
+	Sample: the colours used last	Próbka: ostatnio użyte kolory
+	Play once for each selected layer	Odtwórz raz dla każdej zaznaczonej warstwy
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Przy kilku zaznaczonych warstwach Odtwórz uruchamia operację kolejno na każdej z nich, za każdym razem z zaznaczoną tylko tą warstwą
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Usuń AI
 	Remove what is selected with Nano Banana ({key})	Usuń zaznaczenie za pomocą Nano Banana ({key})

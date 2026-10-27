@@ -4537,6 +4537,9 @@ cameraData	Lens	Lens
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Örnek: kaydedilen renkler
+	Sample: the colours used last	Örnek: son kullanılan renkler
+	Play once for each selected layer	Seçili her katman için bir kez oynat
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Birden çok katman seçiliyken Oynat, eylemi her birinde sırayla, yalnızca o katman seçiliyken çalıştırır
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	YZ ile Kaldır
 	Remove what is selected with Nano Banana ({key})	Seçili alanı Nano Banana ile kaldır ({key})

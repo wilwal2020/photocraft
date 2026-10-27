@@ -4491,6 +4491,9 @@ curves	Smooth	スムーズ
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	サンプル: 記録された色
+	Sample: the colours used last	サンプル: 最後に使用した色
+	Play once for each selected layer	選択した各レイヤーに 1 回ずつ再生
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	複数のレイヤーを選択しているとき、再生はそのレイヤーだけを選択した状態で各レイヤーに順番にアクションを実行します
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI 削除
 	Remove what is selected with Nano Banana ({key})	選択範囲を Nano Banana で削除 ({key})

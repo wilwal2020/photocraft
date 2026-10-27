@@ -3831,6 +3831,9 @@ curves	Smooth	Haluskan
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Sampel: warna yang direkam
+	Sample: the colours used last	Sampel: warna yang terakhir dipakai
+	Play once for each selected layer	Putar sekali untuk setiap layer terpilih
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Dengan beberapa layer terpilih, Putar menjalankan aksi pada masing-masing secara bergiliran, dengan hanya layer itu yang terpilih
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Hapus AI
 	Remove what is selected with Nano Banana ({key})	Hapus yang dipilih dengan Nano Banana ({key})

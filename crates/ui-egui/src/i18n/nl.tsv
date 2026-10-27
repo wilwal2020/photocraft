@@ -4568,6 +4568,9 @@ curves	Smooth	Vloeiend maken
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Monster: opgenomen kleuren
+	Sample: the colours used last	Monster: laatst gebruikte kleuren
+	Play once for each selected layer	Eenmaal afspelen voor elke geselecteerde laag
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Met meerdere lagen geselecteerd voert Afspelen de handeling op elke laag om de beurt uit, met alleen die laag geselecteerd
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	AI-verwijderen
 	Remove what is selected with Nano Banana ({key})	Selectie verwijderen met Nano Banana ({key})

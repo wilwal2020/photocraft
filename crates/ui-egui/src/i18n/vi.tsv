@@ -4306,6 +4306,9 @@ curves	Smooth	Làm mượt
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Mẫu: màu đã ghi
+	Sample: the colours used last	Mẫu: các màu dùng lần trước
+	Play once for each selected layer	Phát một lần cho mỗi lớp được chọn
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Khi chọn nhiều lớp, Phát chạy thao tác lần lượt trên từng lớp, mỗi lần chỉ chọn lớp đó
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Xóa bằng AI
 	Remove what is selected with Nano Banana ({key})	Xóa vùng chọn bằng Nano Banana ({key})

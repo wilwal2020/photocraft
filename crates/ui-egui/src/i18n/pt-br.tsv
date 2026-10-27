@@ -4738,6 +4738,9 @@ layerLabel	No Color	Sem cor
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Amostra: cores gravadas
+	Sample: the colours used last	Amostra: as últimas cores usadas
+	Play once for each selected layer	Executar uma vez para cada camada selecionada
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Com várias camadas selecionadas, Executar aplica a ação a cada uma por vez, com apenas essa camada selecionada
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Remover com IA
 	Remove what is selected with Nano Banana ({key})	Remover a seleção com o Nano Banana ({key})

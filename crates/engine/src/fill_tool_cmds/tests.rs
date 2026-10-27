@@ -417,3 +417,73 @@ fn the_magic_wand_closes_gaps_like_the_fill() {
     assert!(sel(&s, 20, 20) > 0.5 && sel(&s, 2, 2) > 0.5);
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
 }
+
+/// User report: on the colour layer under Multiply line art (Refer All), clicking a purple flat
+/// with orange only recoloured its edges. The whole flat takes the new colour, with or without
+/// the editing layer blocking, Close Gap and Area Scaling.
+#[test]
+fn a_click_on_a_flat_recolours_all_of_it() {
+    for (blocks, gap, scaling) in [(false, 0, 0), (false, 4, 1), (true, 4, 1), (true, 0, 2)] {
+        let (mut s, lines, colour) = inked(8);
+        // The user's setup: line art on top in Multiply, the fill layer under it.
+        s.execute("layer.select", json!({"layer": lines})).unwrap();
+        s.execute("layer.setProps", json!({"layer": lines, "blend": "multiply"})).unwrap();
+        s.execute("layer.arrange.bringToFront", json!({})).unwrap();
+        s.execute("layer.select", json!({"layer": colour})).unwrap();
+        let p = |c: &str| json!({"x": 20, "y": 20, "reference": "all", "closeGap": gap, "areaScaling": scaling, "layerBlocks": blocks, "contents": "color", "color": c});
+        s.execute(FILL_ID, p("#800080")).unwrap();
+        let purple = rgba(&s, colour, 20, 20);
+        assert!(purple[0] > 0.45 && purple[1] < 0.05 && purple[3] > 0.99, "{purple:?}");
+        s.execute(FILL_ID, p("#ff8000")).unwrap();
+        // Anti-aliasing softens the fill's last pixel or two by the lines (where Area Scaling
+        // doesn't tuck it under them); everywhere else the flat is the new colour.
+        for (x, y) in [(20, 20), (10, 10), (29, 29), (20, 29)] {
+            let c = rgba(&s, colour, x, y);
+            assert!(c[0] > 0.99 && (c[1] - 0.5).abs() < 0.02 && c[2] < 0.01, "({x}, {y}) is {c:?} (blocks {blocks}, gap {gap}, scaling {scaling})");
+        }
+    }
+}
+
+/// Where a Fill tool click's time goes in the engine on a real page (ignored; the page as
+/// `photocraft-algo`'s `a_real_page_click_stage_timings` reads it): the user's setup, the page as
+/// a Multiply line layer over a white Background with an empty colour layer between.
+#[test]
+#[ignore]
+fn a_real_page_click_engine_timings() {
+    use std::time::Instant;
+    let Ok(path) = std::env::var("PHOTOCRAFT_FILL_PAGE") else { return };
+    let w: u32 = std::env::var("PHOTOCRAFT_FILL_PAGE_W").unwrap().parse().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let h = (bytes.len() / 4) as u32 / w;
+    let seeds: Vec<(i64, i64)> = std::fs::read_to_string(path.replace(".rgba", ".seeds"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once(' ').map(|(x, y)| (x.parse().unwrap(), y.parse().unwrap())))
+        .collect();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h, "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Colour"})).unwrap();
+    let colour = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Lines"})).unwrap();
+    let lines = s.active().unwrap().active_layer.unwrap();
+    s.edit("page", |doc, _| {
+        let surf = doc.layer_mut(lines).unwrap().surface_mut().unwrap();
+        let flat: Vec<f32> = bytes.iter().map(|b| f32::from(*b) / 255.0).collect();
+        surf.write_region(Rect::new(0, 0, w as i32, h as i32), &flat);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.setProps", json!({"layer": lines, "blend": "multiply"})).unwrap();
+    s.execute("layer.select", json!({"layer": colour})).unwrap();
+    for (k, (x, y)) in seeds.iter().enumerate() {
+        let p = json!({"x": x, "y": y, "reference": "all", "closeGap": 4, "areaScaling": 1, "contents": "color", "color": format!("#{:06x}", 0x40_4040 + k * 0x05_0a03)});
+        let t = Instant::now();
+        let (region, _) = region_blocked(&s, &p).unwrap();
+        let find = t.elapsed().as_secs_f64() * 1000.0;
+        let t = Instant::now();
+        s.execute(FILL_ID, p).unwrap();
+        let whole = t.elapsed().as_secs_f64() * 1000.0;
+        let b = region.map(|r| r.bbox).unwrap_or(Rect::EMPTY);
+        eprintln!("{k:2} {}x{}: region {find:5.0} ms, the whole click {whole:5.0} ms", b.width(), b.height());
+    }
+}

@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, OnceLock};
 
-use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use photocraft_doc::{DocId, Document};
 use serde_json::{Map, Value, json};
 
@@ -86,8 +86,10 @@ pub fn controls(f: &Map<String, Value>) -> Controls {
     Controls { fuzziness: sampled || tonal || select == "skinTones", sampling: sampled, range: sampled && flag(f, "localized"), tonal }
 }
 
-/// Open the dialog with Photoshop's defaults (Sampled Colors, Fuzziness 40, the foreground colour
-/// as the sample until the eyedropper picks one) and the Selection Preview chosen last time.
+/// Open the dialog with the settings and colours its last OK used (`dialog_memory`), as
+/// Photoshop's does; the first time, Photoshop's defaults (Sampled Colors, Fuzziness 40, the
+/// foreground colour as the sample until the eyedropper picks one). The Selection Preview is the
+/// one chosen last time.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
     let label = photocraft_engine::commands::find(COMMAND).map_or(tl!("Color Range…"), |c| c.label);
     let mut f = Map::new();
@@ -109,6 +111,11 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     f.insert("__tool".into(), json!("sample"));
     f.insert("__view".into(), json!("selection"));
     f.insert("__selectionPreview".into(), json!(remembered_preview(app)));
+    let last = crate::dialog_memory::color_range(app);
+    if last.contains_key("labRange") {
+        f.insert("__remembered".into(), json!(true));
+    }
+    f.extend(last);
     app.color_range = None;
     app.ui.open_dialog(DialogKind::Command, f)
 }
@@ -186,7 +193,10 @@ pub fn params(f: &Map<String, Value>) -> Value {
 /// OK: run the command on the document (one history step).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.color_range = None;
-    app.run(COMMAND, params(f))
+    let p = params(f);
+    // The colours are measured before the command runs, on the image it sampled.
+    crate::dialog_memory::used_color_range(app, f, &p);
+    app.run(COMMAND, p)
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.
@@ -660,6 +670,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 let (add, sub) = (points(f, "points").len(), points(f, "subtractPoints").len());
                 let recorded = f.get("labRange").is_some_and(Value::is_object);
                 let what = match (add, sub) {
+                    (0, 0) if recorded && flag(f, "__remembered") => tl!("Sample: the colours used last").to_string(),
                     (0, 0) if recorded => tl!("Sample: recorded colours").to_string(),
                     (0, 0) => tl!("Sample: foreground colour").to_string(),
                     (a, 0) => crate::i18n::trn(crate::i18n::current(), a as u64, "{n} sample", "{n} samples"),
@@ -847,20 +858,9 @@ pub fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egu
     if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
         ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
     } else {
-        // The tip of the icon's pipette is at (2, 22) of its 24-unit box (as the Color Picker's).
-        crate::icons::cursor(ctx, "pipette", over, vec2(2.0, 22.0) / 24.0, 20.0, false);
-        ctx.set_cursor_icon(egui::CursorIcon::None);
-    }
-    let badge = match tool {
-        "add" => "+",
-        "subtract" => "−",
-        _ => "",
-    };
-    if !badge.is_empty() {
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-color-range-badge")));
-        let at = over + vec2(20.0, -4.0);
-        p.text(at + vec2(1.0, 1.0), egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::from_black_alpha(200));
-        p.text(at, egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::WHITE);
+        // An OS cursor bitmap, so it moves with the hardware pointer: painted, it only moved
+        // when the app drew a frame (user report: the cursor felt low hertz in Color Range).
+        ctx.set_cursor_icon(crate::tool_cursor::icon_parts(ctx, &cursor_parts(tool), over));
     }
     if let Some(at) = press
         && pick_top(app, at, mods)
@@ -868,6 +868,22 @@ pub fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egu
         ctx.request_repaint();
     }
     true
+}
+
+/// The dialog's eyedropper pointer for `tool`: the pipette (its tip, at (2, 22) of its 24-unit
+/// box, on the hotspot, as the Color Picker's), with a + or − beside it for "add" and "subtract".
+fn cursor_parts(tool: &str) -> Vec<crate::tool_cursor::icon::Part> {
+    use crate::tool_cursor::icon::Part;
+    let mut parts = vec![Part::at_hotspot("pipette", vec2(2.0, 22.0) / 24.0, 20.0)];
+    let badge = match tool {
+        "add" => Some("plus"),
+        "subtract" => Some("minus"),
+        _ => None,
+    };
+    if let Some(name) = badge {
+        parts.push(Part { at: vec2(15.0, -10.0), ..Part::at_hotspot(name, Vec2::ZERO, 11.0) });
+    }
+    parts
 }
 
 /// An eyedropper click at document pixel `at`: the plain eyedropper replaces the samples, the
@@ -1057,6 +1073,39 @@ mod tests {
         pick(&app, &mut f, [6.0, 6.0], egui::Modifiers::NONE);
         assert!(params(&f).get("labRange").is_none(), "a new sample replaces them");
         assert_eq!(params(&f)["points"], json!([[6.0, 6.0]]));
+    }
+
+    /// User report: Color Range should remember its last settings and colour. OK keeps them; the
+    /// next opening starts from them and selects the same colours (as a Lab box, so it works on
+    /// another picture too), and the foreground colour no longer stands in.
+    #[test]
+    fn ok_remembers_the_settings_and_colours_for_the_next_opening() {
+        let mut app = app_with_doc();
+        app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+        let id = open(&mut app);
+        let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert!(!f.contains_key("labRange"), "nothing remembered the first time");
+        f.insert("fuzziness".into(), json!(25.0));
+        f.insert("__view".into(), json!("image"));
+        pick(&app, &mut f, [5.0, 5.0], egui::Modifiers::NONE);
+        confirm(&mut app, &f).unwrap();
+        app.ui.close_dialog(id);
+        assert!(coverage(&app, 5, 5) > 0.99 && coverage(&app, 25, 5) < 0.01, "red selected");
+        app.session.execute("select.deselect", json!({})).unwrap();
+        let id = open(&mut app);
+        let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert_eq!((f["fuzziness"].clone(), f["__view"].clone(), f["select"].clone()), (json!(25.0), json!("image"), json!("sampledColors")));
+        assert!(f["labRange"].is_object() && flag(&f, "__remembered"), "the colour comes back: {f:?}");
+        assert!(points(&f, "points").is_empty(), "as colours, not positions");
+        confirm(&mut app, &f).unwrap();
+        assert!(coverage(&app, 5, 5) > 0.99, "red again, not the black foreground");
+        assert!(coverage(&app, 5, 20) < 0.01 && coverage(&app, 25, 5) < 0.01);
+        // Junk in the preferences opens with the defaults.
+        app.session.prefs.edit(|p| p.dialog_choices = json!({"colorRange": {"select": "lava", "fuzziness": "x", "labRange": {"min": [1]}}}));
+        let id = open(&mut app);
+        let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert_eq!((f["select"].clone(), f["fuzziness"].clone()), (json!("sampledColors"), json!(40.0)));
+        assert!(!f.contains_key("labRange"));
     }
 
     /// Photoshop keeps the Selection Preview choice between openings (user report), across

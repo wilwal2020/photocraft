@@ -3828,6 +3828,9 @@ curves	Smooth	Glätten
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Abtasten: aufgezeichnete Farben
+	Sample: the colours used last	Abtasten: zuletzt verwendete Farben
+	Play once for each selected layer	Einmal für jede ausgewählte Ebene abspielen
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Bei mehreren ausgewählten Ebenen spielt „Abspielen“ die Aktion nacheinander für jede ab, wobei jeweils nur diese Ebene ausgewählt ist
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	KI-Entfernen
 	Remove what is selected with Nano Banana ({key})	Auswahl mit Nano Banana entfernen ({key})

@@ -4,7 +4,7 @@
 //! Brush erases with the current brush (Krita, Paint). Each right stroke is one `paint.stroke`
 //! with `"erase": true`, so one undo step, with the pen pressure and tilt of a normal stroke.
 
-use egui::{PointerButton, Response};
+use egui::{PointerButton, Pos2, Response};
 use photocraft_engine::BrushSettings;
 use photocraft_engine::prefs::RightClickPaint;
 
@@ -188,6 +188,8 @@ pub struct Buttons {
     pub dragged: bool,
     pub stopped: bool,
     pub clicked: bool,
+    /// A right-click on the canvas ([`right_click`]): where it was pressed.
+    pub right_click: Option<Pos2>,
 }
 
 /// Tools with the options-bar brush chip, which opens the Brush Preset picker.
@@ -236,16 +238,15 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && right_started;
-    let right_click = response.secondary_clicked();
-    if right_click
-        && !erase
+    let menu_click = right_click(app, response, tool, mods);
+    if !erase
         && !layer_menu
         && right_click_picker(tool)
-        && let Some(p) = response.interact_pointer_pos()
+        && let Some(p) = menu_click
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
     }
-    let erase_click = erase && right_click;
+    let erase_click = erase && response.secondary_clicked();
     app.secondary_erase = right_start || erase_click;
     let right_drag = right_stroke || resizing;
     Buttons {
@@ -253,7 +254,42 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
         dragged: response.dragged_by(PointerButton::Primary) || (right_drag && right_dragged),
         stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && right_stopped),
         clicked: response.clicked() || erase_click,
+        right_click: menu_click,
     }
+}
+
+/// A right-click on the canvas `response`, for its menus: the right button pressed on it and let
+/// go on it, however far the pointer drifted or however long it was held in between. egui's click
+/// allows only a few points of movement and under a second, which a pen's jitter or a slow click
+/// breaks (user report: the canvas menu sometimes didn't open). Not a press that starts something
+/// of its own: an Alt+right-drag brush resize or an erasing right stroke. Where it was pressed.
+/// Call once a frame: the release takes the press.
+fn right_click(app: &PhotocraftApp, response: &Response, tool: Tool, mods: egui::Modifiers) -> Option<Pos2> {
+    let ctx = &response.ctx;
+    let key = response.id.with("right-press");
+    let (pressed, released, at) =
+        ctx.input(|i| (i.pointer.button_pressed(PointerButton::Secondary), i.pointer.button_released(PointerButton::Secondary), i.pointer.interact_pos()));
+    let resize = crate::brush_resize::applies(tool) && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods));
+    let own = resize || right_erases(app, tool);
+    if pressed {
+        let on = at.filter(|p| !own && response.hovered() && response.rect.contains(*p));
+        ctx.data_mut(|d| {
+            if let Some(p) = on {
+                d.insert_temp(key, p);
+            } else {
+                d.remove_temp::<Pos2>(key);
+            }
+        });
+    }
+    if response.secondary_clicked() && !own {
+        ctx.data_mut(|d| d.remove_temp::<Pos2>(key));
+        return response.interact_pointer_pos().or(at);
+    }
+    if !released {
+        return None;
+    }
+    let start = ctx.data_mut(|d| d.remove_temp::<Pos2>(key))?;
+    at.filter(|p| response.rect.contains(*p)).map(|_| start)
 }
 
 /// `ui.pointer` with `"button": "secondary"`: true when its events should reach the tool (an

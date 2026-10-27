@@ -195,3 +195,46 @@ fn deleting_a_set_asks_and_takes_its_actions() {
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(app.session.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["B"]);
 }
+
+/// User request: Action Options › Play once for each selected layer. With it on and several
+/// layers selected, Play runs the action on each in turn (each alone selected), then selects them
+/// all again; with one layer selected, or the option off, it plays once.
+#[test]
+fn play_once_for_each_selected_layer() {
+    let half = ("layer.setProps".to_string(), json!({"opacity": 0.5}));
+    let mut app = app_with(vec![Action::new("Half", vec![half])]);
+    let ids: Vec<u64> = ["A", "B", "C"].iter().map(|n| app.run("layer.new.layer", json!({"name": n})).unwrap()["layer"].as_u64().unwrap()).collect();
+    let opacity = |app: &PhotocraftApp, id: u64| app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().opacity;
+    let d = action_options(&mut app, 0).unwrap();
+    assert_eq!(app.ui.dialog_mut(d).unwrap().fields["eachLayer"], false);
+    set_field(&mut app, d, "eachLayer", json!(true));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert!(app.session.actions.list[0].each_layer);
+    app.run("layer.select", json!({"layer": ids[0]})).unwrap();
+    app.run("layer.select", json!({"layer": ids[2], "mode": "add"})).unwrap();
+    let r = app.run("actions.play", json!({"action": "Half"})).unwrap();
+    assert_eq!((r["ran"].clone(), r["layers"].clone()), (json!(2), json!(2)), "{r}");
+    assert_eq!([opacity(&app, ids[0]), opacity(&app, ids[1]), opacity(&app, ids[2])], [0.5, 1.0, 0.5]);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.selected_layers().iter().map(|l| l.0).collect::<Vec<_>>(), [ids[0], ids[2]], "both selected again");
+    assert_eq!(st.active_layer.map(|l| l.0), Some(ids[2]));
+    // The option off (here per call), or one layer selected: one run, on the active layer.
+    let reset = |app: &mut PhotocraftApp| app.session.execute("layer.setProps", json!({"layers": ids, "opacity": 1.0})).unwrap();
+    reset(&mut app);
+    let r = app.run("actions.play", json!({"action": "Half", "eachLayer": false})).unwrap();
+    assert!(r.get("layers").is_none());
+    assert_eq!([opacity(&app, ids[0]), opacity(&app, ids[1]), opacity(&app, ids[2])], [1.0, 1.0, 0.5]);
+    reset(&mut app);
+    app.run("layer.select", json!({"layer": ids[1]})).unwrap();
+    app.run("actions.play", json!({"action": "Half"})).unwrap();
+    assert_eq!([opacity(&app, ids[0]), opacity(&app, ids[1]), opacity(&app, ids[2])], [1.0, 0.5, 1.0]);
+    // Headless (the engine's own playback) does the same.
+    reset(&mut app);
+    app.session.execute("layer.select", json!({"layer": ids[0]})).unwrap();
+    app.session.execute("layer.select", json!({"layer": ids[1], "mode": "add"})).unwrap();
+    let r = app.session.execute("actions.play", json!({"action": "Half"})).unwrap();
+    assert_eq!(r["layers"], 2);
+    assert_eq!([opacity(&app, ids[0]), opacity(&app, ids[1]), opacity(&app, ids[2])], [0.5, 0.5, 1.0]);
+    assert!(app.session.execute("actions.setEachLayer", json!({"action": "Half"})).is_err());
+    assert!(app.session.execute("actions.play", json!({"action": "Half", "eachLayer": "yes"})).is_err());
+}

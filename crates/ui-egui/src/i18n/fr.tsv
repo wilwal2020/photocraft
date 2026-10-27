@@ -4852,6 +4852,9 @@ shape	Appearance	Apparence
 	Print preview image	Print preview image
 # Color Range recorded in an action: the sampled colours (2026-10-23)
 	Sample: recorded colours	Échantillon : couleurs enregistrées
+	Sample: the colours used last	Échantillon : dernières couleurs utilisées
+	Play once for each selected layer	Exécuter une fois pour chaque calque sélectionné
+	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	Avec plusieurs calques sélectionnés, Exécuter applique l’action à chacun tour à tour, seul ce calque étant sélectionné
 # Remove tool AI Remove; pinned brush group (2026-10-23)
 	AI Remove	Supprimer par IA
 	Remove what is selected with Nano Banana ({key})	Supprimer la sélection avec Nano Banana ({key})

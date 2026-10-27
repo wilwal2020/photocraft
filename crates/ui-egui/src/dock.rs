@@ -562,6 +562,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.spacing_mut().scroll.fade.strength = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt(("dock-scroll", g.key(), tab))
+                    .scroll_bar_visibility(crate::panels::body_scroll_bar(app, t.pro, g, tab))
                     .max_height(inner)
                     .auto_shrink([false, false])
                     .show(ui, |ui| body(app, ui, g, tab));

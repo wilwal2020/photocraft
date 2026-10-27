@@ -393,7 +393,7 @@ fn lab_range_param(p: &Value) -> std::result::Result<Option<sel::LabRange>, Stri
 /// with the colour somewhere else, it selects the same colours (user report: the action sampled
 /// whatever was at the old position). Localized Color Clusters keep their points, which they
 /// need; a step that can't be sampled is kept as it was.
-pub(crate) fn recorded_color_range(s: &Session, p: Value) -> Value {
+pub fn recorded_color_range(s: &Session, p: Value) -> Value {
     let sampled = p.get("select").and_then(Value::as_str).unwrap_or("sampledColors") == "sampledColors";
     let picked = p.get("points").is_some() || p.get("subtractPoints").is_some();
     if !sampled || !picked || b(&p, "localized", false) {
