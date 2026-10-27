@@ -8,8 +8,10 @@ mod camera_raw;
 mod device_loss;
 #[cfg(windows)]
 mod dx12_release;
+mod effect_noise;
 mod parity;
 mod pipeline_errors;
+mod second_mask;
 mod timing;
 mod uniform_limits;
 mod vector_mask;

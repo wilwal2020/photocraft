@@ -241,11 +241,20 @@ impl B {
     fn finish(&mut self, a: In, b: Option<In>, invert: bool, contour: &Contour, times_shape: bool, out: usize) {
         self.finish_lut(a, b, invert, contour_lut(contour), times_shape, out);
     }
+    /// A shadow's last step: [`Self::finish`] with its Noise (`effects::noise`, after the
+    /// contour and before × the shape), the document-coordinate speckle the CPU maps have.
+    fn finish_noisy(&mut self, a: In, contour: &Contour, inner: bool, noise: f32) {
+        self.finish(a, None, false, contour, inner, 0);
+        if let Some(s) = self.stages.last_mut() {
+            s.p1 = [noise_amount(noise), 0.0, 0.0, 0.0];
+        }
+    }
     /// A glow's last step: its contour over the Range, then (centre-source inner glows) the
-    /// inverse, then × the shape when inner.
-    fn finish_glow(&mut self, a: In, lut: Option<Vec<f32>>, inner: bool, center: bool) {
+    /// inverse, then its Noise, then × the shape when inner.
+    fn finish_glow(&mut self, a: In, lut: Option<Vec<f32>>, inner: bool, center: bool, noise: f32) {
         let mut s =
             stage(Kernel::MFinish, Some(a), None, [0.0, if center { 2.0 } else { 0.0 }, f32::from(u8::from(lut.is_some())), f32::from(u8::from(inner))], 0);
+        s.p1 = [noise_amount(noise), 0.0, 0.0, 0.0];
         s.lut = lut.map(Arc::new);
         if inner {
             s.s = Some(In::Shape);
@@ -264,6 +273,11 @@ impl B {
         s.out = Some(out);
         self.stages.push(s);
     }
+}
+
+/// The Noise amount `fs_mfinish` applies (`effects::noise` skips 0 and anything not finite).
+fn noise_amount(n: f32) -> f32 {
+    if n.is_finite() { n.max(0.0) } else { 0.0 }
 }
 
 /// Distance up to which a field must be exact for a band / dilation of width `w`
@@ -326,7 +340,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                 m = b.dilate(src, d, r);
             }
             let m = b.blur(m, bw);
-            b.finish(m, None, false, &s.contour, inner, 0);
+            b.finish_noisy(m, &s.contour, inner, s.noise);
             1
         }
         Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
@@ -339,7 +353,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                     let solid = g.size * g.spread;
                     let soft = (g.size + 1.0 - solid).max(1e-3);
                     let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, 0.0, 0.0], 0));
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center, g.noise);
                 }
                 GlowTechnique::Softer => {
                     // Inner glows (edge, and centre as 1 - the edge result) spread 1 - alpha.
@@ -351,7 +365,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                         m = b.dilate(src, d, r);
                     }
                     let m = b.blur(m, bw);
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center, g.noise);
                 }
             }
             1
@@ -649,6 +663,12 @@ pub(crate) fn shape_sources(layer: &Layer) -> (Option<&Surface>, Option<&Surface
     (content, mask)
 }
 
+/// The enabled second pixel mask's surface, the shape's third source: the shape
+/// (`compose::layer_shape`) comes through it too, so its tiles are watched like the others.
+pub(crate) fn second_mask_source(layer: &Layer) -> Option<&Surface> {
+    layer.second_mask.as_ref().filter(|m| m.enabled).map(|m| &m.surface)
+}
+
 /// Everything a non-group layer's shape depends on except tile contents and position.
 pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -685,10 +705,10 @@ pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
         }
         other => std::mem::discriminant(other).hash(&mut h),
     }
-    for s in [content, mask].into_iter().flatten() {
+    for s in [content, mask, second_mask_source(layer)].into_iter().flatten() {
         format!("{:?}{:?}", s.format(), s.default_pixel()).hash(&mut h);
     }
-    if let Some(m) = &layer.mask {
+    for m in [&layer.mask, &layer.second_mask].into_iter().flatten() {
         (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(&mut h);
     }
     format!("{:?}", layer.vector_mask).hash(&mut h);

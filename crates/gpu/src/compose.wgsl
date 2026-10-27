@@ -1459,7 +1459,8 @@ fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
 }
 
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v (1: before the contour, 2: after it,
-// as a centre-source inner glow), contour (LUT row 0), × shape (`layer_tex`)).
+// as a centre-source inner glow), contour (LUT row 0), × shape (`layer_tex`)); p1.x = Noise
+// (`effects::noise`: the coverage speckled by the document-coordinate hash, before × shape).
 @fragment
 fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
@@ -1468,6 +1469,7 @@ fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
     if (op.p0.y > 0.5 && op.p0.y < 1.5) { v = 1.0 - v; }
     if (op.p0.z > 0.5) { v = lut(0, v); }
     if (op.p0.y > 1.5) { v = 1.0 - v; }
+    if (op.p1.x > 0.0 && v > 0.0) { v = clamp(v * (1.0 + (dissolve_noise(doc_px(p)) - 0.5) * 2.0 * op.p1.x), 0.0, 1.0); }
     if (op.p0.w > 0.5) { v = v * textureLoad(layer_tex, p, 0).r; }
     return mout(v);
 }

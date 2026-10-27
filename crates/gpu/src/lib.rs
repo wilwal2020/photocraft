@@ -319,8 +319,8 @@ struct FxEntry {
     doc: DocId,
     region: Rect,
     shape_key: u64,
-    /// Tiles the shape was rendered from (content, mask): damage is their difference.
-    tiles: [Option<fx::Tiles>; 2],
+    /// Tiles the shape was rendered from (content, mask, second mask): damage is their difference.
+    tiles: [Option<fx::Tiles>; 3],
     /// Groups: the tiles `shape_key` hashes, by address only (see [`fx::Tiles`]).
     _pin: Vec<std::sync::Weak<Tile>>,
     /// The shape on the CPU (distance fields are computed from it) and on the GPU.
@@ -1009,16 +1009,8 @@ impl Compositor {
                 }
             }
             for e in f.layer.effects.items.iter().filter(|e| e.enabled()) {
-                // Effect noise is speckled in the CPU maps; keep CPU and GPU identical by
-                // rendering noise-carrying effects on the CPU path.
-                let noisy = match e {
-                    photocraft_doc::Effect::DropShadow(s) | photocraft_doc::Effect::InnerShadow(s) => s.noise > 0.0,
-                    photocraft_doc::Effect::OuterGlow(g) | photocraft_doc::Effect::InnerGlow(g) => g.noise > 0.0,
-                    _ => false,
-                };
-                if noisy {
-                    return Err(Unsupported(format!("effect noise on `{}` uses the CPU path", f.layer.name)));
-                }
+                // Effect noise is the CPU maps' document-coordinate speckle, made the same way
+                // in `fs_mfinish` (it once sent the whole canvas to the CPU: a 7 s frame).
                 for s in fx::program_with(e, &doc.global_light, false, &doc.patterns, (0.0, 0.0)).stages {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
                         return Err(Unsupported(format!("effect blur on `{}` too wide for the GPU path", f.layer.name)));
@@ -2067,15 +2059,13 @@ impl Compositor {
         stats: &mut Stats,
     ) -> Result<(), Unsupported> {
         let layer = f.layer;
-        // Effect shapes are read through the first pixel mask only; the CPU compositor shapes
-        // effects through both.
-        if photocraft_compose::masks::has_second_mask(layer) {
-            return Err(Unsupported("effects on a layer with a second mask (composited on the CPU)".into()));
-        }
         let canvas = doc.bounds();
         let is_group = matches!(layer.content, LayerContent::Group(_));
         let shape_key = if is_group { fx::group_key(layer, &doc.global_light, &mut |_| {}) } else { fx::shape_key(layer, canvas) };
         let (content_src, mask_src) = if is_group { (None, None) } else { fx::shape_sources(layer) };
+        // The shape comes through the second pixel mask too (`compose::layer_shape`), so its
+        // edits are damage like the first's (it once sent the whole canvas to the CPU).
+        let second_src = if is_group { None } else { fx::second_mask_source(layer) };
         let frame = self.frame;
         let (rw, rh) = (region.width(), region.height());
 
@@ -2088,7 +2078,7 @@ impl Compositor {
             && let Some(e) = self.fx.get(&key)
         {
             rebuild = false;
-            for (old, cur) in e.tiles.iter().zip([content_src, mask_src]) {
+            for (old, cur) in e.tiles.iter().zip([content_src, mask_src, second_src]) {
                 let d = match (old, cur) {
                     (Some(o), Some(s)) => fx::damage(o, s),
                     (None, None) => Rect::EMPTY,
@@ -2121,7 +2111,7 @@ impl Compositor {
                     doc: doc.id,
                     region,
                     shape_key,
-                    tiles: [None, None],
+                    tiles: [None, None, None],
                     _pin: if is_group {
                         let mut pin = Vec::new();
                         fx::group_key(layer, &doc.global_light, &mut |t| pin.push(Arc::downgrade(t)));
@@ -2145,7 +2135,7 @@ impl Compositor {
         e.last_used = frame;
         e.stamp = stamp;
         e.doc = doc.id;
-        e.tiles = [content_src.map(fx::snapshot), mask_src.map(fx::snapshot)];
+        e.tiles = [content_src.map(fx::snapshot), mask_src.map(fx::snapshot), second_src.map(fx::snapshot)];
         if region.is_empty() {
             return Ok(());
         }
