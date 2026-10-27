@@ -1076,6 +1076,8 @@ pub struct PhotocraftApp {
     /// last logged (`slow_frames`).
     frame_starts: [f64; 2],
     slow_frame_logged: f64,
+    /// This frame's input moved the pointer (`slow_frames`).
+    frame_moved: bool,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -1247,6 +1249,7 @@ impl PhotocraftApp {
             last_frame_start_ms: 0.0,
             frame_starts: [0.0; 2],
             slow_frame_logged: f64::NEG_INFINITY,
+            frame_moved: false,
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
@@ -2504,6 +2507,7 @@ impl eframe::App for PhotocraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
         self.frame_starts = [self.frame_starts[1], frame_start];
+        self.frame_moved = raw_input.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)));
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
         if let Some(window_frame) = self.services.window_frame.as_mut() {
@@ -2726,12 +2730,14 @@ impl PhotocraftApp {
             refresh_kind: self.perf.last_refresh,
             cpu_prev: frame.info().cpu_usage.map(f64::from),
             held: ctx.input(|i| i.pointer.any_down()),
+            moved: self.frame_moved,
             tool: format!("{:?}", self.active_tool()),
             document: self.session.active().map(|d| (d.doc.size.width, d.doc.size.height)),
         };
-        if let Some(line) = slow_frames::report(&slow, self.frame_starts[0], &mut self.slow_frame_logged, &self.perf.spans) {
+        if let Some(line) = slow_frames::report(&slow, self.frame_starts[0], &mut self.slow_frame_logged, &self.perf.frame_spans) {
             log::warn!("{line}");
         }
+        self.perf.frame_spans.clear();
         fill_tool_ui::tick(self);
         if self.stroke_trace.enabled() {
             self.stroke_trace.canvas(self.perf.frame_refresh_ms);

@@ -1,10 +1,12 @@
 //! Slow frames in the log (user report: painting is smooth, then lags for about a second, panning
 //! too, then is smooth again). A frame whose UI build takes [`SLOW_BUILD_MS`] or more, or that
-//! starts [`SLOW_GAP_MS`] or more after the one before while a button is held (a stroke or a pan
-//! going on), is logged as a warning with where its time went: the canvas refresh, eframe's CPU
+//! starts [`SLOW_GAP_MS`] or more after the one before while a button is held and the pointer
+//! moves (a stroke or a pan going on: a pointer held still draws no frames, which is no lag), is
+//! logged as a warning with where its time went: the canvas refresh, eframe's CPU
 //! time for the frame before (tessellation, GPU submission), and the perf spans panel by panel. At
 //! most one line every [`EVERY_MS`], so a run of slow frames doesn't flood the log. The log file
-//! (Help › Show Log) then names what a spike was without a trace running.
+//! (`photocraft.log` in the settings folder's `logs`; on Windows `%APPDATA%\Photocraft\logs`) then
+//! names what a spike was without a trace running.
 
 /// A UI build this long is logged (ms).
 pub(crate) const SLOW_BUILD_MS: f64 = 150.0;
@@ -27,6 +29,8 @@ pub(crate) struct Frame {
     pub cpu_prev: Option<f64>,
     /// A pointer button is held.
     pub held: bool,
+    /// The pointer moved since the frame before.
+    pub moved: bool,
     /// The tool and the document's size, for context.
     pub tool: String,
     pub document: Option<(u32, u32)>,
@@ -37,7 +41,7 @@ pub(crate) struct Frame {
 pub(crate) fn report(f: &Frame, prev_start: f64, last_logged: &mut f64, spans: &std::collections::BTreeMap<&'static str, f64>) -> Option<String> {
     let gap = if prev_start > 0.0 { f.start - prev_start } else { 0.0 };
     let slow_build = f.build >= SLOW_BUILD_MS;
-    let slow_gap = f.held && gap >= SLOW_GAP_MS;
+    let slow_gap = f.held && f.moved && gap >= SLOW_GAP_MS;
     if !(slow_build || slow_gap) || !f.build.is_finite() || f.start - *last_logged < EVERY_MS {
         return None;
     }
@@ -84,6 +88,7 @@ mod tests {
             refresh_kind: "gpu tiles",
             cpu_prev: Some(8.0),
             held: true,
+            moved: true,
             tool: "Brush".into(),
             document: Some((5217, 4200)),
         };
@@ -94,7 +99,9 @@ mod tests {
         assert!(line.contains("tool Brush, 5217x4200"), "{line}");
         let again = Frame { start: 31_000.0, ..slow.clone() };
         assert_eq!(report(&again, 30_500.0, &mut last, &spans()), None, "at most one line every 2 s");
-        let gap = Frame { start: 40_000.0, build: 6.0, held: true, ..Default::default() };
+        let still = Frame { start: 40_000.0, build: 6.0, held: true, moved: false, ..Default::default() };
+        assert_eq!(report(&still, 39_000.0, &mut last, &Default::default()), None, "a button held still draws no frames");
+        let gap = Frame { moved: true, ..still };
         let line = report(&gap, 39_000.0, &mut last, &Default::default()).unwrap();
         assert!(line.starts_with("slow frame: 1000 ms since the last frame with a button held"), "{line}");
         let nan = Frame { start: 50_000.0, build: f64::NAN, held: true, ..Default::default() };

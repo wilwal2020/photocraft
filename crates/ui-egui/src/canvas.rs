@@ -7026,9 +7026,16 @@ fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     }
     let started = crate::gpu_canvas::now_ms();
     let result = app.run(stroke_command(app, d.tool), p);
-    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
+    let took = crate::gpu_canvas::now_ms() - started;
+    app.stroke_trace.stroke(took);
+    app.perf.span("stroke commit", took);
     app.session.clear_live_stroke();
     let Ok(r) = result else { return };
+    // The live stroke's pixels were refused: the stroke was drawn again at pen-up (a hitch on a
+    // large page). Say why in the log (user report: lag spikes while painting).
+    if let Some(why) = r.get("liveMissed").and_then(serde_json::Value::as_str) {
+        log::warn!("stroke drawn again at pen-up in {took:.0} ms: {why}");
+    }
     let after = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| (st.revision, st.doc.clone()));
     if r.get("fromLive").and_then(serde_json::Value::as_bool) == Some(true)
         && let Some((revision, after)) = after

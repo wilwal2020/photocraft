@@ -1124,6 +1124,10 @@ pub struct Perf {
     pub command_ms: f64,
     /// Most recent cost of occasional UI work (outline tracing, thumbnails, …), in ms.
     pub spans: std::collections::BTreeMap<&'static str, f64>,
+    /// The spans this frame measured (cleared as each frame starts): what the slow-frame log
+    /// shows, without costs left over from earlier frames.
+    #[serde(skip)]
+    pub(crate) frame_spans: std::collections::BTreeMap<&'static str, f64>,
     #[serde(skip)]
     max_decay: f64,
     /// Composite and upload time of this frame's canvas refreshes, in ms (the stroke trace).
@@ -1302,7 +1306,9 @@ impl Perf {
         self.gpu_ms_px = t.px;
     }
     pub fn span(&mut self, name: &'static str, ms: f64) {
-        self.spans.insert(name, (ms * 100.0).round() / 100.0);
+        let ms = (ms * 100.0).round() / 100.0;
+        self.spans.insert(name, ms);
+        *self.frame_spans.entry(name).or_insert(0.0) += ms;
     }
     pub fn frame(&mut self, ms: f64) {
         self.ui_ms = if self.ui_ms == 0.0 { ms } else { self.ui_ms * 0.9 + ms * 0.1 };

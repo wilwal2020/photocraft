@@ -1358,3 +1358,33 @@ fn resizing_the_brush_scales_its_dual_tip() {
     assert_eq!(picked.size, 100.0);
     assert!((picked.dual_brush.size - 40.0).abs() < 1e-3);
 }
+
+/// User report: lag spikes while painting. A refused offer redraws the stroke at pen-up; the
+/// result says why (`liveMissed`) so the app can log it. A taken offer says nothing.
+#[test]
+fn a_refused_offer_says_why() {
+    let pts = [[10.0, 50.0, 1.0], [60.0, 30.0, 0.7], [120.0, 60.0, 0.9]];
+    let base = json!({"brush": {"size": 10}, "smoothing": 0.0, "target": "pixels"});
+    let missed = |change: &dyn Fn(&mut Session, &mut Value)| {
+        let mut s = session(200, 100);
+        let (live, mut p) = live_and_commit(&s, "paint.stroke", base.clone(), &pts);
+        change(&mut s, &mut p);
+        s.offer_live_stroke(live).unwrap();
+        let r = s.execute("paint.stroke", p).unwrap();
+        s.clear_live_stroke();
+        r.get("liveMissed").and_then(Value::as_str).map(str::to_string)
+    };
+    assert_eq!(missed(&|_, _| {}), None, "taken");
+    let why = missed(&|s, _| {
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.select_layer(id).unwrap();
+    })
+    .unwrap();
+    assert!(why.starts_with("the document changed during the stroke"), "{why}");
+    let why = missed(&|_, p| p["points"][1] = json!([60.0, 30.0, 0.5])).unwrap();
+    assert!(why.starts_with("point 1 of 3 differs"), "{why}");
+    let why = missed(&|_, p| p["points"] = json!([[10.0, 50.0, 1.0]])).unwrap();
+    assert_eq!(why, "3 points drawn, 1 committed");
+    let why = missed(&|_, p| p["smoothing"] = json!(0.5)).unwrap();
+    assert_eq!(why, "the settings changed during the stroke (smoothing)");
+}

@@ -288,7 +288,9 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let cmyk = doc_cmyk_space(s);
     // The live stroke the canvas already rendered for exactly these params: take its pixels
     // instead of rendering the whole stroke again (the hitch at pen-up).
-    let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
+    let offered = s.live_commit.take();
+    let missed = offered.as_ref().and_then(|l| l.mismatch(s, cmd, p, &pts));
+    let live = offered.filter(|_| missed.is_none());
     let from_live = live.is_some();
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
@@ -334,6 +336,9 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let mut r = damage_json(s, dmg);
     if from_live {
         r["fromLive"] = json!(true);
+    }
+    if let Some(why) = missed {
+        r["liveMissed"] = json!(why);
     }
     Ok(r)
 }
@@ -489,12 +494,43 @@ impl LiveCommit {
     }
 
     pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
-        let base = s.active().map(|st| (st.doc.id, st.revision));
-        self.cmd == cmd
-            && base == Some(self.base)
-            && p.get("seed").and_then(Value::as_u64) == self.seed
-            && self.points == pts
-            && Self::settings(p) == Self::settings(&self.params)
+        self.mismatch(s, cmd, p, pts).is_none()
+    }
+
+    /// Why these pixels can't stand in for `cmd` with `p` and `pts` (`None`: they can). A refused
+    /// offer means the stroke is drawn again at pen-up, which on a large page is a hitch (user
+    /// report: lag spikes while painting); the reason goes in the result (`liveMissed`) so the app
+    /// can log it.
+    pub(crate) fn mismatch(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> Option<String> {
+        if self.cmd != cmd {
+            return Some(format!("a {} stroke was offered to {cmd}", self.cmd));
+        }
+        match s.active().map(|st| (st.doc.id, st.revision)) {
+            Some(b) if b == self.base => {}
+            Some((doc, revision)) if doc == self.base.0 => {
+                return Some(format!("the document changed during the stroke (revision {} to {revision})", self.base.1));
+            }
+            _ => return Some("another document is active".into()),
+        }
+        if p.get("seed").and_then(Value::as_u64) != self.seed {
+            return Some("a different seed".into());
+        }
+        if self.points != pts {
+            if self.points.len() != pts.len() {
+                return Some(format!("{} points drawn, {} committed", self.points.len(), pts.len()));
+            }
+            let (i, (a, b)) = self.points.iter().zip(pts).enumerate().find(|(_, (a, b))| a != b)?;
+            return Some(format!("point {i} of {} differs: drawn {a:?}, committed {b:?}", pts.len()));
+        }
+        let (now, then) = (Self::settings(p), Self::settings(&self.params));
+        if now != then {
+            let keys: Vec<String> = match (now.as_object(), then.as_object()) {
+                (Some(a), Some(b)) => a.keys().chain(b.keys()).filter(|k| a.get(*k) != b.get(*k)).map(String::clone).collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
+                _ => Vec::new(),
+            };
+            return Some(format!("the settings changed during the stroke ({})", keys.join(", ")));
+        }
+        None
     }
 }
 
