@@ -74,7 +74,9 @@ const MAX_REQUESTS: usize = 4;
 const RING: usize = 24;
 /// Least correlation between the answer's detail and the page's away from the hole: below it the
 /// model changed the picture's framing (zoomed in, shifted) beyond what [`Crop::align`] corrects,
-/// and its fill wouldn't meet the page.
+/// and its fill wouldn't meet the page. The Remove tool, AI Remove and AI Outpaint refuse such an
+/// answer; Generative Fill ([`Intent::Prompt`]) takes it anyway (user request: the user asked for
+/// a change and judges it on its own layer), placed as well as it fits.
 const MIN_MATCH: f64 = 0.5;
 /// The largest shift the colour match applies (0–1 sRGB).
 const MAX_SHIFT: f32 = 0.25;
@@ -190,7 +192,7 @@ pub enum Intent {
     Extend,
     /// Generative Fill: the picture as it is and the user's words alone, nothing added and no
     /// marker painted (user request: Nano Banana as a plain editor). Only the hole's pixels are
-    /// taken from the answer.
+    /// taken from the answer, even when it doesn't line up with the page ([`MIN_MATCH`]).
     Prompt,
 }
 
@@ -1147,7 +1149,9 @@ pub(crate) fn pieces_via(
             placed.dx,
             placed.dy
         );
-        if matched < MIN_MATCH {
+        if matched < MIN_MATCH && opts.intent == Intent::Prompt {
+            log::warn!("[ml] {NAME}: the answer doesn't line up with the page ({:.0} % match); Generative Fill takes it anyway", matched.max(0.0) * 100.0);
+        } else if matched < MIN_MATCH {
             return Err(MlError::Inference(format!(
                 "Google's picture doesn't line up with the page (it changed the framing; {:.0} % match), so its fill wouldn't fit: try again (each try is billed)",
                 matched.max(0.0) * 100.0

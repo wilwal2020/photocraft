@@ -422,6 +422,11 @@ fn an_answer_that_changed_the_framing_is_refused() {
     };
     let e = fill_via(&req, &mut read, "", Options::default(), &Interrupt::NONE, &mut zoomed).unwrap_err();
     assert!(e.to_string().contains("doesn't line up"), "{e}");
+    // Generative Fill takes it anyway (user request): only the selection changes.
+    let prompt = Options { intent: Intent::Prompt, ..Options::default() };
+    let out = fill_via(&req, &mut read, "a window", prompt, &Interrupt::NONE, &mut zoomed).expect("Generative Fill lets it through");
+    assert!(hole.iter().enumerate().all(|(k, h)| *h || out[k * 3..k * 3 + 3] == px[k * 3..k * 3 + 3]), "outside the selection untouched");
+    assert!(hole.iter().enumerate().any(|(k, h)| *h && out[k * 3..k * 3 + 3] != px[k * 3..k * 3 + 3]), "the selection is filled");
     // The same picture answered in its framing is taken.
     let mut sent = Vec::new();
     assert!(fill_via(&req, &mut read, "", Options::default(), &Interrupt::NONE, &mut fake(&mut sent)).is_ok());
