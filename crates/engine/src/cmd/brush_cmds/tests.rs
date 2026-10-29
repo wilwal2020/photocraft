@@ -1151,19 +1151,22 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     let mut s = new();
     assert!(s.execute("tools.setBrush", json!({ "brush": scatter(1e38) })).is_err());
     assert!(s.execute("paint.stroke", stroke.clone()).is_ok());
-    // The maximum (1000 %) is accepted and paints a finite, well-formed dab.
-    for patch in [scatter(10.0), dual(10.0)] {
+    // The maximum (1000 %) is accepted and paints a finite, well-formed dab. Scattered that far
+    // the one dab may land off this 32 px canvas, which paints nothing there.
+    for (patch, on_canvas) in [(scatter(10.0), false), (dual(10.0), true)] {
         let mut s = new();
         s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
         let r = s.execute("paint.stroke", stroke.clone()).unwrap();
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
-        assert!(d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0, "{r}");
+        assert!((0..=32).contains(&d[0]) && (0..=32).contains(&d[1]) && d[0] + d[2] <= 32 && d[1] + d[3] <= 32, "{r}");
+        assert!(!on_canvas || (d[2] > 0 && d[3] > 0), "{r}");
     }
     // Control: 200 % scatter paints a finite dab within its reach (the soft default tip reaches a
-    // little past its radius). Both Axes scatters in a disc, like Photoshop (2026-10-17).
+    // little past its radius), cut to the canvas: 12, -16, 27 × 27 before the canvas clip. Both
+    // Axes scatters in a disc, like Photoshop (2026-10-17).
     let mut s = new();
     s.execute("tools.setBrush", json!({ "brush": scatter(2.0) })).unwrap();
-    assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [12, -16, 27, 27]}));
+    assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [12, 0, 20, 11]}));
 }
 
 #[test]
@@ -1491,4 +1494,37 @@ fn a_refused_offer_says_why() {
     assert_eq!(why, "3 points drawn, 1 committed");
     let why = missed(&|_, p| p["smoothing"] = json!(0.5)).unwrap();
     assert_eq!(why, "the settings changed during the stroke (smoothing)");
+}
+
+/// Photoshop paints only on the canvas: a stroke that runs off the edge leaves the layer
+/// untouched beyond it, reports no damage there, and paints the canvas exactly as on a wider one.
+/// The live stroke shows the same.
+#[test]
+fn strokes_paint_only_on_the_canvas() {
+    let pts = [[150.0, 50.0, 1.0], [260.0, 50.0, 1.0], [260.0, 140.0, 1.0]];
+    let p = json!({"points": pts, "size": 40, "brush": {"hardness": 0.0}, "smoothing": 0.0, "color": "#ff0000", "seed": 7});
+    let mut s = session(200, 100);
+    let r = s.execute("paint.stroke", p.clone()).unwrap();
+    let canvas = Rect::new(0, 0, 200, 100);
+    let damage = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap() as i32).collect::<Vec<_>>();
+    let damage = Rect::new(damage[0], damage[1], damage[0] + damage[2], damage[1] + damage[3]);
+    assert!(!damage.is_empty() && canvas.contains_rect(&damage), "{damage:?}");
+    let surf = surface(&s);
+    assert!((200..300).all(|x| (0..160).all(|y| surf.rgba(x, y)[3] == 0.0)), "nothing right of the canvas");
+    assert!((0..200).all(|x| (100..160).all(|y| surf.rgba(x, y)[3] == 0.0)), "nothing below it");
+    assert!(surf.rgba(199, 50)[3] > 0.9, "the canvas is painted up to its edge");
+    // On a wider canvas the same stroke paints the same pixels inside the narrow one.
+    let mut wide = session(400, 200);
+    wide.execute("paint.stroke", p.clone()).unwrap();
+    assert!(same_pixels(&surf, &surface(&wide), canvas));
+    // The live preview clips the same way.
+    let narrow = session(200, 100);
+    let mut live =
+        LiveStroke::begin(&narrow, &json!({"points": [pts[0]], "size": 40, "brush": {"hardness": 0.0}, "smoothing": 0.0, "color": "#ff0000", "seed": 7}))
+            .unwrap();
+    let rest: Vec<StrokePoint> = pts[1..].iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+    live.push(&rest).unwrap();
+    let id = narrow.active().unwrap().active_layer.unwrap();
+    let shown = live.doc.layer(id).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &surf, Rect::new(0, 0, 300, 160)));
 }

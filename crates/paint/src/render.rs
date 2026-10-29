@@ -899,6 +899,8 @@ pub struct StrokeRenderer {
     dab_buf: Vec<Dab>,
     dual_buf: Vec<Dab>,
     all_dabs: Option<Vec<Dab>>,
+    /// Pixels outside this rectangle are never painted (see [`with_clip`](Self::with_clip)).
+    clip: Option<Rect>,
 }
 
 impl StrokeRenderer {
@@ -989,6 +991,7 @@ impl StrokeRenderer {
                         dab_buf: Vec::new(),
                         dual_buf: Vec::new(),
                         all_dabs: None,
+                        clip: p.clip,
                     })
                 }
                 Some(m) => {
@@ -1038,7 +1041,16 @@ impl StrokeRenderer {
             dab_buf: Vec::new(),
             dual_buf: Vec::new(),
             all_dabs: None,
+            clip: None,
         }
+    }
+
+    /// Paint only inside `clip`: the document's canvas, as in Photoshop, where a brush dragged
+    /// past the edge paints nothing beyond it (and a huge brush there costs only its part on the
+    /// canvas). Dabs are still placed as without the clip, so the pixels inside are the same.
+    pub fn with_clip(mut self, clip: Rect) -> Self {
+        self.clip = Some(clip);
+        self
     }
 
     /// Keep a copy of every primary dab (for tests and sequential tools).
@@ -1074,11 +1086,12 @@ impl StrokeRenderer {
             _ => None,
         };
         // Bounds track the full dab rectangle (even fully transparent parts), like the damage.
-        let rects: Vec<Rect> = dabs.iter().map(|d| self.ctx.paint_rect(d, false)).collect();
+        let clip = |r: Rect| self.clip.map_or(r, |c| r.intersect(&c));
+        let rects: Vec<Rect> = dabs.iter().map(|d| clip(self.ctx.paint_rect(d, false))).collect();
         let ceil: Vec<f32> = dabs.iter().map(|d| d.opacity).collect();
         self.cov.apply_dabs(&self.ctx, &dabs, &rects, &ceil, colors.as_deref(), false);
         if let Some(dm) = self.dual.as_mut() {
-            let rects: Vec<Rect> = duals.iter().map(|d| self.ctx.paint_rect(d, true)).collect();
+            let rects: Vec<Rect> = duals.iter().map(|d| clip(self.ctx.paint_rect(d, true))).collect();
             dm.apply_dabs(&self.ctx, &duals, &rects, &vec![1.0; duals.len()], None, true);
         }
         self.dabs_done += dabs.len();
@@ -1162,6 +1175,7 @@ impl StrokeRenderer {
             dab_buf: dabs,
             dual_buf: duals,
             all_dabs: None,
+            clip: self.clip,
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1598,11 +1612,25 @@ pub fn render_stroke(
     lock_transparency: bool,
     zoom: f32,
 ) -> Rect {
+    render_stroke_clipped(target, brush, points, selection, lock_transparency, zoom, None)
+}
+
+/// [`render_stroke`] painting only inside `clip` (see [`StrokeRenderer::with_clip`]).
+pub fn render_stroke_clipped(
+    target: &mut Surface,
+    brush: &BrushSettings,
+    points: &[StrokePoint],
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    zoom: f32,
+    clip: Option<Rect>,
+) -> Rect {
     if points.is_empty() {
         return Rect::EMPTY;
     }
     let pre = target.clone();
     let mut r = StrokeRenderer::new(brush, Some(target.format()), zoom);
+    r.clip = clip;
     r.push(points);
     r.finish();
     r.composite(&pre, target, selection, lock_transparency, true)
