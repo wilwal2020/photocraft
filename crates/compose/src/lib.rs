@@ -577,6 +577,31 @@ struct TileColumn {
 /// [`render_reduced_in_bands`]; `uniform` off composites every pixel (the reference in tests).
 #[allow(clippy::too_many_arguments)]
 fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<Rect>, band_rows: i32, uniform: bool, stats: &mut ReducedStats) -> Buffer {
+    render_reduced_paced(doc, b, w, h, damage, band_rows, uniform, stats, &|| {})
+}
+
+/// [`thumbnail_buffer`] rendered in bands of [`RENDER_TILE`] rows, calling `pace` before each
+/// band: a render nobody waits for (a timelapse frame) can hold still there while the user
+/// paints, instead of taking cores and memory bandwidth from the brush. The same pixels as
+/// [`thumbnail_buffer`], whatever `pace` does.
+pub fn thumbnail_buffer_paced(doc: &Document, max_side: u32, pace: &dyn Fn()) -> Buffer {
+    let b = doc.bounds();
+    let longest = b.width().max(b.height()).max(1);
+    let (w, h) = thumbnail_size(doc, max_side);
+    let k = longest / max_side.max(1).saturating_mul(2);
+    let mut stats = ReducedStats::default();
+    if k >= 2 && doc.size.area() > PROXY_THUMBNAIL_PIXELS && proxy::proxy_faithful(doc) {
+        pace();
+        let small = proxy::proxy_document(doc, k);
+        render_reduced_paced(&small, small.bounds(), w, h, None, RENDER_TILE, true, &mut stats, pace)
+    } else {
+        render_reduced_paced(doc, b, w, h, None, RENDER_TILE, true, &mut stats, pace)
+    }
+}
+
+/// [`render_reduced_with`], calling `pace` before each band (see [`thumbnail_buffer_paced`]).
+#[allow(clippy::too_many_arguments)]
+fn render_reduced_paced(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<Rect>, band_rows: i32, uniform: bool, stats: &mut ReducedStats, pace: &dyn Fn()) -> Buffer {
     let (fw, fh) = (b.width() as usize, b.height() as usize);
     let (w, h) = (w.clamp(1, b.width().max(1)) as usize, h.clamp(1, b.height().max(1)) as usize);
     let full = Rect::from_xywh(0, 0, w as u32, h as u32);
@@ -605,6 +630,7 @@ fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<R
     let (sy0, sy1) = (span(oy0, fh, h).0, span(oy0 + oh - 1, fh, h).1);
     let src = Rect::new(b.x0 + sx0 as i32, b.y0 + sy0 as i32, b.x0 + sx1 as i32, b.y0 + sy1 as i32);
     if (w, h) == (fw, fh) {
+        pace();
         let mut px = render(doc, src);
         px.rect = out;
         return px;
@@ -676,6 +702,7 @@ fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<R
         let band_h = band_rows_for(src.width(), band_rows).max(RENDER_TILE) as usize;
         let mut y = grid(sy0, b.y0);
         while y < sy1 as i64 {
+            pace();
             let y1 = (y + band_h as i64).min(sy1 as i64);
             let tiles: Vec<(Rect, Rect)> = (y..y1)
                 .step_by(t)
@@ -731,6 +758,7 @@ fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<R
             y = y1;
         }
     } else {
+        pace();
         let ok: Result<(), ()> = render_bands(doc, src, band_rows, |band| {
             stats.composited += band.px.len() as u64;
             let (by0, by1) = ((band.rect.y0 - b.y0) as usize, (band.rect.y1 - b.y0) as usize);
@@ -740,6 +768,8 @@ fn render_reduced_with(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<R
                     add(&mut out[c as usize - ox0], p);
                 }
             });
+            // Before the next band.
+            pace();
             Ok(())
         });
         debug_assert!(ok.is_ok());

@@ -465,6 +465,22 @@ pub struct LiveStroke {
     points: Vec<StrokePoint>,
     /// The document and revision the stroke started on.
     base: (photocraft_doc::DocId, u64),
+    /// What the last [`LiveStroke::push`] spent where (user report: 200–800 ms pushes in the app
+    /// that a test of the same brush and page doesn't show).
+    pub stats: PushStats,
+}
+
+/// Where a [`LiveStroke::push`] spent its time, in milliseconds, and the dabs it laid.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PushStats {
+    /// Taking the document's layer to paint on (a copy of the document when the canvas still
+    /// holds the one shown).
+    pub prep_ms: f64,
+    /// Laying the new dabs (the stroke and its mirrors).
+    pub dabs_ms: f64,
+    /// Compositing the stroke onto the layer, smoothing's tail included.
+    pub composite_ms: f64,
+    pub dabs: usize,
 }
 
 /// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`],
@@ -585,6 +601,7 @@ impl LiveStroke {
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
             base,
+            stats: PushStats::default(),
         };
         live.push(&pts)?;
         Ok(live)
@@ -624,7 +641,10 @@ impl LiveStroke {
         check_coords(pts, &self.cmd)?;
         self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
-        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        let now = crate::timelapse_cmds::recorder::mono_ms;
+        let dabs_before = self.renderer.dab_count();
+        let t0 = now();
+        let result = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -632,7 +652,10 @@ impl LiveStroke {
                     mirror.push(&reflected);
                 }
             }
+            let t1 = now();
+            self.stats.dabs_ms = t1 - t0;
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            self.stats.prep_ms = now() - t1;
             if self.mirror_distinct.iter().any(|d| *d) {
                 // The stroke and its distinct mirrors composite as one stroke, as the commit
                 // merges them; only the tiles that changed are redrawn.
@@ -643,7 +666,7 @@ impl LiveStroke {
                     None => {
                         // Leaving the single-pass preview: take its smoothing tail back first.
                         if !old.is_empty() {
-                            surf.write_region(old, &self.pre.read_region(old));
+                            surf.copy_region_from(&self.pre, old);
                         }
                         (photocraft_paint::UnionLive::default(), true, old)
                     }
@@ -659,8 +682,9 @@ impl LiveStroke {
             let mut dmg = Rect::EMPTY;
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
             if !old.is_empty() {
-                // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
+                // Back to the stroke without the previous tail (the pre-stroke tiles shared, not
+                // converted: a page-sized brush's end dab covers the whole page each frame).
+                surf.copy_region_from(&self.pre, old);
                 self.renderer.mark_dirty(old);
                 dmg = old;
             }
@@ -670,7 +694,10 @@ impl LiveStroke {
                 dmg = dmg.union(&self.tail);
             }
             Ok(dmg)
-        })
+        });
+        self.stats.composite_ms = (now() - t0 - self.stats.dabs_ms - self.stats.prep_ms).max(0.0);
+        self.stats.dabs = self.renderer.dab_count().saturating_sub(dabs_before);
+        result
     }
 }
 

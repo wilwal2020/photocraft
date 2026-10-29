@@ -317,6 +317,62 @@ fn undo_hides_frames_redo_restores_them_and_a_new_edit_drops_them() {
 }
 
 #[test]
+fn no_frame_is_made_while_the_user_is_busy() {
+    // User report: lag spikes after brush strokes while recording. A frame rendered beside a
+    // stroke took cores from the brush, so while a button is held no capture starts (the frame
+    // comes once it is up), and a capture under way holds still between bands.
+    let dir = temp_dir("busy");
+    let mut s = recording(&dir);
+    // The recorder's clock: starting the recording dates its first frame by it, so a test
+    // clock behind it (a long test run) never reaches that frame.
+    let mut t = recorder::mono_ms();
+    settle(&mut s, &mut t);
+    assert_eq!(frames(&s).len(), 1, "the first frame");
+    s.execute("edit.fill", json!({"contents": "color", "color": "#00ff00"})).unwrap();
+    s.timelapse_set_busy(true);
+    t += 10.0;
+    s.timelapse_tick_at(t, true);
+    t += recorder::MAX_WAIT_MS + 10.0;
+    let next = s.timelapse_tick_at(t, true).unwrap();
+    assert!(next >= t + 100.0 - 1e-6, "busy: looks again shortly, not at once ({next} at {t})");
+    assert!(track(&s).due().is_some(), "the frame is still due");
+    assert!(s.timelapse.tracks.iter().all(|t| t.due().is_some()), "and nothing started");
+    s.timelapse_set_busy(false);
+    t += 10.0;
+    s.timelapse_tick_at(t, false);
+    s.timelapse_wait();
+    assert_eq!(frames(&s).len(), 2, "the frame once the button is up");
+
+    // A capture already under way when the user gets busy waits, and waiting for it (an export,
+    // closing) lets it go at once instead of waiting on the pointer.
+    s.execute("edit.fill", json!({"contents": "color", "color": "#0000ff"})).unwrap();
+    t += 10.0;
+    s.timelapse_tick_at(t, false);
+    t += recorder::MAX_WAIT_MS + 10.0;
+    s.timelapse_tick_at(t, false);
+    s.timelapse_set_busy(true);
+    let started = std::time::Instant::now();
+    s.timelapse_wait();
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "waited {:?}", started.elapsed());
+    assert!(!s.timelapse.busy(), "waiting clears the flag");
+    assert_eq!(frames(&s).len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_paced_frame_is_the_frame() {
+    let dir = temp_dir("paced");
+    let s = recording(&dir);
+    let st = s.active().unwrap();
+    let calls = std::cell::Cell::new(0);
+    let paced = recorder::render_frame_paced(&st.doc, 64, "[ref]", &|| calls.set(calls.get() + 1)).unwrap();
+    let plain = recorder::render_frame(&st.doc, 64, "[ref]").unwrap();
+    assert_eq!((paced.width, paced.height, &paced.rgb), (plain.width, plain.height, &plain.rgb));
+    assert!(calls.get() >= 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn reference_layers_are_hidden_in_frames_only() {
     let dir = temp_dir("reference");
     let mut s = recording(&dir);

@@ -576,7 +576,7 @@ impl LiveRetouch {
         if !old.is_empty() {
             // Back to the stroke without the previous tail.
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
-            surf.write_region(old, &self.pre_surf.read_region(old));
+            surf.copy_region_from(&self.pre_surf, old);
             self.renderer.mark_dirty(old);
             dmg = old;
         }
@@ -626,7 +626,7 @@ impl LiveRetouch {
             LivePaint::Pattern { tile, place } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),
         };
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
-        surf.write_region(r, &self.pre_surf.read_region(r));
+        surf.copy_region_from(&self.pre_surf, r);
         Ok(apply_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode).union(&r))
     }
 }

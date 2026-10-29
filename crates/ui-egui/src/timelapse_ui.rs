@@ -162,7 +162,10 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
 
 /// Once per frame: follow edits and capture, pass on messages.
 pub fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let input = ctx.input(|i| i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_))));
+    let (down, input) = ctx.input(|i| (i.pointer.any_down(), i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_)))));
+    // A held button (a stroke, a drag, a pan) or a stroke still being drawn: frames wait for it
+    // to end rather than render beside it (a capture during a large brush stroke made it lag).
+    app.session.timelapse_set_busy(down || app.live_stroke.is_some() || app.drag.is_some());
     if let Some(ms) = app.session.timelapse_tick(input) {
         ctx.request_repaint_after(std::time::Duration::from_millis(ms.clamp(16.0, 60_000.0) as u64));
     }

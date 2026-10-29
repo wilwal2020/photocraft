@@ -326,6 +326,15 @@ fn tile_parallel_strokes_match_dab_by_dab_accumulation() {
     colour.color_dynamics.enabled = true;
     colour.color_dynamics.hue_jitter = 0.5;
     brushes.push(colour);
+    // Plain round tips take the fused path (values straight into the coverage): soft, hard,
+    // elliptical, aliased (the Pencil), with flow building up and opacity jitter.
+    brushes.push(BrushSettings { size: 280.0, hardness: 0.0, spacing: 0.06, flow: 0.4, opacity: 0.7, ..Default::default() });
+    let mut hard = BrushSettings { size: 190.0, hardness: 1.0, spacing: 0.15, roundness: 0.45, ..Default::default() };
+    hard.transfer.enabled = true;
+    hard.transfer.flow.jitter = 0.7;
+    brushes.push(hard);
+    brushes.push(BrushSettings { size: 75.0, hardness: 0.5, aliased: true, spacing: 0.3, ..Default::default() });
+    brushes.push(BrushSettings { size: 5.0, hardness: 0.0, spacing: 0.1, ..Default::default() });
     let points: Vec<StrokePoint> =
         (0..40).map(|i| StrokePoint::new(100.0 + 23.0 * i as f64, 300.0 + 120.0 * (i as f64 / 6.0).sin(), 0.4 + 0.015 * i as f32)).collect();
     for brush in brushes {
@@ -428,5 +437,116 @@ fn parallel_composite_matches_single_threaded() {
             }
             r.composite(&base, &mut base.clone(), None, false, false);
         }
+    }
+}
+
+#[test]
+fn decode_encode_round_trips() {
+    // The plain composite copies the bytes of pixels a stroke leaves alone, where the general loop
+    // decoded and encoded them: the same bytes for every 8- and 16-bit value (and floats are
+    // copied either way).
+    for b in 0..=255u8 {
+        let v = photocraft_color::read_sample(&[b], photocraft_color::SampleType::U8, 0);
+        let mut out = [0u8];
+        photocraft_color::write_sample(&mut out, photocraft_color::SampleType::U8, 0, v);
+        assert_eq!(out[0], b);
+    }
+    for q in 0..=u16::MAX {
+        let bytes = q.to_ne_bytes();
+        let v = photocraft_color::read_sample(&bytes, photocraft_color::SampleType::U16, 0);
+        let mut out = [0u8; 2];
+        photocraft_color::write_sample(&mut out, photocraft_color::SampleType::U16, 0, v);
+        assert_eq!(out, bytes, "{q}");
+    }
+}
+
+#[test]
+fn plain_composite_matches_the_general_loop() {
+    // Large plain brushes take the direct path (bytes in, bytes out): bit for bit what the general
+    // loop paints, at every depth and model, with and without alpha, a selection, Lock
+    // Transparency, erasing, Dissolve, missing tiles and partial transparency underneath.
+    use crate::StrokePoint;
+    use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
+    let formats = [
+        PixelFormat::RGBA8,
+        PixelFormat::RGBA16,
+        PixelFormat::RGBA32F,
+        PixelFormat::GRAY8,
+        PixelFormat::GRAYA8,
+        PixelFormat::CMYKA8,
+        PixelFormat::new(ColorMode::Rgb, SampleType::U8, false),
+        PixelFormat::new(ColorMode::Lab, SampleType::U16, true),
+    ];
+    let brushes = [
+        BrushSettings { size: 300.0, hardness: 0.0, opacity: 0.7, flow: 0.6, color: [0.2, 0.5, 0.9, 1.0], seed: 3, ..Default::default() },
+        BrushSettings { size: 150.0, hardness: 1.0, spacing: 0.1, color: [0.9, 0.1, 0.1, 0.8], seed: 4, ..Default::default() },
+        BrushSettings { size: 200.0, hardness: 0.5, erase: true, opacity: 0.8, seed: 5, ..Default::default() },
+        BrushSettings { size: 180.0, hardness: 0.3, mode: BlendMode::Dissolve, opacity: 0.5, seed: 6, ..Default::default() },
+        BrushSettings { size: 9.0, hardness: 0.0, spacing: 0.05, seed: 7, ..Default::default() },
+    ];
+    for fmt in formats {
+        // Tiles at (0..2, 0..2) only: the stroke also reaches tiles the layer doesn't have.
+        let mut base = Surface::new(fmt);
+        base.fill_rect(Rect::new(0, 0, 512, 512), &photocraft_raster::from_rgba(&fmt, [0.9, 0.6, 0.3, 1.0]));
+        base.fill_rect(Rect::new(100, 0, 220, 512), &photocraft_raster::from_rgba(&fmt, [0.2, 0.4, 0.8, 0.3]));
+        base.fill_rect(Rect::new(300, 0, 340, 512), &photocraft_raster::from_rgba(&fmt, [0.2, 0.4, 0.8, 0.0]));
+        let mut sel = Surface::new(PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(0, 0, 400, 700), &[0.6]);
+        sel.fill_rect(Rect::new(0, 0, 150, 700), &[1.0]);
+        for b in &brushes {
+            let mut r = StrokeRenderer::new(b, Some(fmt), 1.0);
+            let points: Vec<StrokePoint> = (0..24).map(|i| StrokePoint::new(30.0 + 28.0 * i as f64, 260.0 + 200.0 * (i as f64 / 4.0).sin(), 0.4 + 0.025 * i as f32)).collect();
+            for chunk in points.chunks(5) {
+                r.push(chunk);
+                for (lock, selection) in [(false, None), (true, None), (false, Some(&sel)), (true, Some(&sel))] {
+                    for parallel in [false, true] {
+                        let (mut general, mut direct) = (r.clone(), r.clone());
+                        let (mut t1, mut t2) = (base.clone(), base.clone());
+                        let d1 = general.composite_tiles_with(&base, &mut t1, selection, lock, false, parallel, false);
+                        let d2 = direct.composite_tiles_with(&base, &mut t2, selection, lock, false, parallel, true);
+                        assert_eq!(d1, d2, "{fmt:?} {:?}: damage", b.mode);
+                        let area = Rect::new(-300, -300, 1100, 900);
+                        let (p1, p2) = (t1.read_region(area), t2.read_region(area));
+                        assert!(p1.iter().zip(&p2).all(|(a, b)| a.to_bits() == b.to_bits()), "{fmt:?} {:?} erase {} lock {lock} sel {}: pixels", b.mode, b.erase, selection.is_some());
+                    }
+                }
+                r.composite(&base, &mut base.clone(), None, false, false);
+            }
+        }
+    }
+}
+
+#[test]
+fn quantize_is_the_saturating_cast() {
+    // `encode_row` quantises without a float-to-integer cast so it vectorises: the same value as
+    // `(v.clamp(0, 1) · max + 0.5) as u8 / u16` for every float, NaN, infinities and negatives too.
+    let check = |v: f32| {
+        assert_eq!(quantize(v, 255.0), (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 as u32, "{v} ({:#x})", v.to_bits());
+        assert_eq!(quantize(v, 65535.0), (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16 as u32, "{v} ({:#x})", v.to_bits());
+    };
+    for bits in (0..=u32::MAX).step_by(997) {
+        check(f32::from_bits(bits));
+    }
+    // Every float from 0 to 1, near each 8- and 16-bit level and its half.
+    for q in 0..=65535u32 {
+        for base in [q as f32 / 65535.0, (q as f32 + 0.5) / 65535.0, (q as f32 - 0.5) / 65535.0] {
+            let b = base.to_bits();
+            for d in 0..5u32 {
+                check(f32::from_bits(b.wrapping_add(d)));
+                check(f32::from_bits(b.wrapping_sub(d)));
+            }
+        }
+    }
+    for q in 0..=255u32 {
+        for base in [q as f32 / 255.0, (q as f32 + 0.5) / 255.0, (q as f32 - 0.5) / 255.0] {
+            let b = base.to_bits();
+            for d in 0..64u32 {
+                check(f32::from_bits(b.wrapping_add(d)));
+                check(f32::from_bits(b.wrapping_sub(d)));
+            }
+        }
+    }
+    for v in [f32::NAN, -f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0, 0.0, 1.0, f32::MIN_POSITIVE, -f32::MIN_POSITIVE, f32::MAX, f32::MIN] {
+        check(v);
     }
 }

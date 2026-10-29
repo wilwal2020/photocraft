@@ -111,13 +111,12 @@ impl Tile {
             match sample {
                 SampleType::U8 => {
                     for (d, v) in dst.iter_mut().zip(src) {
-                        *d = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                        *d = quantize(*v, 255.0) as u8;
                     }
                 }
                 SampleType::U16 => {
                     for (d, v) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src) {
-                        let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-                        d.copy_from_slice(&q.to_ne_bytes());
+                        d.copy_from_slice(&(quantize(*v, 65535.0) as u16).to_ne_bytes());
                     }
                 }
                 SampleType::F32 => {
@@ -154,6 +153,21 @@ impl Tile {
         }
         (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
     }
+}
+
+/// `(v.clamp(0, 1) · max + 0.5) as u32` ([`write_sample`]'s rounding) for `max` up to 65535, NaN
+/// giving 0, without a float-to-integer cast, so a row of them vectorises (Rust's saturating casts
+/// don't): `x = v · max + 0.5` lies in 0.5..=max + 0.5, where adding 2²³ rounds it to an integer
+/// exactly; one less where that rounded up is its floor, and the float's low bits hold it.
+#[inline(always)]
+#[allow(clippy::manual_clamp)]
+fn quantize(v: f32, max: f32) -> u32 {
+    const MAGIC: f32 = 8_388_608.0;
+    // `max`/`min` (unlike `clamp`) take NaN to 0, as the cast does.
+    let x = v.max(0.0).min(1.0) * max + 0.5;
+    let r = (x + MAGIC) - MAGIC;
+    let f = if r > x { r - 1.0 } else { r };
+    (f + MAGIC).to_bits().wrapping_sub(MAGIC.to_bits())
 }
 
 /// Bytes compared at once while looking for a difference in a tile row.
@@ -787,6 +801,53 @@ impl Surface {
         }
     }
 
+    /// Make `r` read as it does in `src`: `write_region(r, &src.read_region(r))` without the
+    /// round trip through floats. Tiles wholly inside `r` are shared with `src` (an absent one
+    /// left absent), the edge tiles get `src`'s bytes row by row. A surface of another format or
+    /// default pixel takes the round trip. (A live stroke putting a page-sized brush's end dab
+    /// back to the pixels under it spent 120–470 ms a frame converting the page, user report.)
+    pub fn copy_region_from(&mut self, src: &Surface, r: Rect) {
+        if r.is_empty() {
+            return;
+        }
+        if self.format != src.format || self.default_pixel != src.default_pixel {
+            self.write_region(r, &src.read_region(r));
+            return;
+        }
+        let bpp = self.format.bytes_per_pixel();
+        for tc in r.tiles() {
+            let t = tc.rect();
+            let part = t.intersect(&r);
+            if part == t {
+                match src.tiles.get(&tc) {
+                    Some(tile) => self.tiles.insert(tc, tile.clone()),
+                    None => self.tiles.remove(&tc),
+                };
+                continue;
+            }
+            if part.is_empty() || (!self.tiles.contains_key(&tc) && !src.tiles.contains_key(&tc)) {
+                continue;
+            }
+            let row = TILE_SIZE as usize * bpp;
+            let (x0, x1) = ((part.x0 - t.x0) as usize * bpp, (part.x1 - t.x0) as usize * bpp);
+            let from = src.tiles.get(&tc).cloned();
+            let fill: Vec<u8> = if from.is_none() { self.default_pixel.repeat((part.x1 - part.x0) as usize) } else { Vec::new() };
+            let dst = self.tile_mut(tc);
+            for y in (part.y0 - t.y0) as usize..(part.y1 - t.y0) as usize {
+                let span = y * row + x0..y * row + x1;
+                let s = match &from {
+                    Some(f) => f.data.get(span.clone()),
+                    None => Some(fill.as_slice()),
+                };
+                if let (Some(d), Some(s)) = (dst.data.get_mut(span), s)
+                    && d.len() == s.len()
+                {
+                    d.copy_from_slice(s);
+                }
+            }
+        }
+    }
+
     /// A tile filled with the default pixel (what a missing tile reads as), allocated fallibly.
     pub fn try_default_tile(&self) -> Result<Tile, AllocationError> {
         Tile::try_filled(&self.format, &self.default_pixel)
@@ -1267,6 +1328,63 @@ pub fn is_hdr(sample: SampleType) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// `copy_region_from` reads back exactly as the float round trip it replaces: whole and edge
+    /// tiles, tiles missing on either side, several depths, and a source of another default.
+    #[test]
+    fn copying_a_region_is_the_float_round_trip() {
+        use super::*;
+        let t = TILE_SIZE;
+        let rects = [Rect::new(0, 0, t, t), Rect::new(-t / 2, 3, 3 * t + 5, 2 * t + 1), Rect::new(t - 1, t - 1, 2, 2), Rect::new(5, 5, 0, 9)];
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAY8] {
+            let n = fmt.channels();
+            let paint = |s: &mut Surface, seed: usize, r: Rect| {
+                let len = r.width() as usize * r.height() as usize * n;
+                s.write_region(r, &(0..len).map(|i| ((i * 37 + seed * 11) % 257) as f32 / 256.0).collect::<Vec<_>>());
+            };
+            for other_default in [false, true] {
+                let mut src = if other_default { Surface::with_default(fmt, &vec![0.25; n]) } else { Surface::new(fmt) };
+                // Tiles here and there: (0,0) whole, part of (2,1); (1,0) and others absent.
+                paint(&mut src, 1, Rect::new(0, 0, t, t));
+                paint(&mut src, 2, Rect::new(2 * t + 3, t + 2, 9, 7));
+                let mut dst = Surface::new(fmt);
+                paint(&mut dst, 3, Rect::new(-t, 0, 4 * t, 3 * t));
+                for r in rects {
+                    let (mut fast, mut slow) = (dst.clone(), dst.clone());
+                    fast.copy_region_from(&src, r);
+                    if !r.is_empty() {
+                        slow.write_region(r, &src.read_region(r));
+                    }
+                    let all = Rect::new(-t - 3, -3, 5 * t, 4 * t);
+                    assert_eq!(fast.read_region(all), slow.read_region(all), "{fmt:?} {r:?} other default {other_default}");
+                }
+            }
+        }
+    }
+
+    /// Writing a region encodes each sample as `write_sample` does (the row loop quantises
+    /// without a cast so it vectorises): out-of-range, infinite and NaN values included.
+    #[test]
+    fn region_writes_encode_like_write_sample() {
+        let mut vals: Vec<f32> = vec![f32::NAN, -f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, -0.0, 0.0, 1.0, 1.5, 0.5 / 255.0, 0.5 / 65535.0];
+        vals.extend((0..=70_000).map(|i| i as f32 / 70_000.0));
+        vals.extend((0..=255).flat_map(|b| [(b as f32 - 0.5) / 255.0, (b as f32 + 0.5) / 255.0, f32::from_bits((b as f32 / 255.0).to_bits() + 1)]));
+        for sample in [SampleType::U8, SampleType::U16] {
+            let fmt = PixelFormat::GRAY8.with_sample(sample);
+            let w = 256usize;
+            for chunk in vals.chunks(w) {
+                let r = Rect::new(0, 0, chunk.len() as i32, 1);
+                let mut s = Surface::new(fmt);
+                s.write_region(r, chunk);
+                let tile = s.tile(TileCoord { tx: 0, ty: 0 }).unwrap();
+                for (i, v) in chunk.iter().enumerate() {
+                    let mut want = vec![0u8; sample.bytes()];
+                    write_sample(&mut want, sample, 0, *v);
+                    assert_eq!(&tile.bytes()[i * sample.bytes()..(i + 1) * sample.bytes()], &want[..], "{sample:?} {v}");
+                }
+            }
+        }
+    }
 
     /// Manually compare allocating reads with the previous implementation.
     #[test]

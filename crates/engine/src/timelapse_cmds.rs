@@ -65,6 +65,14 @@ impl Session {
         timelapse.tick(docs, *active, prefs.get(), now, input)
     }
 
+    /// The user is in the middle of something (a pointer button held: a stroke, a drag, a pan):
+    /// no frame starts and a frame being made waits until it ends (see
+    /// [`recorder::Recorder::set_busy`]). The UI says so every frame, before
+    /// [`Session::timelapse_tick`].
+    pub fn timelapse_set_busy(&mut self, busy: bool) {
+        self.timelapse.set_busy(busy);
+    }
+
     /// Messages for the status bar (a recording resumed, a frame couldn't be saved…).
     pub fn timelapse_messages(&mut self) -> Vec<String> {
         self.timelapse.take_messages()

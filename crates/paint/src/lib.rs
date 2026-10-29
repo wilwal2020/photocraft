@@ -169,7 +169,7 @@ pub fn tip_shape(radius: f32, hardness: f32) -> (f32, f32) {
 /// `exp(-u)` as `(1 − u/64)⁶⁴` by six squarings: within 1/255 of `exp` where it matters, exact
 /// arithmetic (the same on every platform) and exactly 0 from `u = 64`.
 #[inline]
-fn soft_exp(u: f32) -> f32 {
+pub(crate) fn soft_exp(u: f32) -> f32 {
     let mut g = (1.0 - u / 64.0).clamp(0.0, 1.0);
     for _ in 0..6 {
         g *= g;

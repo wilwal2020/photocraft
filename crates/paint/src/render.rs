@@ -314,6 +314,34 @@ impl BrushContext {
             .intersect(&full)
     }
 
+    /// The hardness and aliasing of a dab [`rasterize`](Self::rasterize) draws with
+    /// `rasterize_round` (a plain computed round or elliptical tip, unrotated, without noise,
+    /// per-tip texture, Brush Projection or the small-tip area sampling), or `None`.
+    fn plain_round(&self, d: &Dab, dual: bool, rect: Rect) -> Option<(f32, bool)> {
+        let b = &self.brush;
+        let (hardness, mips) = if dual { (b.dual_brush.hardness, self.dual_tip.as_deref()) } else { (b.hardness, self.tip.as_deref()) };
+        let aliased = b.aliased && !dual;
+        let noise = b.noise && !dual;
+        let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
+        let (cx, cy) = if aliased { grid_center(d.center.x, d.center.y, 2.0 * d.radius) } else { (d.center.x as f32, d.center.y as f32) };
+        let proj = !dual && d.proj_scale < 0.999;
+        let ro = d.roundness.max(0.5 / d.radius).min(1.0);
+        let rm = (d.radius * ro).max(0.5);
+        let small = mips.is_none() && !aliased && rm < SMALL_TIP_RADIUS;
+        let plain = !(mips.is_some() || small || (aliased && b.square) || noise || tex_tip)
+            && !proj
+            && d.angle == 0.0
+            && d.radius.is_finite()
+            && d.roundness.is_finite()
+            && rm.is_finite()
+            && cx.is_finite()
+            && cy.is_finite()
+            && hardness.is_finite()
+            && d.alpha.is_finite()
+            && rect.width() > 0;
+        plain.then_some((hardness, aliased))
+    }
+
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × flow). Wet
     /// Edges and the stroke-level masks act on a stroke's accumulated coverage
     /// ([`stroke_mask`](Self::stroke_mask)), never on one dab.
@@ -551,6 +579,65 @@ fn any_paint(tr: Rect, vrect: Rect, vals: &[f32]) -> bool {
 }
 
 impl CovTile {
+    /// `rasterize_round` of dab `d` over `tr` (inside this tile, `key`) accumulated straight into
+    /// the coverage, as [`accumulate`](Self::accumulate) of its values with no colour would: the
+    /// same arithmetic, without the values in between, and as selects so rows vectorise. Returns
+    /// whether the dab paints anywhere in `tr` (a value above 0).
+    fn accumulate_round(&mut self, (tx, ty): (i32, i32), tr: Rect, d: &Dab, hardness: f32, aliased: bool, ceil: f32) -> bool {
+        let (cx, cy) = if aliased { grid_center(d.center.x, d.center.y, 2.0 * d.radius) } else { (d.center.x as f32, d.center.y as f32) };
+        let ro = d.roundness.max(0.5 / d.radius).min(1.0);
+        let rm = (d.radius * ro).max(0.5);
+        let w = tr.width() as usize;
+        let reach = if aliased { rm } else { tip_reach(rm, hardness).max(rm) };
+        let reach2 = (reach + 0.5) * (reach + 0.5);
+        let (r0, s) = crate::tip_shape(rm, hardness);
+        let slack = span_slack(cx, cy, tr);
+        let wide = reach + 0.5 + slack;
+        let x0 = tr.x0 as f32 + 0.5 - cx;
+        let alpha = d.alpha;
+        let mut painted = false;
+        for y in tr.y0..tr.y1 {
+            let dy = y as f32 + 0.5 - cy;
+            let left = wide * wide - dy * dy;
+            if left < 0.0 {
+                continue;
+            }
+            let half = left.sqrt() / ro + slack;
+            let (from, to) = clamp_columns(-half - x0, half - x0, w);
+            let start = ((y - ty * COV_TILE) * COV_TILE + (tr.x0 - tx * COV_TILE)) as usize;
+            let Some(row) = self.cov.get_mut(start + from..start + to) else { continue };
+            let mut any = false;
+            for (xx, c) in row.iter_mut().enumerate() {
+                let dx = (tr.x0 + (from + xx) as i32) as f32 + 0.5 - cx;
+                let d2 = (dx * ro).powi(2) + dy * dy;
+                let v = if aliased {
+                    if d2 < reach2 && d2.sqrt() <= rm { alpha } else { 0.0 }
+                } else {
+                    // `falloff_shaped(d2.sqrt(), r0, s)` without its early return.
+                    let dd = d2.sqrt();
+                    let x = (dd - r0) / s;
+                    let g = crate::soft_exp(x * x);
+                    let val = if d2 >= reach2 {
+                        0.0
+                    } else if dd <= r0 {
+                        1.0
+                    } else {
+                        g
+                    };
+                    if val <= 0.0 { 0.0 } else { val * alpha }
+                };
+                let old = *c;
+                let nv = if ceil > old { old + v * (ceil - old) } else { old };
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                let take = !(v <= 0.0) && !(nv <= old);
+                *c = if take { nv } else { old };
+                any |= v > 0.0;
+            }
+            painted |= any;
+        }
+        painted
+    }
+
     /// An empty tile, with per-pixel colour for `nc` channels when given.
     fn new(nc: Option<usize>) -> Self {
         Self { cov: vec![0.0; TILE_PIXELS], col: nc.map_or_else(Vec::new, |nc| vec![0.0; TILE_PIXELS * nc]) }
@@ -698,6 +785,15 @@ impl CoverageMap {
                 let (Some(d), Some(r)) = (dabs.get(i), rects.get(i)) else { continue };
                 let tr = whole.intersect(r);
                 if tr.is_empty() {
+                    continue;
+                }
+                // A plain round tip without per-dab colour: its values go straight into the
+                // coverage (what `rasterize` and `accumulate` give, without the row of values
+                // between them).
+                if !want_col
+                    && let Some((hardness, aliased)) = ctx.plain_round(d, dual, tr)
+                {
+                    job.painted |= job.tile.accumulate_round(job.key, tr, d, hardness, aliased, ceil.get(i).copied().unwrap_or(1.0));
                     continue;
                 }
                 ctx.rasterize(d, dual, tr, vals);
@@ -1157,6 +1253,23 @@ impl StrokeRenderer {
         all: bool,
         parallel: bool,
     ) -> Rect {
+        self.composite_tiles_with(pre, target, selection, lock_transparency, all, parallel, true)
+    }
+
+    /// [`composite_tiles`](Self::composite_tiles); `plain` takes the direct path for plain strokes
+    /// (see `plain_pixels` below) where it applies, off for the general loop everywhere (the
+    /// reference the direct path is tested against).
+    #[allow(clippy::too_many_arguments)]
+    fn composite_tiles_with(
+        &mut self,
+        pre: &Surface,
+        target: &mut Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+        all: bool,
+        parallel: bool,
+        plain: bool,
+    ) -> Rect {
         let keys: Vec<(i32, i32)> = if all {
             self.cov.dirty.clear();
             let mut k: Vec<_> = self.cov.tiles.keys().copied().collect();
@@ -1268,7 +1381,137 @@ impl StrokeRenderer {
             }
             Some(tr)
         };
+        // A plain stroke (no Texture, Dual Brush or Wet Edges, so the stroke mask is the coverage
+        // itself; Normal or Dissolve, or erasing; one colour) over a surface of its own format: a
+        // row at a time straight from the pre-stroke tile's bytes into the target tile's, through
+        // one stack row of floats, with the general loop's own arithmetic, so the pixels are the
+        // same bit for bit. The general loop read each coverage tile's part into a fresh float
+        // region, looked up the stroke mask and dispatched on the format per pixel, and wrote the
+        // region back: most of a large soft brush's time (user report: large brushes lag).
+        let plain = plain
+            && !per_dab_color
+            && !b.wet_edges
+            && dual.is_none()
+            && (ctx.texture.is_none() || b.texture.each_tip)
+            && matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve)
+            && pre.format() == fmt
+            && n <= 8;
+        let sample = fmt.sample;
+        let pre_default = pre.default_pixel();
+        let plain = plain && pre_default.len() == n;
+        let fast_over = b.mode == BlendMode::Normal && !b.erase && !lock_transparency && a_idx == Some(n.saturating_sub(1)) && matches!(n, 2 | 4 | 5);
+        let tile_edge = photocraft_geom::TILE_SIZE;
+        // Part `part` of coverage tile `key` painted into `dst`, the target's tile at `tc`; returns
+        // the pixels it wrote.
+        let plain_pixels = |dst: &mut photocraft_raster::Tile, tc: photocraft_geom::TileCoord, (tx, ty): (i32, i32), part: Rect| -> Option<Rect> {
+            let tile = cov.tiles.get(&(tx, ty))?;
+            let tr = tile_rect((tx, ty)).intersect(&bounds).intersect(&part).intersect(&tc.rect());
+            if tr.is_empty() {
+                return None;
+            }
+            let pre_tile = pre.tile(tc).map(|t| t.bytes());
+            let sel = selection.map(|s| (s.channels(), s.read_region(tr)));
+            let w = tr.width() as usize;
+            let span = w * n;
+            // One row of a coverage tile: at most 64 pixels of at most 8 channels.
+            let mut row = [0.0f32; (COV_TILE as usize) * 8];
+            let row = row.get_mut(..span)?;
+            let bytes = dst.bytes_mut();
+            for y in tr.y0..tr.y1 {
+                let start = (((y - tc.ty * tile_edge) * tile_edge + (tr.x0 - tc.tx * tile_edge)) as usize) * n;
+                match pre_tile {
+                    Some(p) if p.len() >= (start + span) * sample.bytes() => photocraft_color::read_samples(p, sample, start, row),
+                    Some(_) => continue,
+                    None => {
+                        for px in row.chunks_exact_mut(n) {
+                            px.copy_from_slice(&pre_default);
+                        }
+                    }
+                }
+                let crow = ((y - ty * COV_TILE) * COV_TILE + (tr.x0 - tx * COV_TILE)) as usize;
+                let Some(covs) = tile.cov.get(crow..crow + w) else { continue };
+                let srow = (y - tr.y0) as usize * w;
+                // The usual case, a row at a time without branches (vectorised): Normal paint
+                // over pixels with alpha.
+                if fast_over {
+                    let sel_row = sel.as_ref().and_then(|(sc, v)| v.get(srow * sc..(srow + w) * sc).map(|v| (v, *sc)));
+                    let dither = dither.then_some((tr.x0, y));
+                    match n {
+                        2 => over_row::<2>(row, covs, opacity, sel_row, &src, dither),
+                        4 => over_row::<4>(row, covs, opacity, sel_row, &src, dither),
+                        _ => over_row::<5>(row, covs, opacity, sel_row, &src, dither),
+                    }
+                    let sb = sample.bytes();
+                    let Some(out) = bytes.get_mut(start * sb..(start + span) * sb) else { continue };
+                    encode_row(sample, row, out);
+                    continue;
+                }
+                for ((xx, &c), px) in covs.iter().enumerate().zip(row.chunks_exact_mut(n)) {
+                    if c <= 0.0 {
+                        continue;
+                    }
+                    let x = tr.x0 + xx as i32;
+                    let s = sel.as_ref().map_or(1.0, |(sc, v)| v.get((srow + xx) * sc).copied().unwrap_or(0.0));
+                    let mut k = (c * opacity * s).min(1.0);
+                    if k <= 0.0 {
+                        continue;
+                    }
+                    if b.mode == BlendMode::Dissolve {
+                        k = if hash2(x, y, b.seed) < k { 1.0 } else { 0.0 };
+                        if k == 0.0 {
+                            continue;
+                        }
+                    }
+                    if b.erase {
+                        if let (Some(a), false) = (a_idx, lock_transparency) {
+                            px[a] *= 1.0 - k;
+                        }
+                    } else {
+                        if lock_transparency && a_idx.is_some_and(|a| px[a] <= 0.0) {
+                            continue;
+                        }
+                        over_native(&fmt, px, &src[..n], k, lock_transparency);
+                    }
+                    if dither {
+                        dither8(px, x, y);
+                    }
+                }
+                // Untouched pixels encode back to the bytes they were read from
+                // (`decode_encode_round_trips`), as in the general loop.
+                let sb = sample.bytes();
+                let Some(out) = bytes.get_mut(start * sb..(start + span) * sb) else { continue };
+                encode_row(sample, row, out);
+            }
+            Some(tr)
+        };
         let mut dmg = Rect::EMPTY;
+        if plain {
+            let mut over: std::collections::BTreeMap<photocraft_geom::TileCoord, Vec<(i32, i32)>> = std::collections::BTreeMap::new();
+            for &key in &keys {
+                if cov.tiles.contains_key(&key) {
+                    for tc in tile_rect(key).intersect(&bounds).tiles() {
+                        over.entry(tc).or_default().push(key);
+                    }
+                }
+            }
+            let mut work: Vec<_> = over.into_iter().filter_map(|(tc, ks)| target.take_tiles(tc.rect()).into_iter().next().map(|(c, t)| (c, t, ks))).collect();
+            let one = |(tc, tile, ks): &mut (photocraft_geom::TileCoord, Arc<photocraft_raster::Tile>, Vec<(i32, i32)>)| {
+                let tile = Arc::make_mut(tile);
+                ks.iter().filter_map(|&key| plain_pixels(tile, *tc, key, tc.rect())).fold(Rect::EMPTY, |a, r| a.union(&r))
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let changed: Vec<Rect> = if parallel && keys.len() >= PARALLEL_TILES {
+                use rayon::prelude::*;
+                work.par_iter_mut().map(one).collect()
+            } else {
+                work.iter_mut().map(one).collect()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let changed: Vec<Rect> = work.iter_mut().map(one).collect();
+            target.put_tiles(work.into_iter().map(|(c, t, _)| (c, t)));
+            let dmg = changed.iter().fold(dmg, |a, r| a.union(r));
+            return if all { bounds } else { dmg };
+        }
         // A large brush dirties hundreds of tiles per frame: the layer tiles under them come out
         // of the layer and are worked on every core, each with the coverage tiles over it (the
         // colour conversions under the calling thread's CMYK space), then go back.
@@ -1335,6 +1578,114 @@ pub fn render_stroke(
     r.push(points);
     r.finish();
     r.composite(&pre, target, selection, lock_transparency, true)
+}
+
+/// Normal paint at coverage `covs` (one per pixel, times `opacity` and the selection row `sel`,
+/// `(values, channels)`) of colour `src` over one row of at most [`COV_TILE`] `N`-channel pixels
+/// whose last channel is alpha: [`over_native`]'s arithmetic, on the row's channels taken apart
+/// into planes and with selects for branches, so it vectorises across pixels. It paints where the
+/// general loop does (its `c <= 0` and `k <= 0` skips, NaN included), and with `dither`, the row's
+/// first pixel `(x, y)`, dithers those pixels as [`dither8`] does.
+#[inline(always)]
+fn over_row<const N: usize>(row: &mut [f32], covs: &[f32], opacity: f32, sel: Option<(&[f32], usize)>, src: &[f32; 8], dither: Option<(i32, i32)>) {
+    const W: usize = COV_TILE as usize;
+    let a = N - 1;
+    let w = covs.len().min(row.len() / N).min(W);
+    let px = &mut row.as_chunks_mut::<N>().0[..w];
+    let mut planes = [[0.0f32; W]; N];
+    for (i, p) in px.iter().enumerate() {
+        for ch in 0..N {
+            planes[ch][i] = p[ch];
+        }
+    }
+    let mut k = [0.0f32; W];
+    match sel {
+        None => {
+            for (k, &c) in k.iter_mut().zip(&covs[..w]) {
+                *k = (c * opacity * 1.0).min(1.0);
+            }
+        }
+        Some((v, sc)) => {
+            for (i, (k, &c)) in k.iter_mut().zip(&covs[..w]).enumerate() {
+                *k = (c * opacity * v.get(i * sc).copied().unwrap_or(0.0)).min(1.0);
+            }
+        }
+    }
+    let (alpha, colours) = planes.split_last_mut().map_or((None, None), |(a, c)| (Some(a), Some(c)));
+    let (Some(alpha), Some(colours)) = (alpha, colours) else { return };
+    let mut oa = [0.0f32; W];
+    let mut sa = [0.0f32; W];
+    let mut paint = [false; W];
+    for i in 0..w {
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let p = !(covs[i] <= 0.0) && !(k[i] <= 0.0);
+        paint[i] = p;
+        sa[i] = src[a] * k[i];
+        oa[i] = sa[i] + alpha[i] * (1.0 - sa[i]);
+    }
+    for (ch, plane) in colours.iter_mut().enumerate() {
+        let sc = src[ch];
+        for i in 0..w {
+            let nv = (sc * sa[i] + plane[i] * alpha[i] * (1.0 - sa[i])) / oa[i];
+            plane[i] = if paint[i] && oa[i] > 0.0 { nv } else { plane[i] };
+        }
+    }
+    for i in 0..w {
+        alpha[i] = if paint[i] { oa[i] } else { alpha[i] };
+    }
+    if let Some((x0, y)) = dither {
+        let mut d = [0.0f32; W];
+        for (i, d) in d.iter_mut().enumerate().take(w) {
+            *d = (hash2(x0 + i as i32, y, DITHER_SALT) - 0.5) / 255.0;
+        }
+        for plane in &mut planes {
+            for i in 0..w {
+                plane[i] = if paint[i] { plane[i] + d[i] } else { plane[i] };
+            }
+        }
+    }
+    for (i, p) in px.iter_mut().enumerate() {
+        for ch in 0..N {
+            p[ch] = planes[ch][i];
+        }
+    }
+}
+
+/// Normalised samples into the bytes of `sample` values, as [`photocraft_raster::Tile::write_region`]
+/// encodes them (clamped, then `v · max + 0.5` truncated; NaN as 0).
+fn encode_row(sample: SampleType, src: &[f32], out: &mut [u8]) {
+    match sample {
+        SampleType::U8 => {
+            for (d, v) in out.iter_mut().zip(src) {
+                *d = quantize(*v, 255.0) as u8;
+            }
+        }
+        SampleType::U16 => {
+            for (d, v) in out.as_chunks_mut::<2>().0.iter_mut().zip(src) {
+                d.copy_from_slice(&(quantize(*v, 65535.0) as u16).to_ne_bytes());
+            }
+        }
+        SampleType::F32 => {
+            for (d, v) in out.as_chunks_mut::<4>().0.iter_mut().zip(src) {
+                d.copy_from_slice(&v.to_ne_bytes());
+            }
+        }
+    }
+}
+
+/// `(v.clamp(0, 1) · max + 0.5) as u32` for `max` up to 65535, NaN giving 0, without a
+/// float-to-integer cast (Rust's saturating casts don't vectorise): `x = v · max + 0.5` lies in
+/// 0.5..=max + 0.5, where adding 2²³ rounds it to an integer exactly; one less where that rounded
+/// up is its floor, and the low bits of the float hold it.
+#[inline(always)]
+#[allow(clippy::manual_clamp)]
+fn quantize(v: f32, max: f32) -> u32 {
+    const MAGIC: f32 = 8_388_608.0;
+    // `max`/`min` (unlike `clamp`) take NaN to 0, as the cast does.
+    let x = v.max(0.0).min(1.0) * max + 0.5;
+    let r = (x + MAGIC) - MAGIC;
+    let f = if r > x { r - 1.0 } else { r };
+    (f + MAGIC).to_bits().wrapping_sub(MAGIC.to_bits())
 }
 
 // The zero-angle transform only changes signs; squaring gives the same radial distance.

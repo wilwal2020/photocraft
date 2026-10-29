@@ -39,6 +39,14 @@ pub fn srgb_preview(doc: &Document, max_side: u32) -> Result<(u32, u32, Vec<u8>)
     srgb_of(doc, photocraft_compose::thumbnail_buffer(doc, max_side.max(1)), max_side)
 }
 
+/// [`srgb_preview`] for a background render, calling `pace` between bands of the composite (see
+/// [`photocraft_compose::thumbnail_buffer_paced`]); the same bytes.
+pub fn srgb_preview_paced(doc: &Document, max_side: u32, pace: &dyn Fn()) -> Result<(u32, u32, Vec<u8>), IoError> {
+    let buf = photocraft_compose::thumbnail_buffer_paced(doc, max_side.max(1), pace);
+    pace();
+    srgb_of(doc, buf, max_side)
+}
+
 /// [`srgb_preview`] of `buf`, the document's composite reduced to at most `max_side`.
 fn srgb_of(doc: &Document, mut buf: photocraft_compose::Buffer, max_side: u32) -> Result<(u32, u32, Vec<u8>), IoError> {
     let (w, h) = (buf.rect.width(), buf.rect.height());

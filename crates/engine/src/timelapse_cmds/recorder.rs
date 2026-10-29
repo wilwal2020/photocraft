@@ -15,12 +15,17 @@
 //! - Reference layers (name containing the reference tag, `[ref]` by default) are hidden in
 //!   every frame but stay visible to the user.
 //! - A work timer counts time between actions and stops after `idleSec` without any.
+//! - While the user is busy (a pointer button held: painting, dragging, panning) no capture starts
+//!   and `recording.json` isn't written, and a capture already under way waits between bands of
+//!   its render until the button is up ([`Recorder::set_busy`]). A frame rendered beside a large
+//!   brush took cores and memory bandwidth from it, and the stroke lagged (user report).
 //!
 //! PhotoCraft's history has no stable ids, so each step is identified by its document snapshot
 //! (held weakly): undo and redo return to a snapshot already seen, a new edit makes a new one.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak, mpsc};
 
 use photocraft_doc::{DocId, Document};
@@ -46,6 +51,9 @@ const MAX_CHAIN: usize = 1024;
 const VISIBILITY_STEPS: &[&str] = &["Layer Visibility", "Show Layer", "Hide Layer", "Show Layers", "Hide Layers", "Show Only This Layer"];
 /// JPEG quality of the stored frames.
 const FRAME_QUALITY: u8 = 90;
+/// The longest a capture waits for the user to stop (ms): a flag left on by mistake can't hold a
+/// frame back for good.
+const MAX_PAUSE_MS: f64 = 120_000.0;
 /// Where the settings are kept in the preferences (`Preferences::dialogs`).
 pub const SETTINGS_KEY: &str = "file.timelapse";
 
@@ -210,6 +218,9 @@ pub struct Recorder {
     no_auto: HashSet<DocId>,
     messages: Vec<String>,
     counter: u64,
+    /// The user is in the middle of something ([`Recorder::set_busy`]), shared with the capture
+    /// threads.
+    busy: Arc<AtomicBool>,
 }
 
 /// Monotonic milliseconds (0 on wasm, where the recorder is unavailable).
@@ -523,6 +534,12 @@ pub fn hide_reference_layers(doc: &mut Document, tag: &str) -> bool {
 
 /// Render one frame: the document with reference layers hidden, reduced and in sRGB.
 pub fn render_frame(doc: &Document, max_long: u32, tag: &str) -> Result<Frame> {
+    render_frame_paced(doc, max_long, tag, &|| {})
+}
+
+/// [`render_frame`], calling `pace` between bands of the render (the capture thread waits there
+/// while the user is busy); the same frame.
+pub fn render_frame_paced(doc: &Document, max_long: u32, tag: &str, pace: &dyn Fn()) -> Result<Frame> {
     let mut copy;
     let doc = if tag.is_empty() {
         doc
@@ -530,7 +547,7 @@ pub fn render_frame(doc: &Document, max_long: u32, tag: &str) -> Result<Frame> {
         copy = doc.clone();
         if hide_reference_layers(&mut copy, tag) { &copy } else { doc }
     };
-    let (width, height, rgb) = photocraft_io::psd_thumbnail::srgb_preview(doc, max_long).map_err(|e| EngineError::Other(format!("timelapse frame: {e}")))?;
+    let (width, height, rgb) = photocraft_io::psd_thumbnail::srgb_preview_paced(doc, max_long, pace).map_err(|e| EngineError::Other(format!("timelapse frame: {e}")))?;
     Ok(Frame { width, height, rgb })
 }
 
@@ -559,9 +576,28 @@ fn in_capture_pool<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     f()
 }
 
-/// The capture worker's job: render, skip if unchanged, write.
-fn capture_work(doc: Arc<Document>, max_long: u32, tag: String, last: Option<Arc<Frame>>, path: PathBuf) -> Outcome {
-    let frame = match render_frame(&doc, max_long, &tag) {
+/// Wait while `busy` is set (at most [`MAX_PAUSE_MS`]).
+fn wait_while(busy: &AtomicBool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let start = mono_ms();
+        while busy.load(Ordering::Relaxed) && mono_ms() - start < MAX_PAUSE_MS {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = busy;
+}
+
+/// The capture worker's job: render, skip if unchanged, write. With `busy`, the render waits
+/// between bands while it is set.
+fn capture_work(doc: Arc<Document>, max_long: u32, tag: String, last: Option<Arc<Frame>>, path: PathBuf, busy: Option<Arc<AtomicBool>>) -> Outcome {
+    let pace = || {
+        if let Some(b) = &busy {
+            wait_while(b);
+        }
+    };
+    let frame = match render_frame_paced(&doc, max_long, &tag, &pace) {
         Ok(f) => f,
         Err(e) => return Outcome::Failed(e.to_string()),
     };
@@ -620,6 +656,18 @@ impl Recorder {
 
     pub fn take_messages(&mut self) -> Vec<String> {
         std::mem::take(&mut self.messages)
+    }
+
+    /// The user is in the middle of something (a pointer button held) or not. While busy, no
+    /// capture starts and `recording.json` waits, and a capture under way holds still between
+    /// bands of its render.
+    pub fn set_busy(&self, busy: bool) {
+        self.busy.store(busy, Ordering::Relaxed);
+    }
+
+    /// See [`Recorder::set_busy`].
+    pub fn busy(&self) -> bool {
+        self.busy.load(Ordering::Relaxed)
     }
 
     pub fn track(&self, doc: DocId) -> Option<&Track> {
@@ -722,8 +770,10 @@ impl Recorder {
         t.save(now)
     }
 
-    /// Wait for in-flight captures to finish and apply them.
+    /// Wait for in-flight captures to finish and apply them. A capture waiting for the user to
+    /// stop is let go first, so this never waits on the pointer.
     pub(crate) fn wait(&mut self, now: f64) {
+        self.busy.store(false, Ordering::Relaxed);
         for t in &mut self.tracks {
             if let Some(p) = &mut t.pending
                 && let Some(h) = p.handle.take()
@@ -781,9 +831,10 @@ impl Recorder {
         self.messages.extend(messages);
     }
 
-    /// Start a capture of `st` on a worker thread.
-    fn spawn_capture(&mut self, st: &DocState) {
+    /// Start a capture of `st` on a worker thread; `paced` lets it wait while the user is busy.
+    fn spawn_capture(&mut self, st: &DocState, paced: bool) {
         let (max_long, tag) = self.settings.as_ref().map_or((1920, "[ref]".to_string()), |s| (s.max_long(), s.tag()));
+        let busy = paced.then(|| self.busy.clone());
         let Some(t) = self.track_mut(st.doc.id) else { return };
         t.dirty = false;
         let n = t.rec.meta.next_index;
@@ -798,8 +849,9 @@ impl Recorder {
             let path = path.clone();
             let doc = doc.clone();
             let last = last.clone();
+            let busy = busy.clone();
             move || {
-                let work = || capture_work(doc, max_long, tag, last, path);
+                let work = || capture_work(doc, max_long, tag, last, path, busy);
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| in_capture_pool(work)))
                     .unwrap_or_else(|_| Outcome::Failed("the capture failed with an internal error".into()));
                 let _ = tx.send(r);
@@ -809,7 +861,7 @@ impl Recorder {
             Ok(h) => Some(h),
             Err(_) => {
                 // No threads: capture inline.
-                let _ = tx.send(capture_work(doc, max_long, tag, last, path));
+                let _ = tx.send(capture_work(doc, max_long, tag, last, path, None));
                 None
             }
         };
@@ -838,6 +890,7 @@ impl Recorder {
                 if let Some(p) = &mut t.pending
                     && let Some(h) = p.handle.take()
                 {
+                    self.busy.store(false, Ordering::Relaxed);
                     let _ = h.join();
                 }
                 t.commit_work(now, idle);
@@ -878,6 +931,7 @@ impl Recorder {
         }
 
         let active_id = active.and_then(|i| docs.get(i)).map(|d| d.doc.id);
+        let busy = self.busy();
         let mut capture = Vec::new();
         let mut next: Option<f64> = None;
         for t in &mut self.tracks {
@@ -936,20 +990,23 @@ impl Recorder {
                 }
             }
             if let Some(due) = t.due() {
-                if now >= due {
+                if now >= due && !busy {
                     capture.push(t.doc);
                 } else {
+                    // Busy: look again shortly (the button's release brings a frame anyway).
+                    let due = if busy { due.max(now + 100.0) } else { due };
                     next = Some(next.map_or(due, |n: f64| n.min(due)));
                 }
             }
             if t.pending.is_some() {
                 next = Some(next.map_or(now + 50.0, |n: f64| n.min(now + 50.0)));
             }
-            if t.meta_dirty && now - t.last_save >= SAVE_EVERY_MS && t.pending.is_none() {
+            if t.meta_dirty && now - t.last_save >= SAVE_EVERY_MS && t.pending.is_none() && !busy {
                 let _ = t.save(now);
             }
             if t.meta_dirty {
                 let at = t.last_save + SAVE_EVERY_MS;
+                let at = if busy { at.max(now + 100.0) } else { at };
                 next = Some(next.map_or(at, |n: f64| n.min(at)));
             }
             // While recording, the work timer moves: the panel shows it once a second.
@@ -957,7 +1014,7 @@ impl Recorder {
         }
         for id in capture {
             if let Some(st) = docs.iter().find(|d| d.doc.id == id) {
-                self.spawn_capture(st);
+                self.spawn_capture(st, true);
             }
         }
         next
@@ -1019,7 +1076,7 @@ impl Recorder {
         }
         self.wait(now);
         let before = self.track(st.doc.id).map_or(0, |t| t.rec.meta.frames.len());
-        self.spawn_capture(st);
+        self.spawn_capture(st, false);
         self.wait(now);
         let t = self.track_mut(st.doc.id).ok_or(EngineError::NoDocument)?;
         let _ = t.save(now);

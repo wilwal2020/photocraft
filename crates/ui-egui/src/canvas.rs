@@ -945,7 +945,30 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
     }
-    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
+    let took = crate::gpu_canvas::now_ms() - started;
+    app.stroke_trace.stroke(took);
+    // Names the live stroke in the slow-frame log line (user report: 1.3 s "ui: document" builds).
+    app.perf.span("live stroke", took);
+    if let Some(l) = &app.live_stroke {
+        log_slow_push(&l.stroke, took, pts.len());
+    }
+}
+
+/// A live brush push of 100 ms or more says where the time went (user report: 200–800 ms
+/// "live stroke" spans that a test of the same brush and page doesn't show).
+fn log_slow_push(stroke: &EngineStroke, ms: f64, points: usize) {
+    if let EngineStroke::Brush(l) = stroke
+        && ms >= 100.0
+    {
+        let s = l.stats;
+        log::warn!(
+            "slow live stroke push: {ms:.0} ms for {points} points: layer {:.0} ms, {} dabs {:.0} ms, composite {:.0} ms",
+            s.prep_ms,
+            s.dabs,
+            s.dabs_ms,
+            s.composite_ms
+        );
+    }
 }
 
 /// The points the live retouching stroke has rendered.
@@ -6711,7 +6734,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             if from.is_some() {
                 app.stylus.record_point();
             }
+            let started = crate::gpu_canvas::now_ms();
             app.live_stroke = if strokes_live(tool) { begin_live_stroke(app) } else { None };
+            let took = crate::gpu_canvas::now_ms() - started;
+            app.perf.span("live stroke begin", took);
+            if let (Some(l), Some(d)) = (&app.live_stroke, &app.drag) {
+                log_slow_push(&l.stroke, took, d.points.len());
+            }
         }
         ToolEvent::Move { x, y, pressure } => {
             // Polygonal Lasso: ⌥ held while the button is down draws freehand into the polygon;
@@ -9270,6 +9299,95 @@ mod tests {
         assert!(a.rgba(500, 45)[3] > 0.5 && a.rgba(500, 45 + 12)[3] == 0.0);
         // (The smoothed tail catches up to the end point only when the stroke finishes.)
         assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
+    }
+
+    /// Timings of a large brush's drag on a 4000×4000 page through the canvas, as the user paints
+    /// (user report: 200–800 ms "live stroke" spans with their 429 px hard round at 1 % spacing).
+    /// `cargo test -p photocraft-ui-egui --lib large_brush_drag_timings -- --ignored --nocapture`;
+    /// `PHOTOCRAFT_BENCH_PAGE=<file>` paints on a new layer of that file instead.
+    #[test]
+    #[ignore = "timing"]
+    fn large_brush_drag_timings() {
+        let services = crate::Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        match std::env::var("PHOTOCRAFT_BENCH_PAGE") {
+            Ok(path) => drop(app.open_path(&path).unwrap()),
+            Err(_) => drop(app.run("file.new", json!({"width": 4000, "height": 4000})).unwrap()),
+        }
+        // A new layer, then (`PHOTOCRAFT_BENCH_ALL`) each pixel layer of the page.
+        let mut targets = vec![None];
+        if std::env::var("PHOTOCRAFT_BENCH_ALL").is_ok() {
+            let doc = app.session.active().unwrap().doc.clone();
+            targets.extend(doc.walk().into_iter().filter(|(_, _, l)| l.surface().is_some()).map(|(_, _, l)| Some((l.id.0, l.name.clone()))));
+        }
+        app.run("layer.new.layer", json!({})).unwrap();
+        let brush = json!({"size": 429, "hardness": 1.0, "spacing": 0.01, "shapeDynamics": {"enabled": true, "size": {"control": "penPressure"}}});
+        app.run("tools.setBrush", json!({ "brush": brush })).unwrap();
+        app.ui.tool = Tool::Brush;
+        ensure_texture(&mut app, &ctx, 0, None);
+        let m = egui::Modifiers::NONE;
+        let (w, h) = app.session.active().map(|st| (f64::from(st.doc.size.width), f64::from(st.doc.size.height))).unwrap();
+        // `PHOTOCRAFT_BENCH_BUSY`: thumbnails of the page composited on the global pool meanwhile,
+        // as background work does after an edit.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let busy = std::env::var("PHOTOCRAFT_BENCH_BUSY").is_ok().then(|| {
+            let (doc, stop) = (app.session.active().unwrap().doc.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::hint::black_box(photocraft_compose::thumbnail(&doc, 256));
+                }
+            })
+        });
+        for target in targets {
+            if let Some((id, _)) = &target {
+                app.run("layer.select", json!({ "layer": id })).unwrap();
+            }
+            // `PHOTOCRAFT_BENCH_LIGHT`: a pen landing lightly, pressure rising from 2 % over the
+            // first moves, as a real stroke starts.
+            let light = std::env::var("PHOTOCRAFT_BENCH_LIGHT").is_ok();
+            let at = |i: i32| {
+                let d = f64::from(i) * 33.0;
+                let p = if light { (0.02 + 0.03 * i as f32).min(1.0) } else { 0.6 + 0.4 * (d / 300.0).sin() as f32 };
+                (w * 0.1 + d, h * 0.5 + h * 0.15 * (d / 700.0).sin(), p)
+            };
+            let t = std::time::Instant::now();
+            tool_event(&mut app, ToolEvent::Down { x: at(0).0, y: at(0).1, pressure: at(0).2 }, m);
+            let down = t.elapsed().as_secs_f64() * 1000.0;
+            let (mut moves, mut refresh) = (Vec::new(), Vec::new());
+            // The document the canvas showed last, held into the next frame as the GPU canvas does.
+            let mut shown = None;
+            for i in 1..=30 {
+                let (x, y, pressure) = at(i);
+                let t = std::time::Instant::now();
+                tool_event(&mut app, ToolEvent::Move { x, y, pressure }, m);
+                moves.push(t.elapsed().as_secs_f64() * 1000.0);
+                let t = std::time::Instant::now();
+                ensure_texture(&mut app, &ctx, 0, None);
+                refresh.push(t.elapsed().as_secs_f64() * 1000.0);
+                shown = Some(display_doc(&mut app, 0).0);
+            }
+            drop(shown);
+            let t = std::time::Instant::now();
+            tool_event(&mut app, ToolEvent::Up { x: at(30).0, y: at(30).1 }, m);
+            let up = t.elapsed().as_secs_f64() * 1000.0;
+            let stat = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                (v[v.len() / 2], v[v.len() - 1])
+            };
+            let ((m50, mmax), (r50, rmax)) = (stat(&mut moves), stat(&mut refresh));
+            let name = target.map_or("new layer".to_string(), |(id, n)| format!("{id} {n}"));
+            println!("{name:<32} down {down:6.1} | move p50 {m50:6.1} max {mmax:6.1} | refresh p50 {r50:6.1} max {rmax:6.1} | up {up:6.1} ms");
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = busy {
+            t.join().unwrap();
+        }
     }
 
     /// Brush drag along y = 40 with one canvas frame per pointer move; returns the document the

@@ -3945,6 +3945,22 @@ fn one_colour_areas_reduce_like_composited_ones() {
 }
 
 #[test]
+fn a_paced_thumbnail_is_the_thumbnail_and_paces_every_band() {
+    // A timelapse frame renders through `thumbnail_buffer_paced`, waiting in `pace` while the user
+    // paints: the frame must be the plain thumbnail's pixels, with a pause point at every band.
+    let d = sparse_doc(2000, 2100);
+    for max in [64, 700, 2100] {
+        let calls = std::cell::Cell::new(0);
+        let paced = thumbnail_buffer_paced(&d, max, &|| calls.set(calls.get() + 1));
+        let plain = thumbnail_buffer(&d, max);
+        assert_eq!(paced.rect, plain.rect, "{max}");
+        assert_eq!(paced.px, plain.px, "{max}");
+        let bands = if max >= 2100 { 1 } else { 2100usize.div_ceil(RENDER_TILE as usize) };
+        assert!(calls.get() >= bands, "{max}: paced {} times for {bands} bands", calls.get());
+    }
+}
+
+#[test]
 fn layers_that_read_other_pixels_are_composited_pixel_by_pixel() {
     let base = sparse_doc(300, 300);
     let edits: [fn(&mut Layer); 4] = [
