@@ -1495,10 +1495,14 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
     assert!(!prefs::is_hidden("enhancedControls.touchGestures"));
     assert!(prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
-    // Camera Raw Defaults are all live: the dialog's Open applies them (camera_raw_ui).
+    // Camera Raw Defaults this branch's Camera Raw applies are live; the rest (read only by
+    // upstream's Camera Raw) stay hidden.
     assert!(has_visible_fields(&values, "rawDefaults"));
-    for k in ["openInCameraRaw", "demosaic", "applyAutoTone", "colorSpace", "bitDepth", "resolution", "sharpenFor", "openAsSmartObject", "writeXmpSidecars"] {
+    for k in ["openInCameraRaw", "demosaic", "colorSpace", "resolution"] {
         assert!(!prefs::is_hidden(&format!("rawDefaults.{k}")), "{k}");
+    }
+    for k in ["applyAutoTone", "bitDepth", "sharpenFor", "openAsSmartObject", "writeXmpSidecars"] {
+        assert!(prefs::is_hidden(&format!("rawDefaults.{k}")), "{k}");
     }
     assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
     assert!(!prefs::is_hidden("general.animatedZoom"));
