@@ -187,7 +187,7 @@ fn reopened_canvas_menus_still_choose_their_actions() {
     dismiss_outside(&mut h, Popup::Layers);
     tap(&mut h, at, Modifiers::NONE, true);
     assert!(is_open(&h, Popup::Layers));
-    let menu_rect = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-layer-menu"))).unwrap();
+    let menu_rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-layer-menu"))).unwrap();
     h.query_all_by_label("Background").find(|node| menu_rect.contains(node.rect().center())).expect("Background in the layer menu").click();
     h.run_steps(3);
     assert!(!is_open(&h, Popup::Layers));
@@ -364,7 +364,7 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
     let before = document_state(&h);
     let at = fractional_point(&h, 1.0);
     tap(&mut h, at, Modifiers::NONE, true);
-    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).unwrap();
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).unwrap();
     let name = h.state().session.tools.presets.first().unwrap().name.clone();
     let card = h.query_all_by_label(&name).find(|n| picker.contains(n.rect().center())).expect("visible preset card").rect();
     // Open by the right edge so the action lands outside the picker on a foreground menu.
@@ -387,7 +387,9 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
 /// under the pointer, where it was pressed; an Alt+right-drag still resizes the brush instead.
 #[test]
 fn a_slow_or_drifting_right_click_still_opens_the_menu() {
-    for (tool, popup, mods) in [(Tool::RectMarquee, Popup::Tool, Modifiers::NONE), (Tool::Brush, Popup::Brush, Modifiers::NONE), (Tool::Move, Popup::Layers, Modifiers::NONE)] {
+    for (tool, popup, mods) in
+        [(Tool::RectMarquee, Popup::Tool, Modifiers::NONE), (Tool::Brush, Popup::Brush, Modifiers::NONE), (Tool::Move, Popup::Layers, Modifiers::NONE)]
+    {
         for (drift, hold) in [(vec2(14.0, 9.0), 2), (vec2(0.0, 0.0), 90)] {
             let mut h = harness(tool, false, 1.0);
             let at = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect).center();

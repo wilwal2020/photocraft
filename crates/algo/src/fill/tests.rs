@@ -390,7 +390,9 @@ fn the_spot_box_gives_what_the_whole_page_gave() {
         for click in 0..6 {
             let (x, y) = ((page as i32 * 37 + click * 29) % 97, (page as i32 * 11 + click * 41) % 83);
             for gap in [0.0, 3.0, 6.0, 11.0] {
-                for (scaling, amount) in [(Scaling::Darkest, 0.0), (Scaling::Darkest, 3.0), (Scaling::Round, 2.0), (Scaling::Square, 2.0), (Scaling::Round, -2.0)] {
+                for (scaling, amount) in
+                    [(Scaling::Darkest, 0.0), (Scaling::Darkest, 3.0), (Scaling::Round, 2.0), (Scaling::Square, 2.0), (Scaling::Round, -2.0)]
+                {
                     for border in [false, true] {
                         let o = FillOptions { close_gap: gap, scale: amount, scaling, image_border: border, tolerance: 20.0, ..FillOptions::default() };
                         let got = click_region(&img.px, img.area(), (x, y), &o);
@@ -404,7 +406,6 @@ fn the_spot_box_gives_what_the_whole_page_gave() {
     }
     assert!(checked > 2000);
 }
-
 
 /// With Image Border off the canvas carries on blank past its edge, but a fill still never goes
 /// round a line that reaches the edge into the next spot (it once did, through that margin).
@@ -560,7 +561,10 @@ fn the_editing_layers_paint_closes_an_enclosed_area() {
     let o = hard();
     let r = enclosed_region_blocked(&img.px, img.area(), &lasso, Target::Transparent, &o, Some(&block)).unwrap();
     assert!(filled(&r, 20, 20));
-    assert!(enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none_or(|r| !filled(&r, 20, 20)), "without the block the inside leaks out past the lasso");
+    assert!(
+        enclosed_region(&img.px, img.area(), &lasso, Target::Transparent, &o).is_none_or(|r| !filled(&r, 20, 20)),
+        "without the block the inside leaks out past the lasso"
+    );
 }
 
 /// A real page's clicks at every Close Gap level (`PHOTOCRAFT_FILL_PAGE=<page.rgba>` with
@@ -593,8 +597,12 @@ fn a_real_page_fills_less_as_close_gap_rises() {
             // The gap-16 fill as raw marks, to look at.
             if let Some(r) = click_region(&px, area, seed, &FillOptions { close_gap: 16.0, scale: 1.0, anti_alias: false, ..FillOptions::default() }) {
                 let b = r.bbox;
-                let mut out = format!("{} {} {} {}
-", b.x0, b.y0, b.x1, b.y1).into_bytes();
+                let mut out = format!(
+                    "{} {} {} {}
+",
+                    b.x0, b.y0, b.x1, b.y1
+                )
+                .into_bytes();
                 out.extend(r.mask.iter().map(|v| u8::from(*v >= 128)));
                 std::fs::write(std::path::Path::new(&dir).join(format!("new{k}_16.bin")), out).unwrap();
             }
@@ -729,11 +737,24 @@ fn a_real_page_click_stage_timings() {
         let r2 = click_region(&px, area, ((si % w) as i32, (si / w) as i32), &o);
         ms[7] = whole.elapsed().as_secs_f64() * 1000.0;
         assert_eq!(r.map(|r| r.bbox), r2.map(|r| r.bbox));
-        eprintln!("{cw:5}x{ch:<5} strength {:4.0} flood {:4.0} crop {:4.0} areas {:5.0} seams {:4.0} scale {:4.0} region {:4.0} | whole {:5.0} ms", ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6], ms[7]);
+        eprintln!(
+            "{cw:5}x{ch:<5} strength {:4.0} flood {:4.0} crop {:4.0} areas {:5.0} seams {:4.0} scale {:4.0} region {:4.0} | whole {:5.0} ms",
+            ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6], ms[7]
+        );
         for k in 0..8 {
             total[k] += ms[k];
         }
     }
     let n = seeds.len() as f64;
-    eprintln!("mean: strength {:.0} flood {:.0} crop {:.0} areas {:.0} seams {:.0} scale {:.0} region {:.0} | whole {:.0} ms", total[0] / n, total[1] / n, total[2] / n, total[3] / n, total[4] / n, total[5] / n, total[6] / n, total[7] / n);
+    eprintln!(
+        "mean: strength {:.0} flood {:.0} crop {:.0} areas {:.0} seams {:.0} scale {:.0} region {:.0} | whole {:.0} ms",
+        total[0] / n,
+        total[1] / n,
+        total[2] / n,
+        total[3] / n,
+        total[4] / n,
+        total[5] / n,
+        total[6] / n,
+        total[7] / n
+    );
 }

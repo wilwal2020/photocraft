@@ -182,7 +182,7 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 fn name_row(ui: &mut Ui, fields: &mut Map<String, Value>) {
     let mut name = text(fields, "name");
     row(ui, tl!("Name:"), |ui| {
-        let r = widgets::text_field(ui, egui::Id::new("actions-dialog-name"), &mut name, "", 220.0, false);
+        let r = widgets::text_field(ui, egui::Id::unique("actions-dialog-name"), &mut name, "", 220.0, false);
         if !fields.contains_key("__focused") {
             r.request_focus();
             fields.insert("__focused".into(), json!(true));
@@ -198,7 +198,7 @@ fn key_rows(ui: &mut Ui, fields: &mut Map<String, Value>) {
     let keys = key_options();
     let options: Vec<(u64, &str)> = keys.iter().map(|(k, l)| (*k, l.as_str())).collect();
     row(ui, tl!("Function Key:"), |ui| {
-        widgets::dropdown_literal(ui, "actions-dialog-key", &mut key, &options, 80.0);
+        widgets::dropdown_literal(ui, "actions-dialog-key", tl!("Function Key:"), &mut key, &options, 80.0);
         ui.add_enabled_ui(key > 0, |ui| {
             widgets::checkbox(ui, &mut shift, &crate::shortcuts::pretty("Shift"));
             widgets::checkbox(ui, &mut ctrl, &crate::shortcuts::pretty("Cmd"));
@@ -211,7 +211,7 @@ fn key_rows(ui: &mut Ui, fields: &mut Map<String, Value>) {
     let colors = color_options();
     let options: Vec<(String, &str)> = colors.iter().map(|(c, l)| (c.clone(), *l)).collect();
     row(ui, tl!("Color:"), |ui| {
-        widgets::dropdown_literal(ui, "actions-dialog-color", &mut color, &options, 120.0);
+        widgets::dropdown_literal(ui, "actions-dialog-color", tl!("Color:"), &mut color, &options, 120.0);
     });
     fields.insert("key".into(), json!(key));
     fields.insert("shift".into(), json!(shift));
@@ -250,7 +250,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
             }
             let options: Vec<(String, &str)> = sets.iter().map(|s| (s.clone(), s.as_str())).collect();
             row(ui, tl!("Set:"), |ui| {
-                widgets::dropdown_literal(ui, "actions-dialog-set", &mut set, &options, 220.0);
+                widgets::dropdown_literal(ui, "actions-dialog-set", tl!("Set:"), &mut set, &options, 220.0);
             });
             fields.insert("set".into(), json!(set));
             key_rows(ui, fields);
@@ -260,9 +260,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
             name_row(ui, fields);
             key_rows(ui, fields);
             let mut each = flag(fields, "eachLayer");
-            widgets::checkbox(ui, &mut each, tl!("Play once for each selected layer")).on_hover_text(tl!(
-                "With several layers selected, Play runs the action on each of them in turn, with only that layer selected"
-            ));
+            widgets::checkbox(ui, &mut each, tl!("Play once for each selected layer"))
+                .on_hover_text(tl!("With several layers selected, Play runs the action on each of them in turn, with only that layer selected"));
             fields.insert("eachLayer".into(), json!(each));
         }
         "playback" => {
@@ -291,7 +290,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
             });
             ui.label(egui::RichText::new(tl!("Type part of a menu item's name, then pick it below.")).small());
             let mut query = text(fields, "query");
-            let r = widgets::text_field(ui, egui::Id::new("actions-menu-item-find"), &mut query, tl!("Find"), 320.0, false);
+            let r = widgets::text_field(ui, egui::Id::unique("actions-menu-item-find"), &mut query, tl!("Find"), 320.0, false);
             if !fields.contains_key("__focused") {
                 r.request_focus();
                 fields.insert("__focused".into(), json!(true));
@@ -314,7 +313,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
             let mut cond = text(fields, "if");
             let options: Vec<(String, &str)> = photocraft_engine::actions_edit_cmds::CONDITIONS.iter().map(|c| (c.to_string(), condition_label(c))).collect();
             row(ui, tl!("If Current:"), |ui| {
-                widgets::dropdown_literal(ui, "actions-cond-if", &mut cond, &options, 220.0);
+                widgets::dropdown_literal(ui, "actions-cond-if", tl!("If Current:"), &mut cond, &options, 220.0);
             });
             let names: Vec<String> = std::iter::once(String::new()).chain(app.session.actions.list.iter().map(|a| a.name.clone())).collect();
             let none = tl!("None");
@@ -322,7 +321,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut Ui, fields: &mut Map<String, Value>) {
             for (key, label) in [("then", tl!("Then Play Action:")), ("else", tl!("Else Play Action:"))] {
                 let mut v = text(fields, key);
                 row(ui, label, |ui| {
-                    widgets::dropdown_literal(ui, &format!("actions-cond-{key}"), &mut v, &options, 220.0);
+                    widgets::dropdown_literal(ui, &format!("actions-cond-{key}"), tl!("Else Play Action:"), &mut v, &options, 220.0);
                 });
                 fields.insert(key.into(), json!(v));
             }

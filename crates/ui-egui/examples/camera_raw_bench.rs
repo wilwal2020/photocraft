@@ -47,7 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         let mut ms = Vec::new();
         for i in 0..reps + 3 {
-            let r = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set[i % 2], "draft": true}})).ok_or("no dialog entry point")??;
+            let r = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set[i % 2], "draft": true}}))
+                .ok_or("no dialog entry point")??;
             if i >= 3 {
                 ms.push(r.get("renderMs").and_then(Value::as_f64).ok_or("no render timing")?);
             }
@@ -55,7 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         colour_rows.push(json!({"name": name, "samples_ms": ms}));
     }
-    camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0, "vibrance": 0, "hslLum": [0, 0, 0, 0, 0, 0, 0, 0]}}})).ok_or("no dialog entry point")??;
+    camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0, "vibrance": 0, "hslLum": [0, 0, 0, 0, 0, 0, 0, 0]}}}))
+        .ok_or("no dialog entry point")??;
     // Measure the complete native dialog CPU path with every SDR scope feature enabled:
     // filter preparation + ICC vectorscope + clipping texture + nine Lab probes + pixel-hover overlays + UI mesh.
     // A full-coverage selection exercises the mask blend and selected-region scope without
@@ -134,7 +136,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max = sorted.last().copied().unwrap_or(0.0);
     let mut rows = vec![json!({"name": "exposure proxy update", "median_ms": p50, "p95_ms": p95, "max_ms": max, "samples_ms": samples})];
     rows.extend(colour_rows);
-    rows.extend([json!({"name": "RGB histogram", "samples_ms": histogram_samples}), json!({"name": "RGB histogram paint + tessellation", "samples_ms": draw_samples}), json!({"name":"interactive scope update", "samples_ms":interactive_samples}), json!({"name":"vectorscope ICC analysis", "samples_ms":scope_samples}), json!({"name":"cached scope frame", "samples_ms":idle_samples})]);
+    rows.extend([
+        json!({"name": "RGB histogram", "samples_ms": histogram_samples}),
+        json!({"name": "RGB histogram paint + tessellation", "samples_ms": draw_samples}),
+        json!({"name":"interactive scope update", "samples_ms":interactive_samples}),
+        json!({"name":"vectorscope ICC analysis", "samples_ms":scope_samples}),
+        json!({"name":"cached scope frame", "samples_ms":idle_samples}),
+    ]);
     let report = json!({"width": width, "height": height, "rows": rows});
     println!("{}", serde_json::to_string_pretty(&report)?);
     if let Some(path) = args.iter().position(|a| a == "--json").and_then(|i| args.get(i + 1)) {

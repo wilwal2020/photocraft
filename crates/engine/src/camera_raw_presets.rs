@@ -226,7 +226,8 @@ mod tests {
         std::fs::write(ps.join("broken.xmp"), b"<nope").unwrap();
         std::fs::write(ps.join("Index_1.dat"), b"x").unwrap();
         std::fs::write(ps.join(".hidden.xmp"), &bare).unwrap();
-        let found = scan(&[(own.to_str().unwrap().to_string(), Source::Own), (ps.to_str().unwrap().to_string(), Source::Photoshop), ("".into(), Source::Adobe)]);
+        let found =
+            scan(&[(own.to_str().unwrap().to_string(), Source::Own), (ps.to_str().unwrap().to_string(), Source::Photoshop), ("".into(), Source::Adobe)]);
         let names: Vec<(&str, &str, Source)> = found.iter().map(|f| (f.name.as_str(), f.group.as_str(), f.source)).collect();
         assert_eq!(names, vec![("Crisp", "Mine", Source::Own), ("Film 01", "Pack", Source::Photoshop)]);
         let mut applied = CameraRaw::default();

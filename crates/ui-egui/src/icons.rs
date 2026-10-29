@@ -55,9 +55,10 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 /// made the Pen's pointer feel less smooth than the brush's (user report).
 pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f32, mirrored: bool) {
     let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-icon-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-icon-cursor")));
     // Flipped left to right by its texture coordinates.
-    let uv = if mirrored { Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0)) } else { Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)) };
+    let uv =
+        if mirrored { Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0)) } else { Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)) };
     let paint = |tint: Color32, r: Rect| {
         if let Some(tex) = image(name, size, tint).load_for_size(ctx, r.size()).ok().and_then(|t| t.texture_id()) {
             painter.image(tex, r, uv, tint);
@@ -84,7 +85,7 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
-    let area = egui::Area::new(egui::Id::new("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, SIZE, Color32::from_black_alpha(220));
         let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
@@ -148,6 +149,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::CloneStamp => "stamp",
         Tool::PatternStamp => "grid-3x3",
         Tool::HistoryBrush => "clock",
+        Tool::ArtHistoryBrush => "sparkles",
         Tool::Blur => "droplet",
         Tool::Sharpen => "triangle",
         Tool::Smudge => "pointer",
@@ -232,7 +234,7 @@ pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, toolt
     }
     let tint = if on || resp.hovered() { t.text } else { t.text_faint };
     paint(ui, rect, name, (box_size * 0.52).round(), tint);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, tl!(tooltip)));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tl!(tooltip)));
     resp.on_hover_text(tl!(tooltip))
 }
 

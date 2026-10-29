@@ -582,7 +582,7 @@ mod tests {
         let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
         let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), canvas);
         let segs = Arc::new(speckle(1500, 1000));
-        let id = egui::Id::new("ants-whole");
+        let id = egui::Id::unique("ants-whole");
         let mut v = ViewXform { rect: canvas, zoom: 1.0, center: [100.0, 50.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let rect = || ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap().lock().unwrap().raster.as_ref().map(|r| r.rect);
         uploads(&ctx);
@@ -626,6 +626,7 @@ mod tests {
     /// rotation, flip, aspect or display scale and a pan past the margin. The march recolours
     /// the part shown.
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn a_pan_moves_the_texture_and_the_rest_rasterizes_again() {
         let ctx = egui::Context::default();
         let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
@@ -636,7 +637,7 @@ mod tests {
             s
         };
         let segs = Arc::new(wide(speckle(2000, 1400)));
-        let id = egui::Id::new("ants-test");
+        let id = egui::Id::unique("ants-test");
         let mut v = ViewXform { rect: canvas, zoom: 1.0, center: [1000.0, 700.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let raster = || {
             let shared = ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap();

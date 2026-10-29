@@ -69,7 +69,7 @@ pub fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_secs_f64(LOOK_EVERY));
     let mut cancelled = false;
-    egui::Area::new(egui::Id::new("gigapixel-waiting")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -40.0)).order(egui::Order::Foreground).show(
+    egui::Area::new(egui::Id::unique("gigapixel-waiting")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -40.0)).order(egui::Order::Foreground).show(
         ctx,
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -98,7 +98,9 @@ fn arrived(app: &mut PhotocraftApp, path: &str, document: u64) {
             app.ui.status_error = false;
             // Gigapixel embedded the settings it used: they can become a preset.
             let message = if r["settings"].is_object() {
-                tl!("Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale")
+                tl!(
+                    "Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer). Keep these settings with Topaz Gigapixel Presets › Save Preset from Last Upscale"
+                )
             } else {
                 tl!("Topaz Gigapixel AI: upscaled {scale}× to {w} × {h} px (new layer)")
             };
@@ -228,7 +230,11 @@ pub fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, String>> 
         return Some(Ok(json!({"dialog": open_manager(app)})));
     }
     if id == RUN_TWO_ID {
-        return Some(open_run_two(app).map(|d| json!({"dialog": d})).ok_or_else(|| tl!("Save two presets with their own settings first; then this one can run them together.").into()));
+        return Some(
+            open_run_two(app)
+                .map(|d| json!({"dialog": d}))
+                .ok_or_else(|| tl!("Save two presets with their own settings first; then this one can run them together.").into()),
+        );
     }
     if id == LAST_ID {
         return Some(open_from_last(app).map(|d| json!({"dialog": d})).ok_or_else(|| tl!("No upscale has come back from Topaz Gigapixel AI yet").into()));
@@ -316,7 +322,10 @@ fn load(f: &mut Map<String, Value>, preset: Option<&GigapixelPreset>, all: &[Gig
     let s = preset.map(|p| p.settings.clone()).unwrap_or_else(|| json!({"model": "std", "scale": 2}));
     let name = match preset {
         Some(p) => p.name.clone(),
-        None => (1..).map(|n| if n == 1 { "Upscale".to_string() } else { format!("Upscale {n}") }).find(|n| !all.iter().any(|p| p.name.eq_ignore_ascii_case(n))).unwrap_or_default(),
+        None => (1..)
+            .map(|n| if n == 1 { "Upscale".to_string() } else { format!("Upscale {n}") })
+            .find(|n| !all.iter().any(|p| p.name.eq_ignore_ascii_case(n)))
+            .unwrap_or_default(),
     };
     f.insert("editing".into(), json!(preset.map(|p| p.name.clone()).unwrap_or_default()));
     f.insert("name".into(), json!(name));
@@ -329,7 +338,10 @@ fn load(f: &mut Map<String, Value>, preset: Option<&GigapixelPreset>, all: &[Gig
     f.insert("combine".into(), json!(s.get("combine").and_then(Value::as_str).unwrap_or("chain")));
     f.insert("model".into(), json!(model_key(&s)));
     f.insert("faceRecoveryVersion".into(), s.get("faceRecoveryVersion").cloned().unwrap_or(Value::Null));
-    let (size, amount) = ["width", "height"].iter().find_map(|k| s.get(*k).and_then(Value::as_f64).map(|v| (*k, v))).unwrap_or(("scale", s.get("scale").and_then(Value::as_f64).unwrap_or(2.0)));
+    let (size, amount) = ["width", "height"]
+        .iter()
+        .find_map(|k| s.get(*k).and_then(Value::as_f64).map(|v| (*k, v)))
+        .unwrap_or(("scale", s.get("scale").and_then(Value::as_f64).unwrap_or(2.0)));
     f.insert("size".into(), json!(size));
     f.insert("amount".into(), json!(amount));
     for (key, _, default) in STRENGTHS {
@@ -461,7 +473,7 @@ fn two_preset_rows(ui: &mut egui::Ui, f: &mut Map<String, Value>, singles: &[(St
     for (key, label) in [("first", tl!("First:")), ("second", tl!("Then:"))] {
         let mut v = text(f, key).to_string();
         row(ui, label, |ui| {
-            if widgets::dropdown_literal(ui, &format!("gigapixel-preset-{key}"), &mut v, singles, 220.0) {
+            if widgets::dropdown_literal(ui, &format!("gigapixel-preset-{key}"), tl!("Then:"), &mut v, singles, 220.0) {
                 f.insert(key.into(), json!(v));
             }
         });
@@ -469,7 +481,7 @@ fn two_preset_rows(ui: &mut egui::Ui, f: &mut Map<String, Value>, singles: &[(St
     let mut combine = text(f, "combine").to_string();
     row(ui, tl!("Results:"), |ui| {
         let options = [("chain".to_string(), tl!("One after the other")), ("layers".to_string(), tl!("Each on its own layer"))];
-        if widgets::dropdown(ui, "gigapixel-preset-combine", &mut combine, &options, 220.0) {
+        if widgets::dropdown(ui, "gigapixel-preset-combine", "Combine", &mut combine, &options, 220.0) {
             f.insert("combine".into(), json!(combine));
         }
     });
@@ -497,7 +509,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     choices.extend(all.iter().map(|p| (p.name.clone(), p.name.as_str())));
     let mut delete = false;
     row(ui, tl!("Preset:"), |ui| {
-        if widgets::dropdown_literal(ui, "gigapixel-preset-pick", &mut editing, &choices, 220.0) {
+        if widgets::dropdown_literal(ui, "gigapixel-preset-pick", tl!("Preset:"), &mut editing, &choices, 220.0) {
             let picked = all.iter().find(|p| p.name == editing).cloned();
             load(f, picked.as_ref(), &all);
         }
@@ -529,14 +541,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let mut kind = text(f, "kind").to_string();
     row(ui, tl!("Upscale:"), |ui| {
         let options = [("one".to_string(), tl!("With these settings")), ("two".to_string(), tl!("With two presets"))];
-        if widgets::dropdown(ui, "gigapixel-preset-kind", &mut kind, &options, 220.0) {
+        if widgets::dropdown(ui, "gigapixel-preset-kind", "Kind", &mut kind, &options, 220.0) {
             f.insert("kind".into(), json!(kind));
         }
     });
     ui.add_space(6.0);
     if kind == "two" {
         if singles.len() < 2 {
-            ui.label(egui::RichText::new(tl!("Save two presets with their own settings first; then this one can run them together.")).color(crate::theme::Tokens::get(ui.ctx()).text_dim));
+            ui.label(
+                egui::RichText::new(tl!("Save two presets with their own settings first; then this one can run them together."))
+                    .color(crate::theme::Tokens::get(ui.ctx()).text_dim),
+            );
             return;
         }
         two_preset_rows(ui, f, &singles);
@@ -544,7 +559,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     }
     let mut model = text(f, "model").to_string();
     row(ui, tl!("Model:"), |ui| {
-        if widgets::dropdown_literal(ui, "gigapixel-preset-model", &mut model, &MODELS.map(|(k, l)| (k.to_string(), if k.is_empty() { tl!("Auto") } else { l })), 220.0) {
+        if widgets::dropdown_literal(
+            ui,
+            "gigapixel-preset-model",
+            tl!("Model:"),
+            &mut model,
+            &MODELS.map(|(k, l)| (k.to_string(), if k.is_empty() { tl!("Auto") } else { l })),
+            220.0,
+        ) {
             f.insert("model".into(), json!(model));
         }
     });
@@ -552,7 +574,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let mut amount = num(f, "amount", 2.0) as f32;
     row(ui, tl!("Size:"), |ui| {
         let options = [("scale".to_string(), tl!("Scale")), ("width".to_string(), tl!("Width")), ("height".to_string(), tl!("Height"))];
-        if widgets::dropdown(ui, "gigapixel-preset-size", &mut size, &options, 100.0) {
+        if widgets::dropdown(ui, "gigapixel-preset-size", "Size", &mut size, &options, 100.0) {
             amount = if size == "scale" { 2.0 } else { 4000.0 };
         }
         if size == "scale" {
@@ -646,7 +668,7 @@ mod tests {
         crate::menus::invoke(h.state_mut(), &ctx, MANAGE_ID, json!({})).unwrap();
         h.run_steps(4);
         for label in ["Preset:", "Name:", "Upscale:", "Model:", "Size:", "Denoise:", "Face Recovery:", "Save", "Cancel"] {
-            assert!(h.query_by_label(label).is_some(), "missing {label}");
+            assert!(h.query_all_by_label(label).next().is_some(), "missing {label}");
         }
         let (_, f) = manager(&h).unwrap();
         assert_eq!(text(&f, "name"), "Upscale");
@@ -687,7 +709,7 @@ mod tests {
         load(&mut f, None, &h.state().session.presets.gigapixel_presets);
         h.state_mut().ui.dialog_mut(id).unwrap().fields.extend(f);
         set(&mut h, "kind", json!("two"));
-        assert!(h.query_by_label("First:").is_some() && h.query_by_label("Then:").is_some() && h.query_by_label("Results:").is_some());
+        assert!(["First:", "Then:", "Results:"].iter().all(|l| h.query_all_by_label(l).next().is_some()));
         set(&mut h, "name", json!("Both"));
         set(&mut h, "combine", json!("layers"));
         assert_eq!(settings(&manager(&h).unwrap().1), json!({"presets": ["Faces wide", "Art"], "combine": "layers"}));
@@ -796,7 +818,7 @@ mod tests {
         let (id, f) = h.state().ui.dialogs.iter().find(|d| d.fields.contains_key(RUN_MARK)).map(|d| (d.id, d.fields.clone())).unwrap();
         assert_eq!((text(&f, "first"), text(&f, "second"), text(&f, "combine")), ("Faces", "Art", "chain"));
         for label in ["First:", "Then:", "Results:", "Run", "Cancel"] {
-            assert!(h.query_by_label(label).is_some(), "missing {label}");
+            assert!(h.query_all_by_label(label).next().is_some(), "missing {label}");
         }
         h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("combine".into(), json!("layers"));
         // The run itself: Gigapixel is never started in tests, so it stops at launching, after
@@ -842,7 +864,8 @@ mod tests {
         f.insert("saveName".into(), json!("Faces"));
         assert!(save_two(h.state_mut(), &mut f).is_err());
         // Both are listed with the other presets, and run from there.
-        let labels: Vec<String> = crate::menus::menu_items(h.state()).into_iter().filter(|i| i.path == ["File", "Automate", SUBMENU]).map(|i| i.label).collect();
+        let labels: Vec<String> =
+            crate::menus::menu_items(h.state()).into_iter().filter(|i| i.path == ["File", "Automate", SUBMENU]).map(|i| i.label).collect();
         assert_eq!(labels[..4], ["Faces", "Art", "Faces + Art", "Both"]);
     }
 

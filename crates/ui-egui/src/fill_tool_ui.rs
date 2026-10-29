@@ -46,7 +46,13 @@ pub struct FillToolOptions {
 
 impl Default for FillToolOptions {
     fn default() -> Self {
-        Self { sub_tool: SubTool::Click, click: FillSettings::default(), enclose: FillSettings::default(), unfilled: FillSettings::default(), undo_widens_gap: false }
+        Self {
+            sub_tool: SubTool::Click,
+            click: FillSettings::default(),
+            enclose: FillSettings::default(),
+            unfilled: FillSettings::default(),
+            undo_widens_gap: false,
+        }
     }
 }
 
@@ -187,7 +193,8 @@ impl Default for FillSettings {
 /// The `paint.fill` params for the options, without the click, lasso or stroke.
 pub fn params(app: &PhotocraftApp) -> Value {
     let o = app.ui.tool_options.fill_tool.current();
-    let exclude: Vec<&str> = [(o.exclude_layer, "layer"), (o.exclude_text, "text"), (o.exclude_locked, "locked")].into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect();
+    let exclude: Vec<&str> =
+        [(o.exclude_layer, "layer"), (o.exclude_text, "text"), (o.exclude_locked, "locked")].into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect();
     // With the mask shown on its own (⌥-click), the fill sees the mask, as on screen: All Layers
     // sampled the hidden layers (user report).
     let reference = if app.paste_goes_to_mask() { "layer" } else { o.reference.as_str() };
@@ -469,7 +476,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut Ui) {
         ("folder".to_string(), tl!("Layers in Folder")),
         ("reference".to_string(), tl!("Reference Layers")),
     ];
-    widgets::dropdown(ui, "fill-tool-reference", &mut tool.current_mut().reference, &refs, 124.0);
+    widgets::dropdown(ui, "fill-tool-reference", tl!("Reference Layers"), &mut tool.current_mut().reference, &refs, 124.0);
     more_menu(tool, ui);
     let o = tool.current_mut();
     widgets::vline(ui, 22.0);
@@ -479,7 +486,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut Ui) {
     opt_label(ui, tl!("Area Scaling"));
     widgets::value_field(ui, &mut o.area_scaling, -100.0..=100.0, "px", 58.0).on_hover_text(tl!("Grow the fill under the lines, or shrink it"));
     let modes = [("darkest".to_string(), tl!("To Darkest Pixel")), ("round".to_string(), tl!("Round")), ("square".to_string(), tl!("Square"))];
-    widgets::dropdown(ui, "fill-tool-scaling", &mut o.scaling_mode, &modes, 118.0);
+    widgets::dropdown(ui, "fill-tool-scaling", "Scaling", &mut o.scaling_mode, &modes, 118.0);
     widgets::vline(ui, 22.0);
     match sub_tool {
         SubTool::Click => {
@@ -488,7 +495,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut Ui) {
         SubTool::Enclose | SubTool::Unfilled => {
             opt_label(ui, tl!("Target"));
             let targets = [("transparent".to_string(), tl!("Transparent")), ("whiteAndTransparent".to_string(), tl!("White and Transparent"))];
-            widgets::dropdown(ui, "fill-tool-target", &mut o.target_color, &targets, 150.0);
+            widgets::dropdown(ui, "fill-tool-target", "Fill Target", &mut o.target_color, &targets, 150.0);
             if sub_tool == SubTool::Unfilled {
                 opt_label(ui, tl!("Size"));
                 widgets::value_field(ui, &mut o.size, 1.0..=2000.0, "px", 62.0);
@@ -499,7 +506,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut Ui) {
     widgets::vline(ui, 22.0);
     if o.contents != "transparent" {
         let blend: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
-        widgets::dropdown_wheel_hovered(ui, "fill-tool-mode", &mut o.mode, &blend, 96.0);
+        widgets::dropdown_wheel_hovered(ui, "fill-tool-mode", tl!("Mode:"), &mut o.mode, &blend, 96.0);
     }
     opt_label(ui, tl!("Opacity"));
     widgets::value_field(ui, &mut o.opacity, 1.0..=100.0, "%", 62.0);
@@ -517,10 +524,16 @@ pub fn close_gap_buttons(ui: &mut Ui, gap: &mut f32, id: &str) {
         let (rect, r) = ui.allocate_exact_size(egui::vec2(14.0, 18.0), egui::Sense::click());
         let lit = level.is_some_and(|l| i <= l);
         let label = crate::i18n::fmt(tl!("Close gaps up to {px} px"), &[("px", &format!("{px}"))]);
-        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, level == Some(i), format!("{id} close gap {}", i + 1)));
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, level == Some(i), format!("{id} close gap {}", i + 1)));
         let side = 6.0 + i as f32 * 1.6;
         let b = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
-        let fill = if lit { t.accent } else if r.hovered() { t.hover } else { t.field };
+        let fill = if lit {
+            t.accent
+        } else if r.hovered() {
+            t.hover
+        } else {
+            t.field
+        };
         ui.painter().rect_filled(b, 1.5, fill);
         ui.painter().rect_stroke(b, 1.5, egui::Stroke::new(1.0, if lit { t.accent } else { t.text_faint }), egui::StrokeKind::Inside);
         if r.on_hover_text(label).clicked() {
@@ -544,7 +557,7 @@ pub fn wand_options(app: &mut PhotocraftApp, ui: &mut Ui) {
         ("folder".to_string(), tl!("Layers in Folder")),
         ("reference".to_string(), tl!("Reference Layers")),
     ];
-    if widgets::dropdown(ui, "wand-reference", &mut reference, &refs, 124.0) {
+    if widgets::dropdown(ui, "wand-reference", tl!("Reference Layers"), &mut reference, &refs, 124.0) {
         // Editing Layer and All Layers are Sample All Layers off and on, as before.
         match reference.as_str() {
             "layer" | "all" => {
@@ -559,7 +572,7 @@ pub fn wand_options(app: &mut PhotocraftApp, ui: &mut Ui) {
     opt_label(ui, tl!("Area Scaling"));
     widgets::value_field(ui, &mut f.area_scaling, -100.0..=100.0, "px", 58.0).on_hover_text(tl!("Grow the selection under the lines, or shrink it"));
     let modes = [("darkest".to_string(), tl!("To Darkest Pixel")), ("round".to_string(), tl!("Round")), ("square".to_string(), tl!("Square"))];
-    widgets::dropdown(ui, "wand-scaling", &mut f.scaling_mode, &modes, 118.0);
+    widgets::dropdown(ui, "wand-scaling", "Scaling", &mut f.scaling_mode, &modes, 118.0);
 }
 
 /// The gear menu: the colour the fill lays down, the layers a multi-layer reference leaves out,
@@ -589,16 +602,18 @@ fn more_menu(tool: &mut FillToolOptions, ui: &mut Ui) {
             widgets::checkbox(ui, &mut o.exclude_text, tl!("Text layers"));
             widgets::checkbox(ui, &mut o.exclude_locked, tl!("Locked layers"));
             ui.separator();
-            widgets::checkbox(ui, &mut o.layer_blocks, tl!("Editing layer blocks the fill"))
-                .on_hover_text(tl!("Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it"));
+            widgets::checkbox(ui, &mut o.layer_blocks, tl!("Editing layer blocks the fill")).on_hover_text(tl!(
+                "Paint on the layer being filled stops the fill at any tolerance, and the fill goes in behind it: draw over a gap to close it"
+            ));
         });
         ui.separator();
         widgets::checkbox(ui, &mut o.image_border, tl!("Image Border")).on_hover_text(tl!("The canvas edge closes gaps as a line does"));
         ui.separator();
         ui.horizontal(|ui| {
             ui.label(tl!("Ignore Thin Lines"));
-            widgets::value_field(ui, &mut o.thin_lines, 0.0..=photocraft_algo::fill::MAX_THIN, "px", 58.0)
-                .on_hover_text(tl!("Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off"));
+            widgets::value_field(ui, &mut o.thin_lines, 0.0..=photocraft_algo::fill::MAX_THIN, "px", 58.0).on_hover_text(tl!(
+                "Lines up to this wide (hatching, speed lines, tone dots) don't stop the fill: it runs on under them to the bolder lines. 0 is off"
+            ));
         });
         if click {
             ui.separator();

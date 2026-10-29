@@ -741,9 +741,10 @@ fn sampler_list_replacement_and_operations_cannot_silently_cancel_each_other() {
 
 /// Alt-drags the slider under the only visible `label` and returns the inspected dialog.
 fn alt_drag_slider(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> Value {
-    // The label sits above its 18 pt slider track.
-    let text = h.get_by_label(label).rect();
-    let at = pos2(text.left() + 80.0, text.bottom() + 10.0);
+    // egui 0.37 names the row's value field by its label: the 18 pt track runs below the label
+    // and the field, ending under the field.
+    let field = h.get_by_label(label).rect();
+    let at = pos2(field.right() - 120.0, field.bottom() + 10.0);
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     press(h, at, true, alt);
     for n in 1..=3 {

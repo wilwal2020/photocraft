@@ -15,6 +15,8 @@ fn fresh() -> Session {
     // Nor start Topaz Gigapixel AI where it is installed.
     photocraft_engine::gigapixel_cmds::disable_launching();
     let mut s = Session::new();
+    // `file.printers` and `file.print.printers` list no printers and do not ask the spooler.
+    s.printer_source = Some(std::sync::Arc::new(Vec::new));
     s.execute("file.new", json!({"width": 24, "height": 16})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 1, "y": 1, "width": 6, "height": 5})).unwrap();

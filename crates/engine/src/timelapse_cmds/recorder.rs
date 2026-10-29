@@ -264,7 +264,10 @@ enum Change {
     /// View-only or selection-only: counts as activity.
     Activity,
     /// A real edit; `visibility` when it only showed or hid layers.
-    Edit { dead: Vec<u64>, visibility: bool },
+    Edit {
+        dead: Vec<u64>,
+        visibility: bool,
+    },
     Undo(Vec<u64>),
     Redo(Vec<u64>),
 }
@@ -547,7 +550,8 @@ pub fn render_frame_paced(doc: &Document, max_long: u32, tag: &str, pace: &dyn F
         copy = doc.clone();
         if hide_reference_layers(&mut copy, tag) { &copy } else { doc }
     };
-    let (width, height, rgb) = photocraft_io::psd_thumbnail::srgb_preview_paced(doc, max_long, pace).map_err(|e| EngineError::Other(format!("timelapse frame: {e}")))?;
+    let (width, height, rgb) =
+        photocraft_io::psd_thumbnail::srgb_preview_paced(doc, max_long, pace).map_err(|e| EngineError::Other(format!("timelapse frame: {e}")))?;
     Ok(Frame { width, height, rgb })
 }
 
@@ -805,7 +809,18 @@ impl Recorder {
                     rec.recorded = unix_ms();
                     // A step undone while its frame was being made is flagged right away.
                     let undone = t.redo_chain.iter().any(|c| c.0 == step);
-                    let fm = FrameMeta { n, t: rec.recorded, w: 0, x: frame.width, y: frame.height, b: bytes, s: t.key.clone(), h: step, u: u8::from(undone), ..Default::default() };
+                    let fm = FrameMeta {
+                        n,
+                        t: rec.recorded,
+                        w: 0,
+                        x: frame.width,
+                        y: frame.height,
+                        b: bytes,
+                        s: t.key.clone(),
+                        h: step,
+                        u: u8::from(undone),
+                        ..Default::default()
+                    };
                     rec.bytes = rec.bytes.saturating_add(bytes);
                     rec.frames.push(fm);
                     let work = t.work_now(now, idle);
@@ -872,6 +887,7 @@ impl Recorder {
     /// work timer and `recording.json` up to date, start auto recording. `input` says the user did
     /// something this frame (pointer or keys), which keeps the work timer running. Returns when
     /// it next needs to run (`None`: only on the next change).
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) fn tick(&mut self, docs: &[DocState], active: Option<usize>, prefs: &crate::prefs::Preferences, now: f64, input: bool) -> Option<f64> {
         if unsupported().is_some() {
             return None;

@@ -48,6 +48,7 @@ fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, lines: f32) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: vec2(0.0, lines),
         phase: egui::TouchPhase::Move,
@@ -279,7 +280,8 @@ fn a_slow_click_on_the_box_keeps_the_blend_list_open() {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.run_steps(2);
+    // The list is measured one frame before it shows (craft-ui's menus).
+    h.run_steps(3);
     let multiply = entry(&h, "Multiply").center();
     h.event(egui::Event::PointerMoved(multiply));
     h.run_steps(1);

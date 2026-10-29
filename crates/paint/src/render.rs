@@ -345,6 +345,7 @@ impl BrushContext {
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × flow). Wet
     /// Edges and the stroke-level masks act on a stroke's accumulated coverage
     /// ([`stroke_mask`](Self::stroke_mask)), never on one dab.
+    #[allow(clippy::cognitive_complexity)]
     pub fn rasterize(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>) {
         let (w, h) = (rect.width() as usize, rect.height() as usize);
         out.clear();
@@ -790,9 +791,7 @@ impl CoverageMap {
                 // A plain round tip without per-dab colour: its values go straight into the
                 // coverage (what `rasterize` and `accumulate` give, without the row of values
                 // between them).
-                if !want_col
-                    && let Some((hardness, aliased)) = ctx.plain_round(d, dual, tr)
-                {
+                if !want_col && let Some((hardness, aliased)) = ctx.plain_round(d, dual, tr) {
                     job.painted |= job.tile.accumulate_round(job.key, tr, d, hardness, aliased, ceil.get(i).copied().unwrap_or(1.0));
                     continue;
                 }
@@ -1214,6 +1213,21 @@ impl StrokeRenderer {
         self.ctx.stroke_mask(c, self.dual.as_ref().map(|d| d.get(x, y)), x, y)
     }
 
+    /// Whether any coverage tile overlaps `r`: outside them [`coverage_at`](Self::coverage_at) is
+    /// 0, so a caller scanning a big area can skip it.
+    pub fn touches(&self, r: Rect) -> bool {
+        if r.is_empty() {
+            return false;
+        }
+        let (t0x, t0y) = (r.x0.div_euclid(COV_TILE), r.y0.div_euclid(COV_TILE));
+        let (t1x, t1y) = ((r.x1 - 1).div_euclid(COV_TILE), (r.y1 - 1).div_euclid(COV_TILE));
+        let span = (i64::from(t1x) - i64::from(t0x) + 1).saturating_mul(i64::from(t1y) - i64::from(t0y) + 1);
+        if span > self.cov.tiles.len() as i64 {
+            return self.cov.tiles.keys().any(|&(tx, ty)| (t0x..=t1x).contains(&tx) && (t0y..=t1y).contains(&ty));
+        }
+        (t0y..=t1y).any(|ty| (t0x..=t1x).any(|tx| self.cov.tiles.contains_key(&(tx, ty))))
+    }
+
     /// Dense final coverage over the stroke bounds.
     pub fn dense_coverage(&self) -> (Rect, Vec<f32>) {
         let b = self.bounds();
@@ -1240,6 +1254,20 @@ impl StrokeRenderer {
     /// Returns the damaged rectangle.
     pub fn composite(&mut self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool, all: bool) -> Rect {
         self.composite_tiles(pre, target, selection, lock_transparency, all, true)
+    }
+
+    /// [`composite`](Self::composite) on one thread (`parallel` false) or as many as it takes: the
+    /// tests compare the two.
+    #[cfg(test)]
+    pub(crate) fn composite_threads(
+        &mut self,
+        pre: &Surface,
+        target: &mut Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+        parallel: bool,
+    ) -> Rect {
+        self.composite_tiles(pre, target, selection, lock_transparency, true, parallel)
     }
 
     /// [`composite`](Self::composite), on several threads when `parallel` and there are enough
@@ -1900,5 +1928,4 @@ fn within(v0: f32, dv: f32, lo: f32, hi: f32) -> Option<(f32, f32)> {
 }
 
 #[cfg(test)]
-#[path = "render_reference.rs"]
 mod reference;

@@ -63,7 +63,10 @@ fn main() {
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
-        camera_raw_presets: photocraft_ui_egui::CameraRawPresetDirs { photoshop: arg(&args, "--camera-raw-presets").into_iter().collect(), ..Default::default() },
+        camera_raw_presets: photocraft_ui_egui::CameraRawPresetDirs {
+            photoshop: arg(&args, "--camera-raw-presets").into_iter().collect(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let open = arg(&args, "--open");

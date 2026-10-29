@@ -162,7 +162,17 @@ fn cases() -> Vec<(&'static str, CameraRaw)> {
         ("vignette, colour priority", CameraRaw { vignette_amount: -50.0, vignette_style: "colorPriority".into(), ..d() }),
         ("vignette, paint", CameraRaw { vignette_amount: 30.0, vignette_style: "paintOverlay".into(), ..d() }),
         ("grain", CameraRaw { grain_amount: 50.0, grain_size: 40.0, grain_roughness: 70.0, seed: 4_000_000_000, ..d() }),
-        ("optics", CameraRaw { lens_distortion: 30.0, lens_vignette_amount: 40.0, lens_vignette_midpoint: 30.0, defringe_purple_amount: 10.0, defringe_green_amount: 8.0, ..d() }),
+        (
+            "optics",
+            CameraRaw {
+                lens_distortion: 30.0,
+                lens_vignette_amount: 40.0,
+                lens_vignette_midpoint: 30.0,
+                defringe_purple_amount: 10.0,
+                defringe_green_amount: 8.0,
+                ..d()
+            },
+        ),
         (
             "everything",
             CameraRaw {
@@ -210,7 +220,10 @@ fn float_and_power_law_documents_match_the_cpu() {
         let pro = CameraRaw { encoding_gamma: 1.8, ..p.clone() };
         check(&mut gpu_dev, &format!("{name} (ProPhoto)"), &pro, 160, 97, false, LEVEL / 10.0);
     }
-    for (name, p) in [("float exposure", CameraRaw { exposure: 2.0, contrast: 20.0, ..Default::default() }), ("float everything", cases().pop().map(|c| c.1).unwrap_or_default())] {
+    for (name, p) in [
+        ("float exposure", CameraRaw { exposure: 2.0, contrast: 20.0, ..Default::default() }),
+        ("float everything", cases().pop().map(|c| c.1).unwrap_or_default()),
+    ] {
         // Values above 1 stay: the GPU must agree there too.
         check(&mut gpu_dev, name, &p, 160, 97, true, LEVEL / 4.0);
     }
@@ -264,7 +277,12 @@ fn the_preview_texture_and_histogram_match_the_cpu() {
     assert!(moved <= 6, "histogram bins differ by {moved}");
     // The texture's bytes.
     let row = (w as u32 * 4).next_multiple_of(256);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(row) * h as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row) * h as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let mut enc = device.create_command_encoder(&Default::default());
     enc.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },

@@ -16,14 +16,14 @@
 //!   The pivot in linear light is about 0.511 · G^0.34, G the geometric mean of the luminance
 //!   (fitted on the six charts within a few levels).
 
-use super::acr_vibrance_tables::{VIB_HUE, VIB_K, VIB_LEVELS, VIB_T};
+use super::acr_grade_tables::{
+    GRADE_GLOBAL, GRADE_HIGHLIGHTS, GRADE_HIGHLIGHTS_BALANCE, GRADE_LUM_GLOBAL, GRADE_LUM_HIGHLIGHTS, GRADE_LUM_MIDTONES, GRADE_LUM_SHADOWS, GRADE_MIDTONES,
+    GRADE_MIDTONES_BALANCE, GRADE_SHADOWS, GRADE_SHADOWS_BALANCE, VIGNETTE,
+};
 use super::acr_hsl_lum_tables::{HSL_LUM_C, HSL_LUM_L};
 use super::acr_hsl_tables::{HSL_SAT_GAIN, HSL_SHIFT, HSL_WEIGHTS};
 use super::acr_tables::{CONTRAST, EXPOSURE, PARAMETRIC_DARKS, PARAMETRIC_HIGHLIGHTS, PARAMETRIC_LIGHTS, PARAMETRIC_SHADOWS};
-use super::acr_grade_tables::{
-    GRADE_GLOBAL, GRADE_HIGHLIGHTS, GRADE_HIGHLIGHTS_BALANCE, GRADE_LUM_GLOBAL, GRADE_LUM_HIGHLIGHTS, GRADE_LUM_MIDTONES, GRADE_LUM_SHADOWS, GRADE_MIDTONES, GRADE_MIDTONES_BALANCE,
-    GRADE_SHADOWS, GRADE_SHADOWS_BALANCE, VIGNETTE,
-};
+use super::acr_vibrance_tables::{VIB_HUE, VIB_K, VIB_LEVELS, VIB_T};
 use super::{CameraRaw, Curves, Encoding, Wheel, luma, rgb_to_hsv};
 use crate::photo_util::par_rows;
 
@@ -38,7 +38,8 @@ fn apply(m: &M3, v: [f32; 3]) -> [f32; 3] {
 }
 
 fn inverse(m: &M3) -> Option<M3> {
-    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
     if !det.is_finite() || det.abs() < 1e-12 {
         return None;
     }
@@ -390,11 +391,7 @@ pub(super) fn calibration(primaries: [(f32, f32); 3], enc: Encoding) -> Option<M
             let t = &CALIBRATION[k][kind];
             let (half, full) = if v < 0.0 { (t[1], t[0]) } else { (t[2], t[3]) };
             let a = v.abs();
-            let e: [f32; 2] = if a <= 0.5 {
-                half.map(|x| x * a / 0.5)
-            } else {
-                std::array::from_fn(|i| half[i] + (full[i] - half[i]) * (a - 0.5) / 0.5)
-            };
+            let e: [f32; 2] = if a <= 0.5 { half.map(|x| x * a / 0.5) } else { std::array::from_fn(|i| half[i] + (full[i] - half[i]) * (a - 0.5) / 0.5) };
             let others = [0, 1, 2].into_iter().filter(|r| *r != k);
             for (r, d) in others.zip(e) {
                 m[r][k] += d;
@@ -560,7 +557,8 @@ pub(super) struct GradeColour {
 pub(super) fn grade_parts(p: &CameraRaw) -> (Option<Tone>, Vec<GradeColour>) {
     let wheels = [p.grade_shadows, p.grade_midtones, p.grade_highlights, p.grade_global];
     let lum = |t: &[(f32, [f32; 65])], wh: &Wheel| (wh.lum != 0.0).then(|| Tone::from_fn(|x| table_at(t, wh.lum, x)));
-    let curves = [lum(&GRADE_LUM_SHADOWS, &wheels[0]), lum(&GRADE_LUM_MIDTONES, &wheels[1]), lum(&GRADE_LUM_HIGHLIGHTS, &wheels[2]), lum(&GRADE_LUM_GLOBAL, &wheels[3])];
+    let curves =
+        [lum(&GRADE_LUM_SHADOWS, &wheels[0]), lum(&GRADE_LUM_MIDTONES, &wheels[1]), lum(&GRADE_LUM_HIGHLIGHTS, &wheels[2]), lum(&GRADE_LUM_GLOBAL, &wheels[3])];
     let mut tone: Option<Tone> = None;
     for c in curves.into_iter().flatten() {
         tone = Some(match tone {
@@ -577,7 +575,13 @@ pub(super) fn grade_parts(p: &CameraRaw) -> (Option<Tone>, Vec<GradeColour>) {
     let added = [1.0, 0.5, 0.0, 0.3];
     let colours = (0..4)
         .filter(|&k| wheels[k].sat.is_finite() && wheels[k].sat > 0.0)
-        .map(|k| GradeColour { strength: wheels[k].sat.min(100.0) / 100.0, dir: grade_direction(wheels[k].hue), mask: masks[k], add: added[k], keep: k == 0 || k == 2 })
+        .map(|k| GradeColour {
+            strength: wheels[k].sat.min(100.0) / 100.0,
+            dir: grade_direction(wheels[k].hue),
+            mask: masks[k],
+            add: added[k],
+            keep: k == 0 || k == 2,
+        })
         .collect();
     (tone, colours)
 }
@@ -657,7 +661,8 @@ impl VignetteMask {
         let round = fin(p.vignette_roundness, 0.0).clamp(-100.0, 100.0) / 100.0;
         let (ax, ay) = (full_w.max(1) as f32 / 2.0, full_h.max(1) as f32 / 2.0);
         let wide = ((feather - 50.0) / 50.0).max(0.0);
-        let centre = piecewise(&[(0.0, -1.07), (25.0, -0.52), (50.0, -0.05), (75.0, 0.40), (100.0, 1.30)], mid) + wide * piecewise(&[(0.0, -1.03), (30.0, 0.0)], mid);
+        let centre =
+            piecewise(&[(0.0, -1.07), (25.0, -0.52), (50.0, -0.05), (75.0, 0.40), (100.0, 1.30)], mid) + wide * piecewise(&[(0.0, -1.03), (30.0, 0.0)], mid);
         let width = piecewise(&[(0.0, 0.01), (25.0, 0.17), (50.0, 0.42), (75.0, 0.62), (100.0, 0.60)], feather)
             * piecewise(&[(0.0, 1.55), (25.0, 1.24), (50.0, 1.0), (75.0, 0.76), (100.0, 0.6)], mid)
             * (1.0 + wide * piecewise(&[(0.0, 1.1), (30.0, 0.2), (50.0, 0.0)], mid));
@@ -756,7 +761,12 @@ fn hsl_lum_at(band: usize, v: f32, l: f32, s: f32) -> (f32, f32) {
     let fx = x - x0 as f32;
     // Columns: s = 0, then the centres of ten bins.
     let s = s.clamp(0.0, 0.95);
-    let (y0, fy) = if s < 0.05 { (0, s / 0.05) } else { let y = s * 10.0 + 0.5; ((y as usize).min(9), y - (y as usize).min(9) as f32) };
+    let (y0, fy) = if s < 0.05 {
+        (0, s / 0.05)
+    } else {
+        let y = s * 10.0 + 0.5;
+        ((y as usize).min(9), y - (y as usize).min(9) as f32)
+    };
     let at = |t: &[[f32; 11]; 12]| {
         t[x0][y0] * (1.0 - fx) * (1.0 - fy) + t[x0 + 1][y0] * fx * (1.0 - fy) + t[x0][y0 + 1] * (1.0 - fx) * fy + t[x0 + 1][y0 + 1] * fx * fy
     };
@@ -972,7 +982,8 @@ mod tests {
         let d = parametric(&CameraRaw { curve_darks: 100.0, ..Default::default() });
         assert!(d.at(96.0 / 255.0) * 255.0 > 140.0);
         // Odd values stay finite.
-        for t in [exposure(f32::NAN), contrast(f32::INFINITY, f32::NAN), parametric(&CameraRaw { curve_splits: [f32::NAN, 0.0, 200.0], ..Default::default() })] {
+        for t in [exposure(f32::NAN), contrast(f32::INFINITY, f32::NAN), parametric(&CameraRaw { curve_splits: [f32::NAN, 0.0, 200.0], ..Default::default() })]
+        {
             assert!(t.lut.iter().all(|v| v.is_finite()));
         }
     }

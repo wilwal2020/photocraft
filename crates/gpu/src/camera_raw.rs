@@ -86,7 +86,8 @@ impl Grow {
             if let Some(old) = self.buf.take() {
                 old.destroy();
             }
-            self.buf = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some(self.label), size: bytes, usage: self.usage, mapped_at_creation: false }));
+            self.buf =
+                Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some(self.label), size: bytes, usage: self.usage, mapped_at_creation: false }));
         }
         // Just made when missing.
         #[allow(clippy::expect_used)]
@@ -150,12 +151,25 @@ impl CameraRawGpu {
     /// refuses), so the caller develops on the CPU.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Self, String> {
         scoped(device, || {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_camera_raw"), source: wgpu::ShaderSource::Wgsl(shader_source().into()) });
+            let module = device
+                .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_camera_raw"), source: wgpu::ShaderSource::Wgsl(shader_source().into()) });
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_camera_raw"),
-                entries: &[uniform(0, PASS_BYTES as u64, true), storage(1, true), storage(2, true), storage(3, false), storage(4, false), storage(5, true), storage(6, true)],
+                entries: &[
+                    uniform(0, PASS_BYTES as u64, true),
+                    storage(1, true),
+                    storage(2, true),
+                    storage(3, false),
+                    storage(4, false),
+                    storage(5, true),
+                    storage(6, true),
+                ],
             });
-            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("pc_camera_raw"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pc_camera_raw"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
             let pipeline = |entry: &str| {
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
@@ -167,7 +181,10 @@ impl CameraRawGpu {
                 })
             };
             let (pixel, plane, distort) = (pipeline("pixel_main"), pipeline("plane_main"), pipeline("distort_main"));
-            let dmodule = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_camera_raw_display"), source: wgpu::ShaderSource::Wgsl(DISPLAY_SHADER.into()) });
+            let dmodule = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("pc_camera_raw_display"),
+                source: wgpu::ShaderSource::Wgsl(DISPLAY_SHADER.into()),
+            });
             let display_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_camera_raw_display"),
                 entries: &[
@@ -190,7 +207,11 @@ impl CameraRawGpu {
                     storage(7, false),
                 ],
             });
-            let dpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("pc_camera_raw_display"), bind_group_layouts: &[Some(&display_layout)], immediate_size: 0 });
+            let dpl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pc_camera_raw_display"),
+                bind_group_layouts: &[Some(&display_layout)],
+                immediate_size: 0,
+            });
             let display = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("display_main"),
                 layout: Some(&dpl),
@@ -201,7 +222,12 @@ impl CameraRawGpu {
             });
             let storage_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
             let hist_bytes = (HIST_WORDS * 4) as u64;
-            let hist = device.create_buffer(&wgpu::BufferDescriptor { label: Some("pc_camera_raw_hist"), size: hist_bytes, usage: storage_usage, mapped_at_creation: false });
+            let hist = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("pc_camera_raw_hist"),
+                size: hist_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            });
             let hist_read = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("pc_camera_raw_hist_read"),
                 size: hist_bytes,
@@ -247,7 +273,10 @@ impl CameraRawGpu {
     pub fn fits(&self, w: u32, h: u32, plane_floats: usize) -> bool {
         let px = u64::from(w) * u64::from(h);
         let max = self.max_binding();
-        px * 16 <= max && (plane_floats as u64) * 4 <= max && w <= self.device.limits().max_texture_dimension_2d && h <= self.device.limits().max_texture_dimension_2d
+        px * 16 <= max
+            && (plane_floats as u64) * 4 <= max
+            && w <= self.device.limits().max_texture_dimension_2d
+            && h <= self.device.limits().max_texture_dimension_2d
     }
 
     /// Uploads the source pixels (`w × h` straight RGBA) and the selection's coverage (one float
@@ -351,7 +380,11 @@ impl CameraRawGpu {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms, offset: 0, size: std::num::NonZeroU64::new(PASS_BYTES as u64) }),
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uniforms,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(PASS_BYTES as u64),
+                        }),
                     },
                     wgpu::BindGroupEntry { binding: 1, resource: ops.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: table.as_entire_binding() },
@@ -417,7 +450,12 @@ impl CameraRawGpu {
             }
             let lut_n = display.lut.map_or(0, |(n, v)| if n >= 2 && v.len() >= (n as usize).pow(3) * 3 { n } else { 0 });
             let flags = u32::from(display.encode.is_some()) | if lut_n >= 2 { 2 } else { 0 } | if self.mask.is_some() { 4 } else { 0 };
-            let uni = device.create_buffer(&wgpu::BufferDescriptor { label: Some("pc_camera_raw_display"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let uni = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("pc_camera_raw_display"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
             queue.write_buffer(&uni, 0, &as_bytes(&[w, h, flags, lut_n]));
             let mask = self.mask.clone().unwrap_or_else(|| codes.clone());
             let view = target.create_view(&wgpu::TextureViewDescriptor::default());
@@ -453,7 +491,9 @@ impl CameraRawGpu {
             if self.hist_pending.is_none() {
                 let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
                 let done = state.clone();
-                self.hist_read.slice(..).map_async(wgpu::MapMode::Read, move |r| done.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release));
+                self.hist_read
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |r| done.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release));
                 self.hist_pending = Some(state);
             }
             Ok(())
@@ -514,11 +554,7 @@ impl CameraRawGpu {
         }
         let out = {
             let data = staging.slice(..).get_mapped_range().map_err(|e| format!("Camera Raw GPU: read back failed: {e:?}"))?;
-            data.as_chunks::<16>()
-                .0
-                .iter()
-                .map(|p| std::array::from_fn(|c| f32::from_le_bytes([p[c * 4], p[c * 4 + 1], p[c * 4 + 2], p[c * 4 + 3]])))
-                .collect()
+            data.as_chunks::<16>().0.iter().map(|p| std::array::from_fn(|c| f32::from_le_bytes([p[c * 4], p[c * 4 + 1], p[c * 4 + 2], p[c * 4 + 3]]))).collect()
         };
         staging.unmap();
         staging.destroy();

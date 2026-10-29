@@ -128,7 +128,8 @@ fn choose_output(app: &mut PhotocraftApp, o: ExportSettings) -> Result<Value, St
     if o.encoder == "frames" {
         app.ask_folder(run)
     } else {
-        let name = app.session.active().map_or_else(|| "Untitled".to_string(), |d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string()));
+        let name =
+            app.session.active().map_or_else(|| "Untitled".to_string(), |d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string()));
         app.pick_save(&format!("{name} timelapse.mp4"), run)
     }
 }
@@ -162,7 +163,12 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
 
 /// Once per frame: follow edits and capture, pass on messages.
 pub fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let (down, input) = ctx.input(|i| (i.pointer.any_down(), i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_)))));
+    let (down, input) = ctx.input(|i| {
+        (
+            i.pointer.any_down(),
+            i.pointer.any_down() || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::PointerButton { .. } | egui::Event::Text(_))),
+        )
+    });
     // A held button (a stroke, a drag, a pan) or a stroke still being drawn: frames wait for it
     // to end rather than render beside it (a capture during a large brush stroke made it lag).
     app.session.timelapse_set_busy(down || app.live_stroke.is_some() || app.drag.is_some());
@@ -280,7 +286,8 @@ const LENGTHS: [(Option<u32>, &str); 11] = [
 /// "Show finished drawing first" lengths (tenths of a second, so they compare exactly).
 const INTROS: [(u32, &str); 6] = [(5, "0.5 s"), (10, "1 s"), (15, "1.5 s"), (20, "2 s"), (30, "3 s"), (50, "5 s")];
 const HOLDS: [(u32, &str); 7] = [(10, "1 s"), (20, "2 s"), (30, "3 s"), (40, "4 s"), (50, "5 s"), (80, "8 s"), (100, "10 s")];
-const IDLES: [(u32, &str); 7] = [(5, "5 seconds"), (10, "10 seconds"), (15, "15 seconds"), (20, "20 seconds"), (30, "30 seconds"), (45, "45 seconds"), (60, "1 minute")];
+const IDLES: [(u32, &str); 7] =
+    [(5, "5 seconds"), (10, "10 seconds"), (15, "15 seconds"), (20, "20 seconds"), (30, "30 seconds"), (45, "45 seconds"), (60, "1 minute")];
 
 fn quality_desc(q: &str) -> &'static str {
     match q {
@@ -410,7 +417,7 @@ fn button(ui: &mut Ui, t: &Tokens, text: &str, look: Look, icon: Icon, width: Op
         Icon::Down => triangle(ui, egui::pos2(left + 5.0, cy), 'd', fg.gamma_multiply(alpha)),
     }
     ui.painter().galley(egui::pos2(left + icon_w, cy - galley.size().y / 2.0), galley, fg.gamma_multiply(alpha));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
 
@@ -418,7 +425,16 @@ fn button(ui: &mut Ui, t: &Tokens, text: &str, look: Look, icon: Icon, width: Op
 /// one raised (or filled with `on_fill`). `dot` puts a status dot before the first label. Returns
 /// the clicked cell.
 #[allow(clippy::too_many_arguments)]
-fn segmented(ui: &mut Ui, t: &Tokens, id: &str, items: &[&str], selected: Option<usize>, on_fill: Option<Color32>, dot: Option<Color32>, enabled: bool) -> Option<usize> {
+fn segmented(
+    ui: &mut Ui,
+    t: &Tokens,
+    id: &str,
+    items: &[&str],
+    selected: Option<usize>,
+    on_fill: Option<Color32>,
+    dot: Option<Color32>,
+    enabled: bool,
+) -> Option<usize> {
     let h = 28.0;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
     let p = ui.painter();
@@ -430,7 +446,7 @@ fn segmented(ui: &mut Ui, t: &Tokens, id: &str, items: &[&str], selected: Option
     let mut clicked = None;
     for (i, label) in items.iter().enumerate() {
         let cell = Rect::from_min_size(egui::pos2(inner.left() + i as f32 * (cell_w + 2.0), inner.top()), vec2(cell_w, inner.height()));
-        let resp = ui.interact(cell, ui.id().with((id, i)), if enabled { Sense::click() } else { Sense::hover() });
+        let resp = ui.interact(cell, ui.scope_id().with((id, i)), if enabled { Sense::click() } else { Sense::hover() });
         let on = selected == Some(i);
         if on {
             ui.painter().rect_filled(cell, 6.0, on_fill.unwrap_or(t.hover));
@@ -456,7 +472,7 @@ fn segmented(ui: &mut Ui, t: &Tokens, id: &str, items: &[&str], selected: Option
         if resp.clicked() {
             clicked = Some(i);
         }
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, *label));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, *label));
         let _ = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     }
     clicked
@@ -483,11 +499,17 @@ fn pill(ui: &mut Ui, t: &Tokens, on: bool, label: &str) -> bool {
         p.rect_stroke(sw, 6.0, Stroke::new(1.0, t.text_faint), StrokeKind::Inside);
         p.circle_filled(egui::pos2(sw.left() + 5.0, sw.center().y), 3.0, t.text_faint);
     }
-    let color = if on { Color32::WHITE } else if hovered { t.text } else { t.text_dim };
+    let color = if on {
+        Color32::WHITE
+    } else if hovered {
+        t.text
+    } else {
+        t.text_dim
+    };
     let text_rect = Rect::from_min_max(egui::pos2(sw.right() + 7.0, rect.top()), egui::pos2(rect.right() - 8.0, rect.bottom()));
     let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(11.0), color);
     ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, label));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
@@ -574,14 +596,14 @@ fn arrow_link(ui: &mut Ui, t: &Tokens, text: &str, open: bool) -> egui::Response
     let color = if resp.hovered() { t.text } else { t.text_dim };
     ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
     triangle(ui, egui::pos2(rect.right() - 4.0, rect.center().y), if open { 'd' } else { 'r' }, color);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// A labelled dropdown filling the width.
 fn labelled_dropdown<V: PartialEq + Clone>(ui: &mut Ui, t: &Tokens, id: &str, label: &str, value: &mut V, options: &[(V, &str)]) -> bool {
     ui.label(RichText::new(label).size(10.0).color(t.text_dim));
-    crate::widgets::dropdown(ui, id, value, options, ui.available_width())
+    crate::widgets::dropdown(ui, id, label, value, options, ui.available_width())
 }
 
 // ---- the panel ---------------------------------------------------------------------------------
@@ -781,7 +803,8 @@ fn record_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
                     *ask = Some(Ask::Settings(json!({"export": {"lengthSec": len.map_or(json!("auto"), |v| json!(v))}})));
                 }
                 if let Some((secs, frames, ..)) = st.estimate {
-                    let line = crate::i18n::fmt(tl!("≈ {seconds} video from {frames}."), &[("seconds", &seconds_text(secs)), ("frames", &frames_text(frames as u64))]);
+                    let line =
+                        crate::i18n::fmt(tl!("≈ {seconds} video from {frames}."), &[("seconds", &seconds_text(secs)), ("frames", &frames_text(frames as u64))]);
                     desc(ui, t, &line);
                 }
                 ui.horizontal(|ui| {
@@ -834,22 +857,25 @@ fn record_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
             stat(ui, t, w * 1.3, tl!("Timer"), &if st.rec { clock_text(st.work) } else { dash.clone() }, st.idle, true);
             stat(ui, t, w, tl!("On disk"), &if st.rec { size_text(st.bytes) } else { dash }, false, false);
         });
-        egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(7.0).inner_margin(egui::Margin::symmetric(9, 7)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let name = st.doc.clone().unwrap_or_else(|| tl!("No document open").to_string());
-                let link_w = if st.doc.is_some() { 72.0 } else { 0.0 };
-                left_label(ui, ui.available_width() - link_w, 16.0, RichText::new(name).size(11.0).strong().color(t.text));
-                if st.doc.is_some() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let tip = if s.preview { tl!("Hide the live preview") } else { tl!("Show the newest frame") };
-                        if arrow_link(ui, t, tl!("Preview"), s.preview).on_hover_text(tip).clicked() {
-                            s.preview = !s.preview;
-                        }
-                    });
-                }
-            });
-        });
+        egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(7.0).inner_margin(egui::Margin::symmetric(9, 7)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let name = st.doc.clone().unwrap_or_else(|| tl!("No document open").to_string());
+                    let link_w = if st.doc.is_some() { 72.0 } else { 0.0 };
+                    left_label(ui, ui.available_width() - link_w, 16.0, RichText::new(name).size(11.0).strong().color(t.text));
+                    if st.doc.is_some() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let tip = if s.preview { tl!("Hide the live preview") } else { tl!("Show the newest frame") };
+                            if arrow_link(ui, t, tl!("Preview"), s.preview).on_hover_text(tip).clicked() {
+                                s.preview = !s.preview;
+                            }
+                        });
+                    }
+                });
+            },
+        );
         if s.preview && st.doc.is_some() {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());
             ui.painter().rect_filled(rect, 7.0, t.canvas);
@@ -951,7 +977,14 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         }
         ui.columns(2, |cols| {
             let mut enc = o.encoder.clone();
-            if labelled_dropdown(&mut cols[0], t, "timelapse-encoder", tl!("Make video with"), &mut enc, &[("ffmpeg".to_string(), "ffmpeg (fast)"), ("frames".to_string(), "JPEG frames")]) {
+            if labelled_dropdown(
+                &mut cols[0],
+                t,
+                "timelapse-encoder",
+                tl!("Make video with"),
+                &mut enc,
+                &[("ffmpeg".to_string(), "ffmpeg (fast)"), ("frames".to_string(), "JPEG frames")],
+            ) {
                 *ask = set(json!({"encoder": enc}));
             }
             let mut bars = o.letterbox.clone();
@@ -979,7 +1012,9 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         let mut intro = ((if intro_on { o.intro_sec } else { s.intro_sec.unwrap_or(1.0) }) * 10.0).round() as u32;
         let mut intro_changed = false;
         if row(ui, intro_on, tl!("Show finished drawing first"), &mut |ui| {
-            ui.add_enabled_ui(intro_on, |ui| intro_changed = crate::widgets::dropdown(ui, "timelapse-intro", &mut intro, &INTROS, 88.0));
+            ui.add_enabled_ui(intro_on, |ui| {
+                intro_changed = crate::widgets::dropdown(ui, "timelapse-intro", tl!("Show finished drawing first"), &mut intro, &INTROS, 88.0)
+            });
         }) {
             *ask = set(json!({"introSec": if intro_on { 0.0 } else { f64::from(intro) / 10.0 }}));
         }
@@ -994,7 +1029,7 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         let mut hold = ((if hold_on { o.hold_sec } else { s.hold_sec.unwrap_or(3.0) }) * 10.0).round() as u32;
         let mut hold_changed = false;
         if row(ui, hold_on, tl!("Hold final image"), &mut |ui| {
-            ui.add_enabled_ui(hold_on, |ui| hold_changed = crate::widgets::dropdown(ui, "timelapse-hold", &mut hold, &HOLDS, 88.0));
+            ui.add_enabled_ui(hold_on, |ui| hold_changed = crate::widgets::dropdown(ui, "timelapse-hold", tl!("Hold final image"), &mut hold, &HOLDS, 88.0));
         }) {
             *ask = set(json!({"holdSec": if hold_on { 0.0 } else { f64::from(hold) / 10.0 }}));
         }
@@ -1011,8 +1046,9 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
         let mut corner = o.corner.clone();
         let mut corner_changed = false;
         if row(ui, o.timer, tl!("Show work-time counter"), &mut |ui| {
-            let corners = [("br".to_string(), "Bottom right"), ("bl".to_string(), "Bottom left"), ("tr".to_string(), "Top right"), ("tl".to_string(), "Top left")];
-            ui.add_enabled_ui(o.timer, |ui| corner_changed = crate::widgets::dropdown(ui, "timelapse-corner", &mut corner, &corners, 88.0));
+            let corners =
+                [("br".to_string(), "Bottom right"), ("bl".to_string(), "Bottom left"), ("tr".to_string(), "Top right"), ("tl".to_string(), "Top left")];
+            ui.add_enabled_ui(o.timer, |ui| corner_changed = crate::widgets::dropdown(ui, "timelapse-corner", "Counter Corner", &mut corner, &corners, 88.0));
         }) {
             *ask = set(json!({"timer": !o.timer}));
         }
@@ -1034,7 +1070,13 @@ fn export_view(ui: &mut Ui, t: &Tokens, st: &RecordState, settings: &Settings, s
                     desc(ui, t, tl!("The canvas size changed during recording; earlier frames are fitted inside the final size."));
                 }
                 if o.deflicker {
-                    desc(ui, t, tl!("Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter."));
+                    desc(
+                        ui,
+                        t,
+                        tl!(
+                            "Remove flicker leaves out frames that flash in and out (a layer hidden for a moment, a stroke undone right away), so the video can be a bit shorter."
+                        ),
+                    );
                 }
             }
         }
@@ -1156,7 +1198,7 @@ fn library_item(ui: &mut Ui, t: &Tokens, r: &Value, s: &mut TimelapseUi, ask: &m
 fn confirm_modal(ctx: &egui::Context, t: &Tokens, s: &mut TimelapseUi, ask: &mut Option<Ask>) {
     let Some(c) = s.confirm.clone() else { return };
     let mut close = false;
-    egui::Modal::new(egui::Id::new("timelapse-confirm")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("timelapse-confirm")).show(ctx, |ui| {
         ui.set_max_width(320.0);
         ui.label(RichText::new(&c.text).size(11.0).color(t.text));
         ui.add_space(8.0);
@@ -1212,7 +1254,7 @@ fn settings_view(ui: &mut Ui, t: &Tokens, settings: &Settings, ask: &mut Option<
         ui.horizontal(|ui| {
             ui.label(RichText::new(tl!("Name tag")).size(11.0).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::dropdown_literal(ui, "timelapse-tag", &mut tag, &options, 118.0) {
+                if crate::widgets::dropdown_literal(ui, "timelapse-tag", tl!("Name tag"), &mut tag, &options, 118.0) {
                     *ask = Some(Ask::Settings(json!({"referenceTag": tag})));
                 }
             });
@@ -1225,7 +1267,7 @@ fn settings_view(ui: &mut Ui, t: &Tokens, settings: &Settings, ask: &mut Option<
         ui.horizontal(|ui| {
             ui.label(RichText::new(tl!("Idle after")).size(11.0).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::dropdown(ui, "timelapse-idle", &mut idle, &IDLES, 118.0) {
+                if crate::widgets::dropdown(ui, "timelapse-idle", tl!("Idle after"), &mut idle, &IDLES, 118.0) {
                     *ask = Some(Ask::Settings(json!({"idleSec": idle})));
                 }
             });
@@ -1294,7 +1336,7 @@ fn progress_bar(ui: &mut Ui, t: &Tokens, id: photocraft_engine::jobs::JobId, pro
     let label = format!("{}%", (p * 100.0).round() as u32);
     let (rect, resp) = ui.allocate_exact_size(vec2(PROGRESS_W, 28.0), Sense::click());
     let resp = resp.on_hover_text(tl!("Exporting the timelapse. Click to cancel"));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, tl!("Timelapse export progress")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, tl!("Timelapse export progress")));
     let painter = ui.painter();
     let track = Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 3.0), vec2(PROGRESS_W - 34.0, 6.0));
     painter.rect_filled(track, 3.0, t.field);
@@ -1405,7 +1447,7 @@ pub fn title_buttons(app: &mut PhotocraftApp, ui: &mut Ui, more: bool) {
     };
     let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), if has_doc { Sense::click() } else { Sense::hover() });
     let resp = resp.on_hover_text(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, has_doc, tl!("Timelapse recording")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, has_doc, tl!("Timelapse recording")));
     crate::icons::button_chrome(ui, rect, recording, has_doc && resp.hovered());
     let c = rect.center();
     let red = Color32::from_rgb(232, 64, 64);
@@ -1598,7 +1640,7 @@ mod tests {
         h.state_mut().session.execute(tc::CAPTURE, json!({})).unwrap();
         h.get_by_label("Export timelapse").click();
         h.run_steps(3);
-        assert!(h.query_by_label("Length").is_some(), "the length to export");
+        assert!(h.query_all_by_label("Length").next().is_some(), "the length to export");
         assert!(h.query_by_label("Export video").is_some());
         if let Ok(path) = std::env::var("PHOTOCRAFT_TIMELAPSE_TITLE_SCREENSHOT") {
             h.render().unwrap().save(path).unwrap();

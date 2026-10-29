@@ -10,7 +10,7 @@
 use std::sync::{Arc, PoisonError};
 
 use photocraft_algo::fill::{self, FillOptions, Scaling, Target};
-use photocraft_algo::paint::FillPaint;
+use photocraft_algo::paint::FillMode;
 use photocraft_algo::selection::{Region, rgba8_image};
 use photocraft_color::BlendMode;
 use photocraft_doc::{Document, LayerContent, LayerId};
@@ -534,7 +534,10 @@ fn region_blocked(s: &Session, p: &Value) -> Result<(Option<Region>, bool)> {
     let on_paint = !enclosing
         && seed.is_some_and(|(x, y)| {
             area.contains(x, y)
-                && block.as_ref().and_then(|b| b.get((y - area.y0) as usize * area.width() as usize + (x - area.x0) as usize)).is_some_and(|a| *a >= fill::BLOCK_ALPHA)
+                && block
+                    .as_ref()
+                    .and_then(|b| b.get((y - area.y0) as usize * area.width() as usize + (x - area.x0) as usize))
+                    .is_some_and(|a| *a >= fill::BLOCK_ALPHA)
         });
     let region = if let Some(pts) = lasso {
         fill::enclosed_region_blocked(&img, area, &fill::lasso_mask(&pts, area), target, &o, block.as_deref())
@@ -569,25 +572,25 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let contents = name(p, "contents", "foreground")?;
     let (fg, bg) = (s.tools.foreground, s.tools.background);
     let (paint, c) = match contents {
-        "foreground" => (FillPaint::Blend(blend), color_param(FILL_ID, p, "color", fg)?),
-        "background" => (FillPaint::Blend(blend), color_param(FILL_ID, p, "color", bg)?),
+        "foreground" => (FillMode::Blend(blend), color_param(FILL_ID, p, "color", fg)?),
+        "background" => (FillMode::Blend(blend), color_param(FILL_ID, p, "color", bg)?),
         "color" => {
-            (FillPaint::Blend(blend), p.get("color").map(|_| color_param(FILL_ID, p, "color", fg)).ok_or_else(|| bad("`contents` color needs a `color`"))??)
+            (FillMode::Blend(blend), p.get("color").map(|_| color_param(FILL_ID, p, "color", fg)).ok_or_else(|| bad("`contents` color needs a `color`"))??)
         }
-        "transparent" => (FillPaint::Erase, [0.0; 4]),
+        "transparent" => (FillMode::Clear, [0.0; 4]),
         _ => return Err(bad("`contents` must be foreground, background, color or transparent")),
     };
     let (region, blocked) = region_blocked(s, p)?;
     let Some(region) = region else { return Ok(json!({ "filled": false })) };
     // Stopped by the layer's own paint, the fill reaches in under its soft edges: behind it, so
     // the strokes stay as they are.
-    let paint = if blocked && paint == FillPaint::Blend(BlendMode::Normal) { FillPaint::Behind } else { paint };
+    let paint = if blocked && paint == FillMode::Blend(BlendMode::Normal) { FillMode::Behind } else { paint };
     // A colour picked as CMYK fills a CMYK document with the picked inks (#4196).
-    let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && paint == FillPaint::Blend(BlendMode::Normal));
+    let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && paint == FillMode::Blend(BlendMode::Normal));
     s.edit("Fill Tool", |doc, active| {
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(doc, *active, p)?;
-        photocraft_algo::paint::fill_region(surf, &region, opacity, paint, sel.as_ref(), lock, |_, _| c, inks);
+        photocraft_algo::paint::bucket_fill_region_inks(surf, &region, opacity, sel.as_ref(), lock, |_, _| c, inks, paint);
         surf.prune();
         Ok(())
     })?;

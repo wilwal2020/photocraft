@@ -31,7 +31,7 @@ struct Ahead {
 }
 
 fn id() -> egui::Id {
-    egui::Id::new("pc-merged-ahead")
+    egui::Id::unique("pc-merged-ahead")
 }
 
 /// Called each frame the Channels panel shows `doc`: renders its merged image ahead once it has

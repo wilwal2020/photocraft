@@ -29,7 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     s.execute("file.new", json!({"width": w, "height": h, "depth": 8, "mode": "rgb"}))?;
     s.execute("layer.new.layer", json!({}))?;
     // The user's "hardbrush": hard round, pen pressure on size.
-    let params = json!({"points": [[w * 0.1, h * 0.5, 0.5]], "size": size, "hardness": hardness, "spacing": spacing, "seed": 7, "brush": {"pressureSize": true}});
+    let params =
+        json!({"points": [[w * 0.1, h * 0.5, 0.5]], "size": size, "hardness": hardness, "spacing": spacing, "seed": 7, "brush": {"pressureSize": true}});
     let t0 = Instant::now();
     let mut live = LiveStroke::begin(&s, &params)?;
     let begin = t0.elapsed().as_secs_f64() * 1000.0;

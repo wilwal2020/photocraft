@@ -156,7 +156,18 @@ mod tests {
         let px: Vec<[f32; 4]> = (0..300_000)
             .map(|i| {
                 let v = (i % 1013) as f32 / 1000.0 - 0.005;
-                [v, 1.0 - v, (i % 7) as f32 / 6.0, if i % 97 == 0 { 0.0 } else if i % 89 == 0 { f32::NAN } else { 1.0 }]
+                [
+                    v,
+                    1.0 - v,
+                    (i % 7) as f32 / 6.0,
+                    if i % 97 == 0 {
+                        0.0
+                    } else if i % 89 == 0 {
+                        f32::NAN
+                    } else {
+                        1.0
+                    },
+                ]
             })
             .collect();
         assert_eq!(RgbHistogram::from_rgba(&px), RgbHistogram::count(&px));

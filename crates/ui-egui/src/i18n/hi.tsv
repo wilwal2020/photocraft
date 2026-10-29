@@ -173,6 +173,10 @@
 	Fit Layer on Screen	स्क्रीन पर लेयर फ़िट करें
 	Actual Pixels	वास्तविक पिक्सेल
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	Rulers	रूलर्स
 	Snap	स्नैप
@@ -626,3 +630,26 @@ cameraRaw	White Balance	व्हाइट बैलेंस
 	Sample: the colours used last	नमूना: पिछली बार उपयोग किए गए रंग
 	Play once for each selected layer	प्रत्येक चयनित लेयर के लिए एक बार चलाएँ
 	With several layers selected, Play runs the action on each of them in turn, with only that layer selected	कई लेयर चयनित होने पर, चलाएँ हर लेयर पर बारी-बारी से एक्शन चलाता है, हर बार केवल वही लेयर चयनित रहती है
+# Art History Brush (#213).
+	Art History Brush	आर्ट हिस्ट्री ब्रश
+	Style	शैली
+	Area	क्षेत्र
+	Tight Short	सघन छोटा
+	Tight Medium	सघन मध्यम
+	Tight Long	सघन लंबा
+	Loose Medium	ढीला मध्यम
+	Loose Long	ढीला लंबा
+	Dab	थपका
+	Tight Curl	सघन घुमाव
+	Loose Curl	ढीला घुमाव
+	Stylized dabs from a history state	इतिहास स्थिति से शैलीबद्ध थपके
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	पहलू अनुपात
+	Category	श्रेणी
+	Color Table	रंग तालिका
+	Gamma	गामा
+	Interpolation	इंटरपोलेशन
+	Target	लक्ष्य
+	Units	इकाइयाँ
+	Demosaic	डिमोज़ेक

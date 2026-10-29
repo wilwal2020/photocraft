@@ -105,11 +105,7 @@ fn resolve_one(s: &Session, cmd: &str, v: &Value) -> Result<Option<LayerId>> {
     // User report: a step recorded while two layers shared a name failed on a document with one.
     // Like Photoshop, a name with no such occurrence (or none given) means the top-most layer of
     // that name.
-    occurrence
-        .and_then(|i| same.get(i))
-        .or_else(|| same.last())
-        .map(|l| Some(*l))
-        .ok_or_else(|| bad(format!("no layer named \"{name}\"")))
+    occurrence.and_then(|i| same.get(i)).or_else(|| same.last()).map(|l| Some(*l)).ok_or_else(|| bad(format!("no layer named \"{name}\"")))
 }
 
 /// Dispatch: the layer references of a recorded step back to the layer ids of the active

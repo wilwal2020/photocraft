@@ -39,7 +39,11 @@ impl<const N: usize> Ramp<N> {
         let Fill::Gradient { stops, opacity_stops, midpoints, blend, opacity_midpoints, .. } = f else { return None };
         // Photoshop's method and Smoothness become dense stops (midpoints folded in), for this
         // render only: the layer keeps its own stops.
-        let (stops, mids) = if blend.is_plain() { (std::borrow::Cow::Borrowed(stops), midpoints.clone()) } else { (std::borrow::Cow::Owned(blend.bake(stops.clone(), midpoints)), Vec::new()) };
+        let (stops, mids) = if blend.is_plain() {
+            (std::borrow::Cow::Borrowed(stops), midpoints.clone())
+        } else {
+            (std::borrow::Cow::Owned(blend.bake(stops.clone(), midpoints)), Vec::new())
+        };
         let mut color: Vec<_> = stops.iter().map(|(p, c)| (*p, convert(*c))).collect();
         color.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut opacity = opacity_stops.clone();

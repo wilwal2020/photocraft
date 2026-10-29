@@ -123,7 +123,8 @@ pub mod plane {
     /// `b` = the length of `a`'s central-difference gradient.
     pub const GRADIENT: u32 = 7;
 
-    pub const ALL: [(&str, u32); 7] = [("BOX_H", BOX_H), ("BOX_V", BOX_V), ("BLOCK", BLOCK), ("SQUARE", SQUARE), ("GUIDED_AB", GUIDED_AB), ("EVAL", EVAL), ("GRADIENT", GRADIENT)];
+    pub const ALL: [(&str, u32); 7] =
+        [("BOX_H", BOX_H), ("BOX_V", BOX_V), ("BLOCK", BLOCK), ("SQUARE", SQUARE), ("GUIDED_AB", GUIDED_AB), ("EVAL", EVAL), ("GRADIENT", GRADIENT)];
 }
 
 /// No plane or table here.
@@ -411,6 +412,7 @@ pub fn measures(p: &CameraRaw) -> bool {
 /// whole image's develop); without, the input is taken as already moved (as
 /// [`develop_region`](super::develop_region) takes it). `Err` when `context` lacks a measurement
 /// the settings need, or the planes would not fit 32-bit offsets.
+#[allow(clippy::cognitive_complexity)]
 pub fn program(p: &CameraRaw, w: usize, h: usize, frame: Frame, context: &std::sync::Arc<Context>, float: bool, distort: bool) -> Result<GpuProgram, String> {
     let mut prog = GpuProgram {
         width: u32::try_from(w).map_err(|_| "image too wide")?,

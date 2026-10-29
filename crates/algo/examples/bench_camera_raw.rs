@@ -53,6 +53,12 @@ fn main() {
         if std::env::var_os("WORST").is_some() {
             println!("  worst at {at}: src {:?} draft {:?} exact {:?}", src[at], draft[at], exact[at]);
         }
-        println!("{name:<12} median {:6.2} ms  max {:6.2} ms   draft vs exact: mean {:.3} max {:.2} levels", times[times.len() / 2], times[times.len() - 1], sum / (exact.len() * 3) as f64, max);
+        println!(
+            "{name:<12} median {:6.2} ms  max {:6.2} ms   draft vs exact: mean {:.3} max {:.2} levels",
+            times[times.len() / 2],
+            times[times.len() - 1],
+            sum / (exact.len() * 3) as f64,
+            max
+        );
     }
 }

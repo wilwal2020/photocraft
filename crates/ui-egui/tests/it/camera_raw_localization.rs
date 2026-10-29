@@ -28,19 +28,19 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         let tr = |s| i18n::tr_ctx(lang, "cameraRaw", s);
         let before = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
         for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
-            assert!(h.query_by_role_and_label(Role::Button, tr(section)).is_some(), "{}: {section}", lang.code());
+            assert!(h.query_by_role_and_label(Role::DisclosureTriangle, tr(section)).is_some(), "{}: {section}", lang.code());
         }
         assert!(h.query_by_label(tr("Blacks")).is_some());
-        h.get_by_role_and_label(Role::Button, tr("Light")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Light")).click();
         h.run_steps(12);
-        h.get_by_role_and_label(Role::Button, tr("Color")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
         h.run_steps(12);
         for label in ["White Balance", "Temperature", "Tint", "Vibrance", "Saturation"] {
             assert!(h.query_by_label(tr(label)).is_some(), "{}: {label}", lang.code());
         }
-        h.get_by_role_and_label(Role::Button, tr("Color")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
         h.run_steps(12);
-        h.get_by_role_and_label(Role::Button, tr("Color Mixer")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(12);
         for tab in ["Hue", "Saturation", "Luminance"] {
             assert!(h.get_by_label(tr(tab)).rect().right() <= 1426.0, "{}: mixer tabs overflow the panel", lang.code());
@@ -48,7 +48,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         for band in ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"] {
             assert!(h.query_by_label(tr(band)).is_some(), "{}: {band}", lang.code());
         }
-        h.get_by_role_and_label(Role::Button, tr("Color Mixer")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(12);
         for (section, labels) in [
             ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignetting", "Grain", "Roughness"]),
@@ -56,16 +56,16 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
             ("Color Grading", vec!["3-Way", "Midtones", "Global", "Luminance", "Blending", "Balance"]),
             ("Detail", vec!["Sharpening", "Masking", "Noise Reduction", "Luminance Detail", "Color Detail"]),
         ] {
-            h.get_by_role_and_label(Role::Button, tr(section)).click();
+            h.get_by_role_and_label(Role::DisclosureTriangle, tr(section)).click();
             h.run_steps(12);
             for label in labels {
                 assert!(h.query_all_by_label(tr(label)).next().is_some(), "{}: {section}/{label}", lang.code());
             }
             // Detail is also the sharpening slider label; target the section button.
-            h.get_by_role_and_label(Role::Button, tr(section)).click();
+            h.get_by_role_and_label(Role::DisclosureTriangle, tr(section)).click();
             h.run_steps(12);
         }
-        h.get_by_role_and_label(Role::Button, tr("Color Mixer")).click();
+        h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(12);
         let graph = h.get_by_label(tr("Tone Histogram")).rect();
         h.event(egui::Event::PointerMoved(graph.center()));

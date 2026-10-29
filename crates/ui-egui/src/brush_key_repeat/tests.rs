@@ -119,7 +119,7 @@ fn the_settings_live_beside_the_size_field() {
     h.get_by_label("Size Key Repeat").click();
     h.run();
     assert!(h.query_by_label("Pause before repeating").is_some());
-    assert!(h.query_by_label_contains("Change every").is_some());
+    assert!(h.query_all_by_label("Change every").next().is_some());
 }
 
 /// User report: resizing with ] while starting to paint drew the cursor at a size the stroke

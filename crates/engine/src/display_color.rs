@@ -492,5 +492,4 @@ impl ColorState {
 }
 
 #[cfg(test)]
-#[path = "display_color_tests.rs"]
 mod tests;

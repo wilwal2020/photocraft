@@ -473,4 +473,3 @@ fn generative_fills_prompt_goes_alone_with_the_unmarked_picture() {
     assert_eq!(prompt(" a cat ", MARKERS[0].1, Intent::Prompt), "a cat");
     assert_eq!(mask_prompt(" a cat ", Intent::Prompt), "a cat");
 }
-

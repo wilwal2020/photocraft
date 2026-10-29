@@ -5,6 +5,17 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde::{Deserialize, Serialize};
 
+/// How a fill lays down its colour: blended with a mode, Clear, which erases what it covers
+/// (the Paint Bucket's Mode › Clear, the Fill tool's transparent colour), or Behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillMode {
+    Blend(BlendMode),
+    Clear,
+    /// Lays the colour down behind the pixels already there (Photoshop's Behind mode): a fill that
+    /// reaches in under the layer's own strokes leaves them as they are and fills their soft edges.
+    Behind,
+}
+
 /// Gradient tool shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -55,18 +66,6 @@ pub fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
     }
 }
 
-/// How a fill lays its colour down.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FillPaint {
-    /// Blends the colour in with a blend mode.
-    Blend(BlendMode),
-    /// Clears the pixels instead (the Fill tool's transparent colour): coverage takes alpha away.
-    Erase,
-    /// Lays the colour down behind the pixels already there (Photoshop's Behind mode): a fill that
-    /// reaches in under the layer's own strokes leaves them as they are and fills their soft edges.
-    Behind,
-}
-
 /// `c` with coverage `k` composited behind `d` (straight RGBA).
 fn behind(d: [f32; 4], c: [f32; 4], k: f32) -> [f32; 4] {
     let a = (c[3] * k).clamp(0.0, 1.0);
@@ -83,7 +82,7 @@ fn behind(d: [f32; 4], c: [f32; 4], k: f32) -> [f32; 4] {
 fn composite_area(
     s: &mut Surface,
     area: Rect,
-    paint: FillPaint,
+    mode: FillMode,
     coverage: impl Fn(i32, i32) -> f32 + Sync,
     color: impl Fn(i32, i32) -> [f32; 4] + Sync,
     lock_transparency: bool,
@@ -113,20 +112,20 @@ fn composite_area(
                 let i = ((y - r.y0) as usize * w + (x - r.x0) as usize) * n;
                 let px = &mut region[i..i + n];
                 let d = photocraft_raster::to_rgba(&fmt, px);
-                let mut o = match paint {
-                    FillPaint::Blend(mode) if lock_transparency => blend::composite_atop(mode, d, color(x, y), k),
-                    FillPaint::Blend(mode) => blend::composite(mode, d, color(x, y), k),
-                    FillPaint::Erase => [d[0], d[1], d[2], d[3] * (1.0 - k.clamp(0.0, 1.0))],
-                    FillPaint::Behind => behind(d, color(x, y), k),
+                let o = match mode {
+                    FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
+                    FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
+                    // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
+                    FillMode::Clear if lock_transparency => d,
+                    FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
+                    FillMode::Behind if lock_transparency => [d[0], d[1], d[2], d[3]],
+                    FillMode::Behind => behind(d, color(x, y), k),
                 };
-                if lock_transparency {
-                    o[3] = d[3];
-                }
                 from_rgba_into(&fmt, o, &mut enc);
                 // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
                 if let Some(i) = inks
                     && fmt.mode == photocraft_color::ColorMode::Cmyk
-                    && paint == FillPaint::Blend(BlendMode::Normal)
+                    && mode == FillMode::Blend(BlendMode::Normal)
                     && k >= 1.0
                 {
                     enc[..4].copy_from_slice(&i);
@@ -167,7 +166,7 @@ pub fn paint_gradient(
     composite_area(
         s,
         area,
-        FillPaint::Blend(blend_mode),
+        FillMode::Blend(blend_mode),
         |x, y| opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0)),
         |x, y| {
             let t = tool_gradient_t(shape, from, to, x as f32 + 0.5, y as f32 + 0.5);
@@ -219,11 +218,12 @@ pub fn bucket_fill_src(
     lock_transparency: bool,
     src: impl Fn(i32, i32) -> [f32; 4] + Sync,
 ) -> bool {
-    bucket_fill_inks(s, area, seed, tolerance, contiguous, anti_alias, opacity, selection, lock_transparency, src, None)
+    bucket_fill_inks(s, area, seed, tolerance, contiguous, anti_alias, opacity, selection, lock_transparency, src, None, FillMode::Blend(BlendMode::Normal))
 }
 
 /// [`bucket_fill_src`] where `inks` (CMYK, 0..1) are what a fully covered pixel of a CMYK target
-/// gets instead of `src`'s sRGB stand-in (a colour that was picked as CMYK).
+/// gets instead of `src`'s sRGB stand-in (a colour that was picked as CMYK), laid down with `mode`
+/// (the options bar's Mode).
 #[allow(clippy::too_many_arguments)]
 pub fn bucket_fill_inks(
     s: &mut Surface,
@@ -237,6 +237,7 @@ pub fn bucket_fill_inks(
     lock_transparency: bool,
     src: impl Fn(i32, i32) -> [f32; 4] + Sync,
     inks: Option<[f32; 4]>,
+    mode: FillMode,
 ) -> bool {
     if !area.contains(seed.0, seed.1) {
         return false;
@@ -244,7 +245,7 @@ pub fn bucket_fill_inks(
     let img = crate::selection::rgba8_image(s, area);
     let Some(region) = crate::selection::wand_region(&img, area, seed, tolerance, contiguous, anti_alias) else { return false };
     drop(img);
-    bucket_fill_region_inks(s, &region, opacity, selection, lock_transparency, src, inks);
+    bucket_fill_region_inks(s, &region, opacity, selection, lock_transparency, src, inks, mode);
     true
 }
 
@@ -258,10 +259,11 @@ pub fn bucket_fill_region_src(
     lock_transparency: bool,
     src: impl Fn(i32, i32) -> [f32; 4] + Sync,
 ) {
-    bucket_fill_region_inks(s, region, opacity, selection, lock_transparency, src, None);
+    bucket_fill_region_inks(s, region, opacity, selection, lock_transparency, src, None, FillMode::Blend(BlendMode::Normal));
 }
 
-/// [`bucket_fill_region_src`] with the CMYK `inks` of [`bucket_fill_inks`].
+/// [`bucket_fill_region_src`] with the CMYK `inks` and the `mode` of [`bucket_fill_inks`].
+#[allow(clippy::too_many_arguments)]
 pub fn bucket_fill_region_inks(
     s: &mut Surface,
     region: &crate::selection::Region,
@@ -270,33 +272,11 @@ pub fn bucket_fill_region_inks(
     lock_transparency: bool,
     src: impl Fn(i32, i32) -> [f32; 4] + Sync,
     inks: Option<[f32; 4]>,
-) {
-    fill_region(s, region, opacity, FillPaint::Blend(BlendMode::Normal), selection, lock_transparency, src, inks);
-}
-
-/// [`bucket_fill_region_inks`] laid down with `paint`: the Fill tool's blend mode, or its
-/// transparent colour.
-#[allow(clippy::too_many_arguments)]
-pub fn fill_region(
-    s: &mut Surface,
-    region: &crate::selection::Region,
-    opacity: f32,
-    paint: FillPaint,
-    selection: Option<&Surface>,
-    lock_transparency: bool,
-    src: impl Fn(i32, i32) -> [f32; 4] + Sync,
-    inks: Option<[f32; 4]>,
+    mode: FillMode,
 ) {
     // Composite only over the filled region's box.
-    composite_area(
-        s,
-        region.bbox,
-        paint,
-        |x, y| region.at(x, y) * opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0)),
-        src,
-        lock_transparency,
-        inks,
-    );
+    let b = region.bbox;
+    composite_area(s, b, mode, |x, y| region.at(x, y) * opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0)), src, lock_transparency, inks);
 }
 
 #[cfg(test)]
@@ -389,5 +369,25 @@ mod tests {
         assert!((s.rgba(-2, 4)[3] - 0.125).abs() < 0.005);
         assert_eq!(s.rgba(-1, 4), [0.0; 4], "outside the selection");
         assert_eq!(s.rgba(-4, 4), [0.0; 4], "outside the region");
+    }
+
+    /// The Paint Bucket's Mode: Multiply darkens what's there, Clear erases it (half at 50 %).
+    #[test]
+    fn bucket_mode_blends_or_clears() {
+        let a = Rect::new(0, 0, 4, 1);
+        let grey = [0.5, 0.5, 0.5, 1.0];
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let mut s = Surface::new(fmt);
+            s.fill_rect(a, &grey);
+            let red = |_, _| [1.0, 0.0, 0.0, 1.0];
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 1.0, None, false, red, None, FillMode::Blend(BlendMode::Multiply)));
+            let px = s.rgba(1, 0);
+            assert!((px[0] - 0.5).abs() < 0.01 && px[1] < 0.01 && (px[3] - 1.0).abs() < 1e-3, "{fmt:?} multiply: {px:?}");
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 0.5, None, false, red, None, FillMode::Clear));
+            assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "{fmt:?} clear at 50 %");
+            // Locked transparency keeps the alpha, so Clear does nothing.
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 1.0, None, true, red, None, FillMode::Clear));
+            assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "{fmt:?} locked");
+        }
     }
 }
