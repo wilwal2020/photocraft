@@ -1794,6 +1794,22 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
 
 /// A Properties Levels/Curves eyedropper (layer_picker.rs) owns the image until Esc or another
 /// tool; Space and the middle button still pan. It samples on the press.
+/// ⌘Space held (`hold_keys::Temporary::LoadVisible`): a click selects where the layer under the
+/// pointer shows, Lock Selection layers passed through (`select.loadVisible`); ⇧ adds, ⌥
+/// subtracts, ⇧⌥ intersects. Nothing else happens on the press.
+fn load_visible_click(app: &mut PhotocraftApp, ui: &egui::Ui, response: &egui::Response, xf: &ViewXform) {
+    if !response.clicked() {
+        return;
+    }
+    let Some(p) = response.interact_pointer_pos() else { return };
+    let d = xf.to_doc(p);
+    let op = crate::channels_panel::load_operation(ui.input(|i| i.modifiers));
+    if let Err(e) = app.run(photocraft_engine::visible_cmds::ID, json!({"x": d[0], "y": d[1], "operation": op})) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
 fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::Context, response: &egui::Response, xf: &ViewXform) {
     if response.hovered()
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
@@ -2041,7 +2057,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // (Space) and a middle-button drag still pan, and a secondary window's Hand never stops, as the
     // box is only drawn and driven on the primary canvas.
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
-    let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
+    let load_visible = temporary == Some(crate::hold_keys::Temporary::LoadVisible);
+    let hand_pan = tool == Tool::Hand && !transform_owns_pointer && !load_visible;
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
@@ -2064,6 +2081,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         view.center[1] -= d.y;
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
+    } else if primary && !stroke_dismissal && load_visible && !middle {
+        load_visible_click(app, ui, &response, &xf);
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
         layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
     } else if primary && !stroke_dismissal {
@@ -2085,8 +2104,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         };
         handle_primary_canvas_input(app, ui, &mut view, &input);
     }
+    // How far the Crop tool moved the camera this frame (it pans and turns the view with the image).
+    let mut crop_shift = None;
     if crop_camera && let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
         if now.center != center {
+            crop_shift = Some([now.center[0] - center[0], now.center[1] - center[1]]);
             view.center = now.center;
             ctx.request_repaint();
         }
@@ -2096,8 +2118,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
     let xf = if crop_camera {
-        if view.center != target_xf.center {
-            display_view.center = view.center;
+        // The image is painted after this frame's input, so it shows the Crop tool's move at
+        // once. Only that move: a wheel or Zoom tool step also moved the target centre about the
+        // pointer, and the new centre at the old (still easing) zoom drew the image in the wrong
+        // place for a frame at every notch (user report: zooming in crop mode flickered). The
+        // zoom shows from the next frame on, as without the Crop tool.
+        if let Some(d) = crop_shift {
+            display_view.center = [display_view.center[0] + d[0], display_view.center[1] + d[1]];
+            view.display_camera = Some((display_view.zoom, display_view.center));
         }
         display_view.rotation = view.rotation;
         ViewXform { center: display_view.center, rotation: display_view.rotation, ..xf }.pixel_aligned_for(app, ppp)
@@ -2126,6 +2154,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             zoom_out: &zoom_out,
         };
         paint_primary_overlays(app, ui, &mut view, &input);
+        // Over the tool's own cursor, which the held key keeps from acting.
+        if load_visible && let Some(p) = response.hover_pos() {
+            let m = ui.input(|i| i.modifiers);
+            ctx.set_cursor_icon(crate::tool_cursor::icon_parts(&ctx, &crate::panels::thumb_load_parts(m), p));
+        }
     }
     let tail = CanvasTailInput {
         ctx: &ctx,

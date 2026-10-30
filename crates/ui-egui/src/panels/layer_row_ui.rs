@@ -415,20 +415,47 @@ fn rects_id() -> egui::Id {
 /// Windows' default double-click time, Photoshop's (egui's own is 0.3 s).
 const DOUBLE_CLICK_S: f64 = 0.5;
 
+/// How far a press may slide before it comes up and still count as a click of a double-click (a
+/// pen tapping on a tablet; egui's click allows 6 px), as the clip line's `SLIDE`.
+const TAP_SLIDE: f32 = 12.0;
+
+/// A press on `resp` that slid past egui's click distance but came up within [`TAP_SLIDE`] of
+/// where it went down: egui reports it as a short drag, a pen tap as a click.
+pub(crate) fn slid_tap(ctx: &egui::Context, resp: &egui::Response) -> bool {
+    let id = egui::Id::unique("pc-layer-row-press");
+    if resp.drag_started()
+        && let Some(origin) = ctx.input(|i| i.pointer.press_origin())
+    {
+        ctx.data_mut(|d| d.insert_temp(id, (resp.id, origin)));
+    }
+    if !resp.drag_stopped() {
+        return false;
+    }
+    let pressed = ctx.data_mut(|d| {
+        let v = d.get_temp::<(egui::Id, egui::Pos2)>(id);
+        d.remove::<(egui::Id, egui::Pos2)>(id);
+        v
+    });
+    pressed.zip(resp.interact_pointer_pos()).is_some_and(|((w, origin), up)| w == resp.id && origin.distance(up) <= TAP_SLIDE)
+}
+
 /// Whether this click on the row of layer `layer` completes a double-click: a second click on the
 /// same `part` of that layer's row (its name, thumbnail, a mask…) within Windows' double-click
 /// time. Counted by layer and part, not by where on the screen the clicks land: the first click
 /// makes the layer active, which can change what the panels around the Layers panel show and move
 /// the row before the second click comes (user report: a double-click on a Solid Color
-/// thumbnail sometimes didn't open the Color Picker). A third click starts over.
-pub(crate) fn second_click(ctx: &egui::Context, resp: &egui::Response, layer: u64, part: u8) -> bool {
-    if !resp.clicked() {
+/// thumbnail sometimes didn't open the Color Picker). A third click starts over. Reported again:
+/// a pen tap that slides a few points is a click here (`tapped` includes [`slid_tap`]), and two
+/// clicks that land in one slow frame (egui then reports one click) are a double-click too.
+pub(crate) fn second_click(ctx: &egui::Context, tapped: bool, layer: u64, part: u8) -> bool {
+    if !tapped {
         return false;
     }
     let id = egui::Id::unique("pc-layer-row-click");
     let now = ctx.input(|i| i.time);
     let last: Option<(f64, u64, u8)> = ctx.data(|d| d.get_temp(id));
-    let double = last.is_some_and(|(t, l, p)| l == layer && p == part && (0.0..DOUBLE_CLICK_S).contains(&(now - t)));
+    let same_frame = ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary) && i.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count() >= 2);
+    let double = same_frame || last.is_some_and(|(t, l, p)| l == layer && p == part && (0.0..DOUBLE_CLICK_S).contains(&(now - t)));
     ctx.data_mut(|d| {
         if double {
             d.remove::<(f64, u64, u8)>(id);

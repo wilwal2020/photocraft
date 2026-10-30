@@ -123,7 +123,6 @@ use layer_row::paint_clipping_indicator;
 pub(crate) use layer_row::pro_thumb_border;
 #[cfg(test)]
 pub(crate) use layer_row::thumb_load_badge;
-#[cfg(test)]
 pub(crate) use layer_row::thumb_load_parts;
 #[cfg(test)]
 use layer_row::{PRO_GROUP_ROW_H, PRO_ROW_H, fit_in_cell, inherited_labels, layer_row_height, shown_label};

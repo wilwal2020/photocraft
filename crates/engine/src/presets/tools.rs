@@ -163,6 +163,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(c) = t.options.get("foreground").and_then(Value::as_array).filter(|a| a.len() >= 3) {
         let v: Vec<f32> = c.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
         s.tools.foreground = [v[0], v[1], v[2], v.get(3).copied().unwrap_or(1.0)];
+        s.tools.grey_for_mask();
     }
     Ok(json!({"name": t.name, "tool": t.tool, "options": t.options}))
 }

@@ -43,6 +43,10 @@ impl PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        // The Color panel and others set the tool colours directly: a targeted mask keeps greys.
+        if self.session.tools.grey_for_mask() {
+            ctx.request_repaint();
+        }
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         // The window's device is gone: nothing more may run that draws or prompts (the window is

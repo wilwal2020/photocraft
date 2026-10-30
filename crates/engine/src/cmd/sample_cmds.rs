@@ -175,6 +175,21 @@ pub fn sample_color(doc: &Document, active: Option<LayerId>, x: f64, y: f64, siz
     average(&buf.px, averaging_model(doc), doc.depth)
 }
 
+/// The grey a one-channel `surf` (a mask or channel shown alone) gives at document point (`x`,
+/// `y`) with Sample Size `size`, as opaque RGBA: the point, or the square's mean.
+pub fn sample_gray(surf: &photocraft_raster::Surface, canvas: Rect, x: f64, y: f64, size: u32) -> [f32; 4] {
+    let Some(r) = sample_rect(x, y, size, canvas) else { return [0.0; 4] };
+    let mut sum = 0.0f64;
+    for py in r.y0..r.y1 {
+        for px in r.x0..r.x1 {
+            sum += f64::from(surf.sample_channel(px, py, 0));
+        }
+    }
+    let n = f64::from(r.width()) * f64::from(r.height());
+    let v = if n > 0.0 { (sum / n) as f32 } else { 0.0 };
+    [v, v, v, 1.0]
+}
+
 /// The colour model the averages are taken in: the document's, except CMYK. CMYK documents are
 /// composited in RGB (see `photocraft_compose`), and the profile's RGB → CMYK → RGB round trip
 /// is not exact (deep shadows move by several levels), so averaging in CMYK would make a 3×3
@@ -233,6 +248,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let size = size_param(CMD, p)?;
             let which = layers_param(CMD, p)?;
             let d = s.active().ok_or(EngineError::NoDocument)?;
+            // A mask or channel shown alone (⌥-click a mask thumbnail) is what is sampled, as
+            // Photoshop's Eyedropper does (user report: it picked the hidden colours).
+            if let Some(surf) = crate::selection_cmds::shown_gray_surface(d) {
+                return Ok(json!(sample_gray(surf, d.doc.bounds(), x, y, size)));
+            }
             Ok(json!(sample_color(&d.doc, d.active_layer, x, y, size, which)))
         },
         journal: false,

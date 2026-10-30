@@ -328,6 +328,7 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
         "background" => s.tools.background = c,
         t => return Err(bad(CMD, format!("unknown target `{t}` (foreground|background)"))),
     }
+    s.tools.grey_for_mask();
     // A CMYK swatch keeps its inks (as a colour picked in CMYK does, #4196): the Color Picker
     // shows them and a CMYK document is painted with them, not with the sRGB round trip (#7474).
     if let SwatchColor::Cmyk(inks) = sw.color

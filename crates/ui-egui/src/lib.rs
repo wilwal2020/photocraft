@@ -847,6 +847,9 @@ mod dropdown_press_tests;
 mod marquee_tests;
 
 #[cfg(test)]
+mod load_visible_tests;
+
+#[cfg(test)]
 mod guide_cursor_tests;
 
 #[cfg(test)]

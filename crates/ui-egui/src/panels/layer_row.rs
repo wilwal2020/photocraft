@@ -292,7 +292,8 @@ pub(super) fn layer_row(
     // Link chains and pixel / vector mask thumbnails (#153). With thumbnails off the labels and
     // disclosure controls remain interactive.
     let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
-    let rc = RowCtx { l, doc, row, rect, ts, thumb, resp: &resp, masks: &masks };
+    let tapped = resp.clicked() || crate::layer_row_ui::slid_tap(ctx, &resp);
+    let rc = RowCtx { l, doc, row, rect, ts, thumb, resp: &resp, tapped, masks: &masks };
     paint_target_brackets(app, &painter, &t, &rc);
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
@@ -329,11 +330,24 @@ pub(super) fn layer_row(
         (ts > 0.0 && !doc.is_background(l.id) && thumb.expand(2.0).contains(p))
             .then(|| json!({"channel": "transparency", "layer": l.id.0, "operation": crate::channels_panel::load_operation(m)}))
     };
+    // ⌘Space held (`hold_keys::Temporary::LoadVisible`): a click anywhere on the row selects
+    // where the layer shows, on a mask thumbnail where that mask does (`select.loadVisible`).
+    let load_visible = (resp.clicked() || resp.hovered()) && crate::hold_keys::held_tool(app, ctx) == Some(crate::hold_keys::Temporary::LoadVisible);
+    let visible_load = (load_visible && resp.clicked()).then(|| {
+        let m = ui.input(|i| i.modifiers);
+        let source = match resp.interact_pointer_pos().and_then(|p| masks.hit(p)) {
+            Some(crate::mask_thumbs_ui::MaskKind::Pixel) => "mask",
+            Some(crate::mask_thumbs_ui::MaskKind::Second) => "secondMask",
+            Some(crate::mask_thumbs_ui::MaskKind::Vector) => "vectorMask",
+            None => "layer",
+        };
+        json!({"layer": l.id.0, "source": source, "operation": crate::channels_panel::load_operation(m)})
+    });
     let thumb_load = resp.clicked().then(|| (ui.input(|i| i.modifiers), resp.interact_pointer_pos())).and_then(|(m, pos)| load_at(m, pos?));
     // Over a thumbnail that ⌘ would load, the cursor says what the click does, as in Photoshop (#7824).
     if let Some(p) = resp.hover_pos() {
         let m = ui.input(|i| i.modifiers);
-        if load_at(m, p).is_some() {
+        if load_visible || load_at(m, p).is_some() {
             thumb_load_cursor(ctx, p, m);
         }
     }
@@ -342,11 +356,13 @@ pub(super) fn layer_row(
         let kind = masks.hit(pos?)?;
         crate::mask_thumbs_ui::click_command(l, kind, m)
     });
-    if let Some(p) = thumb_load {
+    if let Some(p) = visible_load {
+        actions.push((photocraft_engine::visible_cmds::ID.into(), p));
+    } else if let Some(p) = thumb_load {
         actions.push(("select.loadSelection".into(), p));
     } else if let Some(cmd) = mask_toggle {
         actions.push(cmd);
-    } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+    } else if tapped && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
         select_row_on_click(app, ui, &rc, actions);
     }
     // Double-click: the name renames in place (over the row's full height, not just the glyphs:
@@ -373,6 +389,8 @@ struct RowCtx<'a> {
     ts: f32,
     thumb: Rect,
     resp: &'a egui::Response,
+    /// A click, or a pen tap that slid a little (`layer_row_ui::slid_tap`).
+    tapped: bool,
     masks: &'a crate::mask_thumbs_ui::MaskRects,
 }
 
@@ -577,7 +595,7 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
         None if ts > 0.0 && on(thumb) => 5,
         None => 0,
     };
-    if crate::layer_row_ui::second_click(ctx, resp, l.id.0, part) {
+    if crate::layer_row_ui::second_click(ctx, rc.tapped, l.id.0, part) {
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
         } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
@@ -605,8 +623,11 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
                 LayerContent::Text(_) if ts > 0.0 && on(thumb) => "type.editText",
                 _ => "layer.layerStyle.blendingOptions",
             };
-            if crate::menus::is_enabled(app, id) {
-                // Null params: run like the menu item, dialog included.
+            // Null params: run like the menu item, dialog included. When both clicks came in one
+            // frame, the first one's `layer.select` is still queued: the command is checked once
+            // this layer is active, when it runs.
+            let active = app.session.active().and_then(|st| st.active_layer) == Some(l.id);
+            if !active || crate::menus::is_enabled(app, id) {
                 actions.push((id.into(), Value::Null));
             }
         }

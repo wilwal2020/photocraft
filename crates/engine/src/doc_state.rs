@@ -224,7 +224,30 @@ impl ToolState {
         let [fg, bg] = std::mem::replace(&mut self.other_colors, [self.foreground, self.background]);
         self.foreground = fg;
         self.background = bg;
+        self.grey_for_mask();
         true
+    }
+
+    /// A mask holds only greys, so while one is targeted the tool colours are greys too, as in
+    /// Photoshop (user report: they could be picked in colour): each colour becomes its grey
+    /// ([`rgb_to_gray`](photocraft_color::convert::rgb_to_gray), the tone a mask stroke paints).
+    /// Every command that sets a colour calls this; returns whether anything changed.
+    pub fn grey_for_mask(&mut self) -> bool {
+        if !self.mask_targeted {
+            return false;
+        }
+        let grey = |c: [f32; 4]| {
+            // A grey stays exactly as it is (the weights' sum isn't exactly 1 in f32).
+            if c[0] == c[1] && c[1] == c[2] {
+                return c;
+            }
+            let v = photocraft_color::convert::rgb_to_gray([c[0], c[1], c[2]]).clamp(0.0, 1.0);
+            [v, v, v, c[3]]
+        };
+        let (fg, bg) = (grey(self.foreground), grey(self.background));
+        let changed = fg != self.foreground || bg != self.background;
+        (self.foreground, self.background) = (fg, bg);
+        changed
     }
 }
 

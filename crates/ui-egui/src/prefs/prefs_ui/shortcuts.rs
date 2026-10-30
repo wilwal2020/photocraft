@@ -43,7 +43,7 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     );
     for (id, label, def) in prefs::TEMPORARY_TOOLS {
         if seen.insert(id.to_string()) {
-            out.push((id.to_string(), label.to_string(), vec!["Tools".into(), "Temporary".into()], Some(def.to_string())));
+            out.push((id.to_string(), label.to_string(), vec!["Tools".into(), "Temporary".into()], Some(def.to_string()).filter(|k| !k.is_empty())));
         }
     }
     out

@@ -1,9 +1,13 @@
 //! Held keys: Photoshop's temporary tools (#249).
 //!
 //! - Space: the Hand tool while held.
-//! - ⌘Space (Ctrl+Space off the Mac): Zoom In while held; a drag is a scrubby zoom.
-//! - ⌥Space (Alt+Space off the Mac): Zoom Out while held. ⌥ added to a held Zoom In (⌘⌥Space)
-//!   zooms out too, as ⌥ does with the Zoom tool.
+//! - ⌘Space (Ctrl+Space off the Mac): Load Visible Pixels while held (a PhotoCraft addition, user
+//!   request; Photoshop's Zoom In key): a click on a layer's row, a mask thumbnail or the canvas
+//!   selects where that layer or mask shows (`select.loadVisible`); ⇧ adds, ⌥ subtracts, ⇧⌥
+//!   intersects, as ⌘-clicking a thumbnail does.
+//! - Zoom In while held (no key by default, Photoshop's ⌘Space); a drag is a scrubby zoom.
+//! - ⌥Space (Alt+Space off the Mac): Zoom Out while held. ⌥ added to a held Zoom In zooms out
+//!   too, as ⌥ does with the Zoom tool.
 //! - The keys can be pressed in any order. Photoshop users usually hold Space first: on the Mac
 //!   that keeps ⌘Space from opening Spotlight, and many Linux desktops take ⌥Space for the window
 //!   menu when ⌥ comes first.
@@ -38,6 +42,8 @@ use crate::state::Tool;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Temporary {
     Hand,
+    /// Clicks load the visible pixels of a layer as the selection (`select.loadVisible`).
+    LoadVisible,
     ZoomIn,
     ZoomOut,
     /// ⌘ held with a tool that [`cmd_moves`]: a modifier, not a rebindable key.
@@ -48,6 +54,7 @@ impl Temporary {
     pub fn id(self) -> &'static str {
         match self {
             Temporary::Hand => "tools.temporary.hand",
+            Temporary::LoadVisible => "tools.temporary.loadVisible",
             Temporary::ZoomIn => "tools.temporary.zoomIn",
             Temporary::ZoomOut => "tools.temporary.zoomOut",
             Temporary::Move => "tools.temporary.move",
@@ -56,14 +63,16 @@ impl Temporary {
 
     pub fn tool(self) -> Tool {
         match self {
-            Temporary::Hand => Tool::Hand,
+            // Like the Hand, it keeps the tool underneath from acting; the canvas doesn't pan with it.
+            Temporary::Hand | Temporary::LoadVisible => Tool::Hand,
             Temporary::ZoomIn | Temporary::ZoomOut => Tool::Zoom,
             Temporary::Move => Tool::Move,
         }
     }
 
-    /// The key-bound temporary tools (`prefs::TEMPORARY_TOOLS`).
-    const BOUND: [Temporary; 3] = [Temporary::Hand, Temporary::ZoomIn, Temporary::ZoomOut];
+    /// The key-bound temporary tools (`prefs::TEMPORARY_TOOLS`). Of two bindings with as many
+    /// modifiers, the first held wins: ⌘⌥Space loads (and subtracts) rather than zooming out.
+    const BOUND: [Temporary; 4] = [Temporary::Hand, Temporary::LoadVisible, Temporary::ZoomIn, Temporary::ZoomOut];
 }
 
 /// Tools on which holding ⌘ (Ctrl off the Mac) is the Move tool. Photoshop excepts the Hand,
@@ -154,7 +163,7 @@ pub fn binding(app: &PhotocraftApp, t: Temporary) -> Option<KeyboardShortcut> {
 
 /// [`binding`] by id.
 fn binding_of(app: &PhotocraftApp, id: &str) -> Option<KeyboardShortcut> {
-    let def = photocraft_engine::prefs::TEMPORARY_TOOLS.iter().find(|x| x.0 == id).map(|x| x.2);
+    let def = photocraft_engine::prefs::TEMPORARY_TOOLS.iter().find(|x| x.0 == id).map(|x| x.2).filter(|k| !k.is_empty());
     parse(app.session.prefs().shortcut(id, def)?)
 }
 

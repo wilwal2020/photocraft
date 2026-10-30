@@ -114,7 +114,7 @@ pub fn default_shortcut(id: &str) -> Option<String> {
         .and_then(|c| c.3)
         .or_else(|| photocraft_engine::commands::find(id).and_then(|c| c.shortcut))
         .or_else(|| crate::menu_catalog::CATALOG.iter().find(|c| c.3 == id).and_then(|c| c.2))
-        .or_else(|| photocraft_engine::prefs::TEMPORARY_TOOLS.iter().find(|t| t.0 == id).map(|t| t.2))
+        .or_else(|| photocraft_engine::prefs::TEMPORARY_TOOLS.iter().find(|t| t.0 == id).map(|t| t.2).filter(|k| !k.is_empty()))
         .map(str::to_string)
         .or_else(|| crate::tool_shortcuts::tool(id).and_then(crate::tool_shortcuts::default))
 }

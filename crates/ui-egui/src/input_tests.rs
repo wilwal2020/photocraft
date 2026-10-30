@@ -206,6 +206,8 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
 #[test]
 fn temporary_zoom_works_under_a_dialog() {
     let mut h = harness();
+    // Photoshop's key: PhotoCraft gives ⌘Space to Load Visible Pixels by default.
+    h.state_mut().run("edit.keyboardShortcuts", serde_json::json!({"set": {"tools.temporary.zoomIn": "Cmd+Space"}})).unwrap();
     h.state_mut().ui.extras.rulers = false;
     open_dialog(&mut h);
     let p = free_canvas(&h);

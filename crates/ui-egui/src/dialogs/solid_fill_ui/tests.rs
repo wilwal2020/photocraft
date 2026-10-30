@@ -317,3 +317,87 @@ fn picker_field_and_slider_pick_on_press_and_follow_the_drag() {
         assert_eq!(color(&h), dragged, "{label}: release keeps the dragged colour");
     }
 }
+
+/// User report (again: a double-click on a Solid Color thumbnail sometimes didn't open the
+/// picker). A pen tap slides a few points between press and release, which egui counts as a drag;
+/// and a slow frame can take both clicks at once, which egui counts as one click. Both open it.
+#[test]
+fn a_sliding_pen_double_tap_or_a_double_click_in_one_frame_opens_the_picker() {
+    let opened = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().any(|d| owns(&d.fields));
+    let (mut h, id) = harness(1.0);
+    let at = pos2(row(&h, id).row.left() + 46.0, row(&h, id).row.center().y);
+    h.run_steps(40);
+    for _ in 0..2 {
+        h.hover_at(at);
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for i in 1..=3 {
+            h.hover_at(at + vec2(3.0 * i as f32, 1.0));
+            h.step();
+        }
+        h.event(Event::PointerButton { pos: at + vec2(9.0, 1.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        h.run_steps(3);
+    }
+    assert!(opened(&h), "a 9 pt slide is still a tap");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+    let names: Vec<String> = h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect();
+
+    let (mut h, id) = harness(1.0);
+    let at = pos2(row(&h, id).row.left() + 46.0, row(&h, id).row.center().y);
+    h.run_steps(40);
+    h.hover_at(at);
+    h.step();
+    for pressed in [true, false, true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    h.run_steps(3);
+    assert!(opened(&h), "two clicks in one frame");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>(), names, "no layer moved");
+
+    // A real drag of the row is no tap.
+    let (mut h, id) = harness(1.0);
+    let at = pos2(row(&h, id).row.left() + 46.0, row(&h, id).row.center().y);
+    h.run_steps(40);
+    for _ in 0..2 {
+        h.hover_at(at);
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.hover_at(at + vec2(30.0, 0.0));
+        h.step();
+        h.event(Event::PointerButton { pos: at + vec2(30.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        h.run_steps(3);
+    }
+    assert!(!opened(&h));
+}
+
+/// User report: dragging in the Solid Color picker felt low-rate. Each colour was a new document
+/// to the canvas, recomposited in full (94 ms a frame on a 2000×3000 canvas); between the picker's
+/// previews only the fill layer's area changes, and only that is refreshed.
+#[test]
+fn picker_previews_refresh_only_the_fill_layers_area() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 20, "width": 50, "height": 40})).unwrap();
+    // A fill made with a selection is masked to it: its area is the selection's.
+    s.execute("layer.newFillLayer.solidColor", json!({"color": "#336699"})).unwrap();
+    assert!(s.active().unwrap().doc.selection.is_none(), "the selection became the mask");
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    h.run_steps(8);
+    let dialog = open(h.state_mut()).unwrap();
+    h.run_steps(4);
+    for (i, color) in ["#ff0000", "#00ff00", "#0000ff", "#336699"].into_iter().enumerate() {
+        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(color));
+        h.run_steps(2);
+        let p = &h.state().perf;
+        assert_eq!(p.last_refresh, "rect", "colour {i}");
+        assert!(p.last_refresh_px <= 64 * 64, "colour {i}: {} px", p.last_refresh_px);
+    }
+}

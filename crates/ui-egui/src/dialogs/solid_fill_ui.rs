@@ -20,6 +20,38 @@ pub(crate) struct Preview {
     color: Color,
     shown: Arc<Document>,
     key: u64,
+    /// Where the fill layer can show: what changes between two of its previews.
+    area: photocraft_geom::Rect,
+}
+
+/// The canvas key of every Solid Color preview: this bit and 36 bits of the colour's hash.
+const PREVIEW_BIT: u64 = 1 << 36;
+
+fn is_preview_key(k: u64) -> bool {
+    k >> 36 == 1
+}
+
+/// Between two of the picker's previews (or a preview and the document) at `revision`: only the
+/// fill layer's area changed. Without it every colour of a drag in the picker's field was a new
+/// document to the canvas and recomposited everything (user report: the Solid Color picker felt
+/// low-rate; 476 ms GPU refreshes in their log, 94 ms a frame on a 2000×3000 CPU canvas).
+/// Where fill layer `l` can show on `canvas`: inside a mask that hides everything it doesn't
+/// paint (one made from a selection), widened by the mask's feather.
+fn fill_area(l: &photocraft_doc::Layer, canvas: photocraft_geom::Rect) -> photocraft_geom::Rect {
+    let all = photocraft_compose::layer_bounds(l, canvas);
+    match l.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0 && m.surface.default_pixel().first().is_some_and(|v| *v == 0.0)) {
+        Some(m) => {
+            let reach = (m.feather.max(0.0) * 3.0).ceil() as i32 + 1;
+            all.intersect(&m.surface.content_bounds().inflate(reach))
+        }
+        None => all,
+    }
+}
+
+pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, now: u64) -> Option<photocraft_geom::Rect> {
+    let p = app.solid_fill_preview.as_ref().filter(|p| p.document == doc && p.revision == revision)?;
+    let ours = |k: u64| k == 0 || is_preview_key(k);
+    (seen != now && ours(seen) && ours(now) && (is_preview_key(seen) || is_preview_key(now))).then_some(p.area)
 }
 
 pub(crate) fn open(app: &mut PhotocraftApp) -> Option<u64> {
@@ -186,9 +218,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     for component in color.c.into_iter().chain([color.alpha]) {
         component.to_bits().hash(&mut hash);
     }
-    let key = (1 << 36) | (hash.finish() & ((1 << 36) - 1));
+    let key = PREVIEW_BIT | (hash.finish() & (PREVIEW_BIT - 1));
+    let area = doc.layer(layer).map_or(doc.bounds(), |l| fill_area(l, doc.bounds()));
     let shown = Arc::new(photocraft_engine::mode_cmds::display_document(&doc).unwrap_or(doc));
-    app.solid_fill_preview = Some(Preview { document: st.doc.id, revision: st.revision, dialog: d.id, layer, color, shown: shown.clone(), key });
+    app.solid_fill_preview = Some(Preview { document: st.doc.id, revision: st.revision, dialog: d.id, layer, color, shown: shown.clone(), key, area });
     Some((shown, key))
 }
 

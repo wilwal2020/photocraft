@@ -158,3 +158,74 @@ fn animated_active_transform_aligns_the_display_camera_and_preserves_target_pan(
         assert_eq!(app.ui.views[0].display_camera, Some((1.0, [1490.25, 990.75])));
     }
 }
+
+/// User report: zooming in the Crop tool's default mode flickered. Its image is painted after the
+/// frame's input (the tool moves the camera), and a wheel notch drew it at the new centre but the
+/// old zoom for one frame. Zooming about the pointer keeps the document point under it in every
+/// frame, the one with the notch included.
+#[test]
+fn zooming_in_crop_mode_keeps_the_point_under_the_pointer_in_every_frame() {
+    for animated in [true, false] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 100, "background": "white"})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Crop;
+        app.ui.extras.rulers = false;
+        app.run("prefs.set", serde_json::json!({"path": "general.animatedZoom", "value": animated})).unwrap();
+        app.ui.views[0].zoom = 1.0;
+        app.ui.views[0].center = [100.0, 50.0];
+        app.ui.views[0].fit_pending = false;
+        app.ui.views[0].doc_size = [200, 100];
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let pointer = pos2(350.0, 280.0);
+        let mut doc_under = Vec::new();
+        for frame in 0..30 {
+            let tex = ensure_texture(&mut app, &ctx, 0, None).unwrap().0;
+            let alt = if frame == 5 || frame == 6 { egui::Modifiers::ALT } else { egui::Modifiers::NONE };
+            let mut events = vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(pointer)];
+            if frame == 5 || frame == 6 {
+                events.push(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: vec2(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::ALT,
+                });
+            }
+            let input = egui::RawInput {
+                screen_rect: Some(rect),
+                time: Some(f64::from(frame) / 60.0),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                let view = app.ui.views[0].clone();
+                let v = canvas_view(&mut app, ui, 0, rect, view, true);
+                app.ui.views[0] = v;
+            });
+            out.textures_delta.clear();
+            let Some(mesh) = out.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Mesh(m) if m.texture_id == tex && m.vertices.len() == 4 => Some(m.clone()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let (lo, hi) = mesh.vertices.iter().fold((pos2(f32::MAX, f32::MAX), pos2(f32::MIN, f32::MIN)), |(lo, hi), v| (lo.min(v.pos), hi.max(v.pos)));
+            let (ulo, uhi) = mesh.vertices.iter().fold((pos2(f32::MAX, f32::MAX), pos2(f32::MIN, f32::MIN)), |(lo, hi), v| (lo.min(v.uv), hi.max(v.uv)));
+            let at = |p: f32, lo: f32, hi: f32, ulo: f32, uhi: f32, size: f32| (ulo + (p - lo) / (hi - lo) * (uhi - ulo)) * size;
+            let x = at(pointer.x, lo.x, hi.x, ulo.x, uhi.x, 200.0);
+            let y = at(pointer.y, lo.y, hi.y, ulo.y, uhi.y, 100.0);
+            let zoom = (hi.x - lo.x) / ((uhi.x - ulo.x) * 200.0);
+            doc_under.push((frame, x, y, zoom));
+        }
+        let zooms: Vec<f32> = doc_under.iter().map(|d| d.3).collect();
+        assert!(zooms.last().unwrap() > &1.15, "the notches zoomed in: {zooms:?}");
+        let (_, x0, y0, _) = doc_under[0];
+        for &(frame, x, y, zoom) in &doc_under {
+            // Within a screen pixel (pixel alignment) at that frame's zoom.
+            let tol = 1.0 / zoom + 0.01;
+            assert!((x - x0).abs() <= tol && (y - y0).abs() <= tol, "animated {animated}, frame {frame}: ({x}, {y}) vs ({x0}, {y0}), zoom {zoom}");
+        }
+    }
+}

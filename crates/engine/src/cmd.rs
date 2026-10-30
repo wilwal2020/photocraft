@@ -152,6 +152,7 @@ pub mod type_styles_cmds;
 pub mod updates_cmds;
 pub(super) mod variables_cmds;
 pub mod vector_cmds;
+pub mod visible_cmds;
 pub(super) mod video_cmds;
 pub mod vp_cmds;
 pub mod warp_cmds;
@@ -962,6 +963,7 @@ fn build() -> Vec<CommandSpec> {
                 let background = color_param("tools.setColors", p, "background", s.tools.background)?;
                 s.tools.foreground = foreground;
                 s.tools.background = background;
+                s.tools.grey_for_mask();
                 if let Some(k) = fg_cmyk {
                     let [r, g, b, _] = s.tools.foreground;
                     s.tools.remember_cmyk([r, g, b], k);
@@ -1339,6 +1341,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::print_cmds::specs());
     v.extend(crate::installed_profiles::specs());
     v.extend(crate::pick_cmds::specs());
+    v.extend(crate::visible_cmds::specs());
     v.extend(crate::layer_nav_cmds::specs());
     v.extend(crate::frame_cmds::specs());
     v.extend(crate::migrate_cmds::specs());

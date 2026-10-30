@@ -594,3 +594,21 @@ fn the_cubes_hide_the_scroll_bar_and_the_sliders_keep_it() {
         assert_eq!(crate::panels::body_scroll_bar(&app, pro, Group::Properties, 0), ScrollBarVisibility::VisibleWhenNeeded);
     }
 }
+
+/// While a layer mask is targeted the Color panel is the Grayscale slider, whatever mode was
+/// picked (Photoshop; user report: mask colours could be picked in colour), and its one field
+/// sets a grey. The picked mode comes back with the pixels.
+#[test]
+fn a_targeted_mask_shows_the_grayscale_slider() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui.color_panel.mode = ColorPanelMode::RgbSliders;
+    app.session.tools.target_mask(true);
+    let mut h = color_tab_of(ThemeKind::Studio, app);
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).count(), 1, "K alone");
+    type_into(&mut h, egui::accesskit::Role::SpinButton, 0, "25");
+    assert_eq!(bytes(h.state().session.tools.foreground), [191, 191, 191]);
+    assert_eq!(h.state().ui.color_panel.mode, ColorPanelMode::RgbSliders, "the picked mode is kept");
+    h.state_mut().session.tools.target_mask(false);
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).count(), 3, "R, G and B again");
+}

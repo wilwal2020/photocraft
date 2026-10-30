@@ -1,6 +1,7 @@
 //! #249 through the real canvas and key handling: Space repositions a marquee being drawn, Space
-//! and ⌘Space / ⌥Space are temporary Hand / Zoom tools that give the tool back, D / X and the
-//! fill keys are commands whose Keyboard Shortcuts overrides replace the defaults.
+//! and ⌘Space / ⌥Space are temporary Hand / Zoom tools that give the tool back (⌘Space once bound
+//! to Zoom In as in Photoshop: by default it loads visible pixels), D / X and the fill keys are
+//! commands whose Keyboard Shortcuts overrides replace the defaults.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
@@ -35,6 +36,12 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     v.fit_pending = false;
     h.run_steps(2);
     h
+}
+
+/// Photoshop's ⌘Space for the held Zoom In (it takes the key from Load Visible Pixels).
+fn photoshop_zoom_key(h: &mut Harness<'static, PhotocraftApp>) {
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomIn": "Cmd+Space"}})).unwrap();
+    assert!(binding(h.state(), Temporary::LoadVisible).is_none(), "the conflicting key was removed");
 }
 
 fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
@@ -258,6 +265,7 @@ fn space_while_editing_type_is_not_the_hand_tool() {
 #[test]
 fn temporary_zoom_in_and_out_restore_the_tool() {
     let mut h = harness(Tool::RectMarquee);
+    photoshop_zoom_key(&mut h);
     let z0 = h.state().ui.views[0].zoom;
     key(&mut h, Key::Space, true, Modifiers::COMMAND);
     assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
@@ -284,6 +292,7 @@ fn temporary_zoom_in_and_out_restore_the_tool() {
 #[test]
 fn temporary_zoom_drag_is_a_scrubby_zoom() {
     let mut h = harness(Tool::Brush);
+    photoshop_zoom_key(&mut h);
     let z0 = h.state().ui.views[0].zoom;
     key(&mut h, Key::Space, true, Modifiers::COMMAND);
     press_at(&mut h, 200.0, 150.0);
@@ -333,6 +342,7 @@ fn space_then_alt_zooms_out_as_in_photoshop() {
 #[test]
 fn space_then_cmd_zooms_in_and_adding_alt_zooms_out() {
     let mut h = harness(Tool::RectMarquee);
+    photoshop_zoom_key(&mut h);
     let z0 = h.state().ui.views[0].zoom;
     key(&mut h, Key::Space, true, Modifiers::NONE);
     hold_mods(&mut h, Modifiers::COMMAND);
@@ -354,6 +364,7 @@ fn space_then_cmd_zooms_in_and_adding_alt_zooms_out() {
 #[test]
 fn alt_turns_a_held_zoom_in_around_unless_the_key_includes_alt() {
     let mut h = harness(Tool::Brush);
+    photoshop_zoom_key(&mut h);
     // With Zoom Out unbound, ⌘⌥Space still zooms out: ⌥ turns the held Zoom In around, as it
     // does the Zoom tool.
     h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomOut": ""}})).unwrap();
@@ -375,6 +386,7 @@ fn alt_turns_a_held_zoom_in_around_unless_the_key_includes_alt() {
 #[test]
 fn rebound_temporary_zoom_uses_the_new_key_only() {
     let mut h = harness(Tool::RectMarquee);
+    photoshop_zoom_key(&mut h);
     h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomIn": "Alt+Z"}})).unwrap();
     key(&mut h, Key::Space, true, Modifiers::COMMAND);
     assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Hand), "⌘Space is no longer zoom; Space still pans");
@@ -471,7 +483,9 @@ fn keyboard_shortcuts_dialog_lists_the_keys_under_tools() {
     let temp = vec!["Tools".to_string(), "Temporary".to_string()];
     assert_eq!(find("tools.temporary.hand"), Some((temp.clone(), Some("Space".into()))));
     assert_eq!(find("tools.temporary.zoomOut"), Some((temp, Some("Alt+Space".into()))));
-    assert_eq!(crate::prefs_ui::default_shortcut("tools.temporary.zoomIn").as_deref(), Some("Cmd+Space"));
+    assert_eq!(crate::prefs_ui::default_shortcut("tools.temporary.loadVisible").as_deref(), Some("Cmd+Space"));
+    assert_eq!(crate::prefs_ui::default_shortcut("tools.temporary.zoomIn"), None, "⌘Space went to Load Visible Pixels");
+    assert_eq!(find("tools.temporary.zoomIn").map(|f| f.1), Some(None));
     // One contiguous Tools section (the dialog prints a header where the top level changes).
     let first = items.iter().position(|i| i.2.first().map(String::as_str) == Some("Tools")).unwrap();
     assert!(items[first..].iter().all(|i| i.2.first().map(String::as_str) == Some("Tools")));

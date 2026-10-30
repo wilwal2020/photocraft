@@ -32,9 +32,12 @@ const UNIT_W: f32 = 14.0;
 /// Width of the white and black boxes at the right end of the ramp.
 const BOXES_W: f32 = 16.0;
 
-/// The Color tab: whatever the panel menu picked.
+/// The Color tab: whatever the panel menu picked. While a layer mask is targeted the tool colours
+/// are greys (`ToolState::grey_for_mask`), and the panel shows the Grayscale slider, as Photoshop's
+/// does; the picked mode comes back with the pixels.
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    match app.ui.color_panel.mode {
+    let mode = if app.session.tools.mask_targeted { ColorPanelMode::GrayscaleSlider } else { app.ui.color_panel.mode };
+    match mode {
         ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => crate::panels::color_field(app, ui),
         ColorPanelMode::ColorWheel => wheel(app, ui),
         mode => sliders(app, ui, mode),
@@ -216,7 +219,7 @@ fn slider_rows(ui: &mut egui::Ui, model: Model, v: [f32; 4], background: bool, d
             resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(x), label));
             if model == Model::Web {
                 changed |= hex_pair(ui, ui.scope_id().with(("web-field", i, background)), &mut x);
-            } else if widgets::value_field(ui, &mut x, lo..=hi, "", FIELD_W).changed() {
+            } else if widgets::value_field_named(ui, &format!("{label} value"), &mut x, lo..=hi, "", FIELD_W).changed() {
                 changed = true;
             }
             let (ur, _) = ui.allocate_exact_size(vec2(UNIT_W, ROW_H), Sense::hover());

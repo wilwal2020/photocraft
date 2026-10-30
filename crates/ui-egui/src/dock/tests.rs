@@ -466,7 +466,10 @@ fn theme_switch_keeps_the_selected_color_group_panel() {
 
     for theme in ThemeKind::ALL {
         for (tab, name) in Group::Color.tabs(true).iter().enumerate() {
-            let (mut app, _, _) = app_with_layers();
+            let (mut app, pixel, _) = app_with_layers();
+            // The new Curves layer's mask is targeted, which shows the Grayscale slider: the
+            // pixel layer shows the panel's own mode.
+            app.run("layer.select", json!({"layer": pixel.0})).unwrap();
             app.ui.dock_tabs.color = tab;
             let mut h = harness(app, vec2(1200.0, 900.0), ThemeKind::Pro);
             let ctx = h.ctx.clone();

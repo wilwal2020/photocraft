@@ -1157,6 +1157,7 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
         // A preset saved with Include Color brings its colour as the foreground (Photoshop).
         if let Some(c) = picked_color {
             s.tools.foreground = c;
+            s.tools.grey_for_mask();
         }
     }
     // The tool's brush always paints with full tips: load a library preset's from the store.

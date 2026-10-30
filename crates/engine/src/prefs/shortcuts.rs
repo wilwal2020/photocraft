@@ -112,9 +112,12 @@ fn capitalize(s: &str) -> String {
 /// commands; the UI reads their keys through [`Preferences::shortcut`]. While a selection or
 /// shape is being dragged, the Hand key repositions it instead of panning (Photoshop's Space).
 /// The erase key keeps the Brush or Pencil and makes its strokes erase (Photoshop's `~`).
+/// Load Visible Pixels (a PhotoCraft addition, user request) took Photoshop's ⌘Space from the held
+/// Zoom In, which has no key by default (an empty one) but can be given one.
 pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
     ("tools.temporary.hand", "Hand Tool (hold)", "Space"),
-    ("tools.temporary.zoomIn", "Zoom In (hold, drag to scrub)", "Cmd+Space"),
+    ("tools.temporary.loadVisible", "Load Visible Pixels as Selection (hold, click a layer or the canvas)", "Cmd+Space"),
+    ("tools.temporary.zoomIn", "Zoom In (hold, drag to scrub)", ""),
     ("tools.temporary.zoomOut", "Zoom Out (hold)", "Alt+Space"),
     ("tools.temporary.erase", "Erase with Brush or Pencil (hold)", "`"),
 ];
@@ -188,7 +191,7 @@ pub fn bindable_items() -> impl Iterator<Item = (&'static str, &'static str, &'s
     let engine = crate::command_specs().iter().map(|c| (c.id, c.label, c.menu, c.shortcut, BindKind::Command));
     let shell = crate::shell_commands::SHELL_COMMANDS.iter().map(|c| (c.0, c.1, c.2, c.3, BindKind::Command));
     let tools = crate::shell_commands::TOOLS.iter().map(|t| (t.0, t.1, &["Tools"][..], t.2, BindKind::Tool));
-    let hold = TEMPORARY_TOOLS.iter().map(|t| (t.0, t.1, &["Tools", "Temporary"][..], Some(t.2), BindKind::Hold));
+    let hold = TEMPORARY_TOOLS.iter().map(|t| (t.0, t.1, &["Tools", "Temporary"][..], Some(t.2).filter(|k| !k.is_empty()), BindKind::Hold));
     engine.chain(shell).chain(tools).chain(hold)
 }
 

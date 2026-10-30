@@ -1690,6 +1690,58 @@ fn mask_and_pixels_keep_their_own_colour_pair() {
     assert_eq!(pair(&s), (mask_fg, black));
 }
 
+/// A targeted mask keeps greys, as in Photoshop (user report: its colours could be picked in
+/// colour): any colour set meanwhile becomes its grey, and the pixels' pair comes back untouched.
+#[test]
+fn a_targeted_mask_keeps_grey_colours() {
+    let mut s = session_with_doc();
+    s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    s.tools.target_mask(true);
+    s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#00ff00"})).unwrap();
+    let grey = |c: [f32; 4]| c[0] == c[1] && c[1] == c[2];
+    assert!(grey(s.tools.foreground) && grey(s.tools.background), "{:?}", (s.tools.foreground, s.tools.background));
+    assert!((s.tools.foreground[0] - 0.299).abs() < 1e-4, "red's grey: {:?}", s.tools.foreground);
+    assert!((s.tools.background[0] - 0.587).abs() < 1e-4);
+    // A colour written directly (the Color panel) is greyed on the next call.
+    s.tools.foreground = [0.0, 0.0, 1.0, 1.0];
+    assert!(s.tools.grey_for_mask());
+    assert!(!s.tools.grey_for_mask(), "greys stay");
+    s.tools.target_mask(false);
+    assert_eq!(s.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the pixels' colours are untouched");
+    assert!(!s.tools.grey_for_mask(), "nothing to do on the pixels");
+    assert_eq!(s.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+}
+
+/// ⌥-click a mask thumbnail shows the mask alone; the Eyedropper then samples the mask's grey
+/// (user report: it picked the colours the view hides).
+#[test]
+fn the_eyedropper_samples_a_mask_shown_alone() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(0, 0, 10, 10), &[0.25]);
+        Ok(())
+    })
+    .unwrap();
+    let sample = |s: &mut Session, x: f64, size: u32| -> Vec<f32> {
+        serde_json::from_value(s.execute("document.sampleColor", json!({"x": x, "y": 5.5, "size": size})).unwrap()).unwrap()
+    };
+    assert_eq!(sample(&mut s, 30.5, 1), [1.0, 0.0, 0.0, 1.0], "the composite while the mask isn't shown");
+    s.execute(crate::mask_view_cmds::ID, json!({"layer": id.0, "mode": "gray"})).unwrap();
+    let v = sample(&mut s, 5.5, 1);
+    assert!(v[..3].iter().all(|c| (c - 0.25).abs() < 0.01) && v[3] == 1.0, "{v:?}");
+    let v = sample(&mut s, 30.5, 1);
+    assert!(v[..3].iter().all(|c| (c - 1.0).abs() < 0.01), "revealed: white {v:?}");
+    // A 3×3 average across the edge at x = 10: two columns of 0.25, one of white.
+    let v = sample(&mut s, 9.5, 3);
+    assert!((v[0] - 0.5).abs() < 0.01, "{v:?}");
+}
+
 #[test]
 fn delete_layer_selects_neighbour_and_undo_restores_layer() {
     for deleted_index in 0..3 {

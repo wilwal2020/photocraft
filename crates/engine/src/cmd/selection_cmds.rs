@@ -85,26 +85,30 @@ fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
 /// so a white alpha stays one region instead of breaking up along the RGB underneath.
 fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
     let st = s.active()?;
+    let area = st.doc.bounds();
+    Some((area, sel::rgba8_image(shown_gray_surface(st)?, area)))
+}
+
+/// The one-channel surface behind [`shown_gray`] (the Eyedropper samples it too).
+pub(crate) fn shown_gray_surface(st: &crate::DocState) -> Option<&photocraft_raster::Surface> {
     let doc = &st.doc;
-    let area = doc.bounds();
     let v = &st.channel_view;
     let colors_off = v.visible_colors(crate::channel_cmds::color_count(doc)) == 0;
-    let surf = if let Some((mask, crate::mask_view_cmds::MaskViewMode::Gray)) = v.shown_layer_mask(doc) {
-        &mask.surface
+    if let Some((mask, crate::mask_view_cmds::MaskViewMode::Gray)) = v.shown_layer_mask(doc) {
+        Some(&mask.surface)
     } else if colors_off {
         if let Some(i) = (0..doc.channels.len()).find(|i| v.alpha_shown(*i)) {
-            &doc.channels[i].surface
+            Some(&doc.channels[i].surface)
         } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
-            &q.surface
+            Some(&q.surface)
         } else if let Some((mask, _)) = v.shown_layer_mask(doc) {
-            &mask.surface
+            Some(&mask.surface)
         } else {
-            &st.active_layer.and_then(|id| doc.layer(id))?.mask.as_ref()?.surface
+            Some(&st.active_layer.and_then(|id| doc.layer(id))?.mask.as_ref()?.surface)
         }
     } else {
-        return None;
-    };
-    Some((area, sel::rgba8_image(surf, area)))
+        None
+    }
 }
 
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
