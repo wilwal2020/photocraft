@@ -39,6 +39,16 @@ pub fn install_windows() -> Option<photocraft_tablet::windows::Monitor> {
     photocraft_tablet::windows::Monitor::install().map_err(|e| log::warn!("{e}")).ok()
 }
 
+/// Stop winit's raw mouse input (Windows): a high polling rate mouse's reports starved the
+/// window's frames while it moved (see `photocraft_tablet::windows::stop_raw_mouse_input`). On
+/// failure this logs why: frames then thin out while a fast mouse moves.
+#[cfg(target_os = "windows")]
+pub fn stop_raw_mouse_input() {
+    if let Err(e) = photocraft_tablet::windows::stop_raw_mouse_input() {
+        log::warn!("{e}");
+    }
+}
+
 /// Stylus barrel button down check (Windows). The right mouse button is left to egui, which
 /// reports the logical secondary button (swapped buttons included) for the app's own window only.
 #[cfg(target_os = "windows")]

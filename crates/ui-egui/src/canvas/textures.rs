@@ -507,7 +507,19 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         detail: Vec::new(),
     });
     let present = cache.on_gpu && gpu.has(id.0, size);
-    let current = cache.revision == revision && cache.preview_key == preview_key;
+    let mut current = cache.revision == revision && cache.preview_key == preview_key;
+    // Opened while the compositor was still being built, the document was drawn on the CPU. It
+    // stayed there, and said so in the status bar, until an edit, which then paid for the whole
+    // GPU upload (user report: "CPU rendering" with GPU rendering on; an 800 ms first stroke).
+    // Once the compositor is built it is redrawn on the GPU; until then, frames keep coming to
+    // see that.
+    if let Some(crate::render_path::CpuReason::Unsupported(why)) = app.render_path.current(id.0) {
+        match gpu.compositor_built_for(why) {
+            Some(true) => current = false,
+            Some(false) => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+            None => {}
+        }
+    }
     // GPU Memory or Memory Usage changed with nothing to redraw: the new budget, and whether the
     // layers fit it, show at once (the status bar's GPU Memory Full).
     if present && app.perf.gpu_budget_allowance != budget_allowance(app) {

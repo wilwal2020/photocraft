@@ -655,6 +655,10 @@ fn main() -> eframe::Result {
             if let Some(monitor) = tablet::install_windows() {
                 let _ = tablet_monitor_win.set(monitor);
             }
+            // winit registered every mouse for raw input when it made the event loop; nothing here
+            // reads it, and a fast mouse's reports kept the window from drawing.
+            #[cfg(target_os = "windows")]
+            tablet::stop_raw_mouse_input();
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
             // A lost window device (a driver reset) closes the window; this process then starts

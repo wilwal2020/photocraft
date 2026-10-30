@@ -182,6 +182,58 @@ fn the_warmed_up_compositor_composites_the_first_document() {
     drop(rs);
 }
 
+/// A document opened while the compositor is still being built is drawn on the CPU; once the
+/// build is done it goes to the GPU by itself, with no edit (user report: the status bar said
+/// "CPU rendering" with GPU rendering on, and the first stroke paid for the switch).
+#[test]
+fn a_document_opened_during_the_build_goes_to_the_gpu_when_it_is_built() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let wait = std::sync::Mutex::new(Some(wait));
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).with_pixels_per_point(1.0).wgpu_setup(wgpu_setup()).build_eframe(move |cc| {
+            crate::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                app.set_wgpu(rs.clone());
+                // A build held back until the test lets it finish.
+                let mut r = rs.renderer.write();
+                if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+                    let (device, format) = (rs.device.clone(), photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter));
+                    let wait = wait.lock().unwrap().take().unwrap();
+                    res.compositor_warmup = Some(std::thread::spawn(move || {
+                        let _ = wait.recv();
+                        photocraft_gpu::Compositor::try_new_with_format(&device, format)
+                    }));
+                }
+            }
+            app
+        })
+    }));
+    let Ok(mut h) = built else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    if h.state().gpu.is_none() {
+        eprintln!("skipping: no GPU canvas");
+        return;
+    }
+    h.state_mut().run("file.new", serde_json::json!({"width": 300, "height": 200, "background": "white"})).unwrap();
+    let doc = h.state().session.active().unwrap().doc.id.0;
+    h.run_steps(4);
+    let reason = |h: &egui_kittest::Harness<'_, crate::PhotocraftApp>| h.state().render_path.current(doc).map(ToString::to_string);
+    assert_eq!(reason(&h).as_deref(), Some(COMPOSITOR_BUILDING), "drawn on the CPU while the compositor is built");
+    go.send(()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while reason(&h).is_some() {
+        assert!(std::time::Instant::now() < deadline, "still on the CPU: {:?}", reason(&h));
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // No edit was made: the same revision is now on the GPU.
+    assert!(h.state().gpu_active());
+}
+
 /// #6418: on AMD's Vulkan driver, a pass that drew only part of a small mip level corrupted texels
 /// outside its scissor, at the level's top-left (RX 6900 XT, driver 26.8.1). Whether a texture is
 /// hit depends on where the driver placed it, so this paints dabs on canvases of several sizes at

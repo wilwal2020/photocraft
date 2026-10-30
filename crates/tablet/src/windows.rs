@@ -71,6 +71,49 @@ unsafe extern "system" {
     fn CallNextHookEx(hhk: *mut std::ffi::c_void, n_code: i32, w_param: usize, l_param: isize) -> isize;
     fn GetCurrentThreadId() -> u32;
     fn GetPointerPenInfo(pointer_id: u32, pen_info: *mut POINTER_PEN_INFO) -> i32;
+    fn RegisterRawInputDevices(devices: *const RAWINPUTDEVICE, count: u32, size: u32) -> i32;
+    fn GetLastError() -> u32;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RAWINPUTDEVICE {
+    us_usage_page: u16,
+    us_usage: u16,
+    dw_flags: u32,
+    hwnd_target: *mut std::ffi::c_void,
+}
+
+/// `HID_USAGE_PAGE_GENERIC` / `HID_USAGE_GENERIC_MOUSE` (hidusage.h).
+const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+const HID_USAGE_GENERIC_MOUSE: u16 = 0x02;
+/// `RIDEV_REMOVE` (winuser.h): stop raw input from this device class (needs a null target).
+const RIDEV_REMOVE: u32 = 0x0000_0001;
+
+/// Stop the raw mouse input (`WM_INPUT`) winit registers this process for. winit asks for every
+/// mouse's raw reports by default, for `DeviceEvent`s PhotoCraft doesn't use, and eframe has no
+/// way to turn that off. A gaming mouse sends 1000-8000 reports a second, each queued as a
+/// `WM_INPUT`, and Windows only sends `WM_PAINT` while the queue is empty: frames starved while
+/// the mouse moved (user report: panning lagged with the mouse, not with a moved cursor; a pan at
+/// 159 fps fell to 59 fps at 1 kHz and 14 fps at 8 kHz). Ordinary mouse messages, which egui
+/// reads, are coalesced and unaffected. Call it on the UI thread once the event loop exists.
+pub fn stop_raw_mouse_input() -> Result<(), crate::Error> {
+    let device = RAWINPUTDEVICE {
+        us_usage_page: HID_USAGE_PAGE_GENERIC,
+        us_usage: HID_USAGE_GENERIC_MOUSE,
+        dw_flags: RIDEV_REMOVE,
+        hwnd_target: std::ptr::null_mut(),
+    };
+    // SAFETY: one valid, initialised RAWINPUTDEVICE with its own size; RIDEV_REMOVE with a null
+    // target is the documented way to unregister a device class. GetLastError has no
+    // preconditions.
+    let ok = unsafe { RegisterRawInputDevices(&device, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32) };
+    if ok == 0 {
+        // SAFETY: see above.
+        let code = unsafe { GetLastError() };
+        return Err(crate::Error::Platform(format!("RegisterRawInputDevices (remove the mouse) failed: error {code}")));
+    }
+    Ok(())
 }
 
 const WH_GETMESSAGE: i32 = 3;
@@ -168,6 +211,44 @@ pub fn is_barrel_button_down() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetRegisteredRawInputDevices(devices: *mut RAWINPUTDEVICE, count: *mut u32, size: u32) -> u32;
+    }
+
+    /// The raw input device classes this process is registered for.
+    fn registered() -> Vec<(u16, u16)> {
+        let size = std::mem::size_of::<RAWINPUTDEVICE>() as u32;
+        let mut count = 0u32;
+        // SAFETY: a null buffer asks for the count only.
+        unsafe { GetRegisteredRawInputDevices(std::ptr::null_mut(), &mut count, size) };
+        let empty = RAWINPUTDEVICE { us_usage_page: 0, us_usage: 0, dw_flags: 0, hwnd_target: std::ptr::null_mut() };
+        let mut buf = vec![empty; count as usize];
+        // SAFETY: `buf` holds `count` devices of `size` bytes each.
+        let n = unsafe { GetRegisteredRawInputDevices(buf.as_mut_ptr(), &mut count, size) };
+        buf.truncate(if n == u32::MAX { 0 } else { n as usize });
+        buf.iter().map(|d| (d.us_usage_page, d.us_usage)).collect()
+    }
+
+    /// winit's raw mouse registration (as it makes it) is removed; nothing else is touched.
+    #[test]
+    fn raw_mouse_input_is_unregistered() {
+        let size = std::mem::size_of::<RAWINPUTDEVICE>() as u32;
+        let mouse = (HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE);
+        let keyboard = (HID_USAGE_PAGE_GENERIC, 0x06);
+        let devices = [mouse, keyboard].map(|(page, usage)| RAWINPUTDEVICE { us_usage_page: page, us_usage: usage, dw_flags: 0, hwnd_target: std::ptr::null_mut() });
+        // SAFETY: two initialised devices of `size` bytes, no target window (the focus window).
+        assert_ne!(unsafe { RegisterRawInputDevices(devices.as_ptr(), 2, size) }, 0);
+        assert!(registered().contains(&mouse));
+        stop_raw_mouse_input().unwrap();
+        let now = registered();
+        assert!(!now.contains(&mouse), "{now:?}");
+        assert!(now.contains(&keyboard), "the keyboard stays registered: {now:?}");
+        // Again, with nothing to remove: no error.
+        let again = stop_raw_mouse_input();
+        assert!(again.is_ok(), "{again:?}");
+    }
 
     const POINTER_FLAG_INCONTACT: u32 = 0x0004;
     const POINTER_FLAG_FIRSTBUTTON: u32 = 0x0010;

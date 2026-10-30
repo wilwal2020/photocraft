@@ -246,6 +246,23 @@ impl GpuCanvas {
         }
     }
 
+    /// For a document drawn on the CPU because the compositor was still being built
+    /// ([`COMPOSITOR_BUILDING`], its `reason`): whether it is built now, so the document can go to
+    /// the GPU without waiting for an edit. `None` for any other reason.
+    pub fn compositor_built_for(&self, reason: &str) -> Option<bool> {
+        if reason != COMPOSITOR_BUILDING {
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let renderer = self.rs.renderer.read();
+            let res = renderer.callback_resources.get::<Resources>()?;
+            Some(res.compositor.is_some() || res.compositor_warmup.as_ref().is_none_or(std::thread::JoinHandle::is_finished))
+        }
+        #[cfg(target_arch = "wasm32")]
+        Some(true)
+    }
+
     /// The render state the canvas draws with (its device, queue and egui's renderer).
     pub fn render_state(&self) -> &RenderState {
         &self.rs
