@@ -478,3 +478,78 @@ fn rows_out_of_view_are_not_built_but_stay_listed() {
     h.run_steps(3);
     assert_eq!(h.state().ui.brushes_panel.selected.len(), 300);
 }
+
+/// Shift-click ranges follow the list as drawn, worked out only when a Shift-click needs them:
+/// loose presets, then each group's row and, while it is open, what it holds; a closed group or
+/// folder hides its contents, and a search opens the groups (not their nested folders).
+#[test]
+fn shift_click_order_is_the_drawn_order() {
+    let base = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()).session.tools.presets[0].clone();
+    let p = |name: &str, group: &str, folder: &[&str]| BrushPreset {
+        name: name.into(),
+        group: group.into(),
+        folder: folder.iter().map(|s| s.to_string()).collect(),
+        ..base.clone()
+    };
+    let presets = [p("L1", "", &[]), p("A1", "A", &[]), p("I1", "A", &["Ink"]), p("A2", "A", &[]), p("B1", "B", &[])];
+    let items: Vec<&BrushPreset> = presets.iter().collect();
+    let tree = folder_tree(&items);
+    let order = |filtering: bool, collapsed: &[&str]| {
+        let collapsed: Vec<String> = collapsed.iter().map(|s| s.to_string()).collect();
+        let mut out = Vec::new();
+        drawn_order(&tree, filtering, &collapsed, &mut out);
+        out.iter()
+            .map(|it| match it {
+                BrushItem::Preset(n) => n.clone(),
+                BrushItem::Folder(f) => format!("[{}]", f.join("/")),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(order(false, &[]), "L1 [A] A1 [A/Ink] I1 A2 [B] B1");
+    assert_eq!(order(false, &["A/Ink"]), "L1 [A] A1 [A/Ink] A2 [B] B1");
+    assert_eq!(order(false, &["A", "B"]), "L1 [A] [B]");
+    assert_eq!(order(true, &["A", "A/Ink"]), "L1 [A] A1 [A/Ink] A2 [B] B1");
+}
+
+/// The panel forgets a deleted preset's previews when the presets change, not by checking every
+/// preview against every name each frame (which cost time with a big library while panning).
+#[test]
+fn a_deleted_presets_previews_are_forgotten() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let gone = app.session.tools.presets[1].name.clone();
+    let mut h = Harness::builder().with_size(vec2(600.0, 500.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            egui::Window::new("Brushes").fixed_size(vec2(320.0, 300.0)).show(&ctx, |ui| show(app, ui));
+        },
+        {
+            app.ui.brushes_panel.collapsed.clear();
+            app
+        },
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let slot = format!("test@:{gone}");
+    // Whether the slot is cached (taking it out, so each check starts from a fresh `put`).
+    let has = |h: &Harness<'_, PhotocraftApp>| {
+        brush_preview::with_cache(&h.ctx, |c| {
+            let before = c.len();
+            c.retain(|s| s != slot);
+            c.len() < before
+        })
+    };
+    let put = |h: &Harness<'_, PhotocraftApp>| {
+        let tex = h.ctx.load_texture("test", egui::ColorImage::filled([1, 1], Color32::WHITE), Default::default());
+        brush_preview::with_cache(&h.ctx, |c| drop(c.get(&slot, 1, || tex)));
+    };
+    // Unchanged presets: the preview stays.
+    put(&h);
+    h.run_steps(2);
+    assert!(has(&h), "a preview of a preset that exists is kept");
+    // Deleted: it goes.
+    put(&h);
+    h.state_mut().run("brush.presets.delete", json!({ "name": gone })).unwrap();
+    h.run_steps(2);
+    assert!(!has(&h), "the deleted preset's preview is forgotten");
+}

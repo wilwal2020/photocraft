@@ -154,7 +154,7 @@ fn main() {
     settle(&mut h, 6);
 
     if args.iter().any(|a| a == "--pan-only") {
-        pan_rows(&mut h, reps);
+        pan_rows(&mut h, reps, args.iter().any(|a| a == "--space"));
         return;
     }
     if let Some(what) = arg(&args, "--spin") {
@@ -236,7 +236,7 @@ fn main() {
     let fills: Vec<Vec<f64>> = (0..reps).map(|i| drag(&mut h, [w * (0.3 + 0.05 * i as f64), hh * 0.5], [0.0, 0.0], 1)).collect();
     drag_rows("Fill tool click", &fills);
 
-    pan_rows(&mut h, reps);
+    pan_rows(&mut h, reps, false);
 
     println!("perf spans: {:?}", h.state().perf.spans);
 }
@@ -244,9 +244,11 @@ fn main() {
 /// Fast pans with the Hand tool, 60 screen points a frame back and forth, at fit, 100 % and
 /// 200 %: each frame's time and what the canvas did in it (`perf.last_refresh`: a composite or
 /// just drawing the texture).
-fn pan_rows(h: &mut H, reps: usize) {
-    h.state_mut().ui.tool = Tool::Hand;
+/// Hand-tool pans at three zooms; `space`: Space held with the Brush instead (a painter's pan).
+fn pan_rows(h: &mut H, reps: usize, space: bool) {
+    h.state_mut().ui.tool = if space { Tool::Brush } else { Tool::Hand };
     settle(h, 3);
+    let key = |pressed| Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
     for (label, zoom) in [("fit", None), ("100 %", Some(1.0f32)), ("200 %", Some(2.0))] {
         let idx = h.state().session.active_index().unwrap_or(0);
         match zoom {
@@ -269,6 +271,10 @@ fn pan_rows(h: &mut H, reps: usize) {
             let mut p = c;
             h.event(Event::PointerMoved(p));
             frame(h);
+            if space {
+                h.event(key(true));
+                frame(h);
+            }
             h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
             frame(h);
             for _ in 0..12 {
@@ -287,10 +293,14 @@ fn pan_rows(h: &mut H, reps: usize) {
             }
             h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
             frame(h);
+            if space {
+                h.event(key(false));
+            }
             settle(h, 2);
         }
         let n = times.len();
-        row(&format!("pan with the Hand tool, {label}: frames"), times);
+        let how = if space { "Space-drag with the Brush" } else { "the Hand tool" };
+        row(&format!("pan with {how}, {label}: frames"), times);
         println!("    UI passes: {passes} for {n} frames");
         println!("    canvas work in those frames: {kinds:?}");
         let mut by: Vec<(f64, &str)> = spans.iter().map(|(k, v)| (v.iter().sum::<f64>() / v.len().max(1) as f64, *k)).collect();

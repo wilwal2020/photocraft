@@ -16,7 +16,6 @@
 //! The list itself ([`preset_list`]) is shared with the Brush Preset picker (`brush_picker`),
 //! which draws its own cards; each keeps its own view state.
 
-use std::cell::RefCell;
 use std::collections::HashSet;
 
 use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
@@ -474,8 +473,6 @@ struct Draw<'a> {
     sel: Sel,
     /// The selection: what a drag of a selected item carries.
     selected: &'a [BrushItem],
-    /// The items in the order drawn, for Shift ranges.
-    visible: RefCell<Vec<BrushItem>>,
     /// The group pinned at the top of the panel (not the picker's cards).
     pinned: Option<&'a str>,
 }
@@ -596,7 +593,6 @@ fn tile(ui: &mut egui::Ui, p: &BrushPreset, d: &Draw, parent: &[String], w: f32,
     let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
     let item = BrushItem::Preset(p.name.clone());
     let selected = d.sel.has(&item);
-    d.visible.borrow_mut().push(item);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &p.name));
     if ui.is_rect_visible(r) {
         paint_tile(ui, p, r, selected, resp.hovered(), d.show, &t);
@@ -661,11 +657,10 @@ fn tiles(ui: &mut egui::Ui, d: &Draw, run: &[&BrushPreset], parent: &[String], i
         for row in run.chunks(cols) {
             // A row out of view takes its space and nothing else: building every tile of a big
             // library each frame cost ~2 ms (of a 4 ms frame budget at 240 Hz) while panning the
-            // canvas. Its presets still count as listed, for Shift-click ranges.
+            // canvas. Its presets still count as listed, for Shift-click ranges ([`drawn_order`]).
             let top = ui.cursor().top();
             let clip = ui.clip_rect();
             if top > clip.bottom() + h || top + h < clip.top() - h {
-                d.visible.borrow_mut().extend(row.iter().map(|p| BrushItem::Preset(p.name.clone())));
                 ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 continue;
             }
@@ -795,7 +790,6 @@ fn preset_card(ui: &mut egui::Ui, p: &BrushPreset, d: &Draw, parent: &[String], 
     let name_in_top = tip_and_name(show);
     let item = BrushItem::Preset(p.name.clone());
     let current = d.sel.has(&item);
-    d.visible.borrow_mut().push(item);
     // Widths (which arrive scaled) keep narrowing with the slider and heights stop at the floor;
     // the text holds its 1.0 size — the fonts don't take the scale.
     let scale_h = scale.max(CARD_MIN_H_SCALE);
@@ -930,7 +924,6 @@ fn folder_row(ui: &mut egui::Ui, d: &Draw, f: &FolderNode, open: bool, acts: &mu
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), FOLDER_ROW_H), Sense::click_and_drag());
     let item = BrushItem::Folder(f.path.clone());
     let selected = d.sel.has(&item);
-    d.visible.borrow_mut().push(item.clone());
     let shown = f.path.last().map_or("", String::as_str);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, selected, shown));
     let parent = f.path.split_last().map(|(_, p)| p).unwrap_or_default();
@@ -1033,6 +1026,29 @@ fn renaming_folder(path: &[String]) -> Renaming {
 /// Draw `nodes` (a level of the tree, directly in folder `parent`): runs of presets as tiles or
 /// cards, folders as rows with their content below when open. The depth is bounded by
 /// [`folder_tree`] (paths are cut at [`MAX_VIEW_PATH`]).
+/// Whether a group or folder shows its contents. A search opens the groups with matches; their
+/// nested folders can still be closed (#7257).
+fn folder_open(f: &FolderNode, filtering: bool, collapsed: &[String]) -> bool {
+    (filtering && f.path.len() <= 1) || !collapsed.contains(&folder_view_key(&f.path))
+}
+
+/// The items of `nodes` in the order [`draw_nodes`] draws them (rows out of view included), for
+/// Shift-click ranges. Worked out only when a Shift-click needs it: collecting every name of a
+/// big library each frame cost time while panning the canvas.
+fn drawn_order(nodes: &[Node], filtering: bool, collapsed: &[String], out: &mut Vec<BrushItem>) {
+    for n in nodes {
+        match n {
+            Node::Preset(p) => out.push(BrushItem::Preset(p.name.clone())),
+            Node::Folder(f) => {
+                out.push(BrushItem::Folder(f.path.clone()));
+                if folder_open(f, filtering, collapsed) {
+                    drawn_order(&f.children, filtering, collapsed, out);
+                }
+            }
+        }
+    }
+}
+
 fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], parent: &[String], acts: &mut Vec<Action>) {
     let depth = parent.len();
     let mut run: Vec<&BrushPreset> = Vec::new();
@@ -1093,9 +1109,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], parent: &[String], ac
             Node::Preset(p) => run.push(p),
             Node::Folder(f) => {
                 flush(ui, &mut run, acts);
-                // A search opens the groups with matches; their nested folders can still be closed
-                // (#7257).
-                let open = (d.filtering && f.path.len() <= 1) || !d.collapsed.contains(&folder_view_key(&f.path));
+                let open = folder_open(f, d.filtering, d.collapsed);
                 folder_row(ui, d, f, open, acts);
                 if open {
                     draw_nodes(ui, d, &f.children, &f.path, acts);
@@ -1157,9 +1171,10 @@ fn sync_selection(st: &mut BrushesPanelState, presets: &[BrushPreset], current: 
     if st.selected.is_empty() {
         return;
     }
-    let names: HashSet<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+    // A scan per selected item, not a set of every name each frame: the selection is usually the
+    // current preset alone, the library can hold thousands.
     st.selected.retain(|it| match it {
-        BrushItem::Preset(n) => names.contains(n.as_str()),
+        BrushItem::Preset(n) => presets.iter().any(|p| p.name == *n),
         BrushItem::Folder(f) => presets.iter().any(|p| under(p, f)),
     });
 }
@@ -1189,7 +1204,6 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
         tile: st.tile,
         sel: Sel::new(&st.selected),
         selected: &st.selected,
-        visible: RefCell::new(Vec::new()),
         pinned: pinned.as_deref(),
     };
     let t = Tokens::get(ui.ctx());
@@ -1290,7 +1304,12 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
             },
         );
     }
-    let visible = d.visible.into_inner();
+    let mut visible = Vec::new();
+    if acts.iter().any(|a| matches!(a, Action::Click { shift: true, .. })) {
+        drawn_order(&pinned_node, d.filtering, d.collapsed, &mut visible);
+        drawn_order(&tree, d.filtering, d.collapsed, &mut visible);
+    }
+    drop(d);
     view_actions(st, acts, &visible)
 }
 
@@ -1427,11 +1446,17 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     apply(app, acts);
-    // Forget previews of presets that no longer exist.
-    let names: HashSet<&str> = app.session.tools.presets.iter().map(|p| p.name.as_str()).collect();
-    brush_preview::with_cache(ui.ctx(), |c| {
-        c.retain(|slot| slot.split_once(':').is_none_or(|(_, n)| names.contains(n)));
-    });
+    // Forget previews of presets that no longer exist, once each time the presets change (a set of
+    // every name each frame cost time while panning the canvas with a big library).
+    let rev = app.session.tools.presets_rev;
+    let swept = egui::Id::unique("brush-previews-swept-rev");
+    if ui.ctx().data(|d| d.get_temp::<u64>(swept)) != Some(rev) {
+        let names: HashSet<&str> = app.session.tools.presets.iter().map(|p| p.name.as_str()).collect();
+        brush_preview::with_cache(ui.ctx(), |c| {
+            c.retain(|slot| slot.split_once(':').is_none_or(|(_, n)| names.contains(n)));
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(swept, rev));
+    }
 }
 
 #[cfg(test)]
