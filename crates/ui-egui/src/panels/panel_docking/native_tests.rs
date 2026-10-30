@@ -82,7 +82,9 @@ struct Desktop {
 }
 
 impl Desktop {
-    fn new(app: PhotocraftApp) -> Self {
+    fn new(mut app: PhotocraftApp) -> Self {
+        // Panels float in their own OS windows only with the Workspace preference on.
+        app.session.prefs.edit(|p| p.workspace.float_panels_in_own_windows = true);
         let size = vec2(1400.0, 900.0);
         let host = Rc::new(RefCell::new(Host { size, ..Default::default() }));
         let shared = host.clone();

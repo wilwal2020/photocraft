@@ -17,6 +17,11 @@
 //! view crosses its 256-step quanta), another zoom, rotation, flip, aspect or display scale, a pan
 //! past the margin, and once a pan by a fraction of a pixel comes to rest (the moved image is then
 //! up to a pixel from where rasterizing puts the outline).
+//!
+//! While the zoom, rotation, flip or aspect keep changing (rotating the view with R, a zoom
+//! gesture), the last mask is drawn mapped through the change instead, and rasterized again once
+//! the view rests for [`SETTLE`] (user report: rotating the canvas lagged with a complicated
+//! selection, rasterizing the whole outline every frame).
 
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -178,7 +183,17 @@ struct Raster {
     /// The offset of the last frame and when it last changed, to tell a view at rest.
     seen: [f64; 2],
     moved: f64,
+    /// Likewise the zoom, rotation, flip and aspect (`Mapping::lin`).
+    lin_seen: [f64; 4],
+    lin_moved: f64,
+    /// Which rasterization this is (tests tell a new mask by it).
+    #[cfg(test)]
+    serial: u64,
 }
+
+/// Rasterizations so far, numbering each [`Raster`].
+#[cfg(test)]
+static RASTERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Raster {
     /// The whole device pixels to move this mask by to show the outline at `map`, when it serves:
@@ -200,6 +215,55 @@ impl Raster {
         }
         self.rect.contains(need.shift([shift[0].saturating_neg(), shift[1].saturating_neg()])).then_some(shift)
     }
+
+    /// While the view's zoom, rotation, flip or aspect keep changing from this mask's, the map
+    /// of device pixels from this mask to where `map` shows the outline: `[a, b, c, d, e, f]`
+    /// with `x' = a·x + b·y + e`, `y' = c·x + d·y + f`. `None` for the same view but for the pan,
+    /// once the change rests for [`SETTLE`], or before the mask is uploaded: rasterize then.
+    fn moving_to(&mut self, map: &Mapping, time: f64) -> Option<[f64; 6]> {
+        if self.map.lin == map.lin || !self.uploaded {
+            return None;
+        }
+        if self.lin_seen != map.lin {
+            self.lin_seen = map.lin;
+            self.lin_moved = time;
+        }
+        if time - self.lin_moved >= SETTLE {
+            return None;
+        }
+        let [a, b, c, d] = self.map.lin;
+        let det = a * d - b * c;
+        if !(det.is_finite() && det.abs() > 1e-12) {
+            return None;
+        }
+        // Device pixels at this mask's view back to document points, then to `map`'s.
+        let inv = [d / det, -b / det, -c / det, a / det];
+        let n = map.lin;
+        let m = [n[0] * inv[0] + n[1] * inv[2], n[0] * inv[1] + n[1] * inv[3], n[2] * inv[0] + n[3] * inv[2], n[2] * inv[1] + n[3] * inv[3]];
+        let o = self.map.offset;
+        let out = [m[0], m[1], m[2], m[3], map.offset[0] - (m[0] * o[0] + m[1] * o[1]), map.offset[1] - (m[2] * o[0] + m[3] * o[1])];
+        out.iter().all(|v| v.is_finite()).then_some(out)
+    }
+}
+
+/// Draw texture `t`, which holds the device pixels `rect`, mapped by `m` (see
+/// [`Raster::moving_to`]) at `ppp` device pixels per point.
+fn draw_mapped(painter: &egui::Painter, t: egui::TextureId, rect: Px, m: [f64; 6], ppp: f32) {
+    let at = |x: i64, y: i64| {
+        let (x, y) = (x as f64, y as f64);
+        pos2(((m[0] * x + m[1] * y + m[4]) / f64::from(ppp)) as f32, ((m[2] * x + m[3] * y + m[5]) / f64::from(ppp)) as f32)
+    };
+    let mut mesh = egui::Mesh::with_texture(t);
+    for (p, uv) in [
+        (at(rect.x0, rect.y0), pos2(0.0, 0.0)),
+        (at(rect.x1, rect.y0), pos2(1.0, 0.0)),
+        (at(rect.x1, rect.y1), pos2(1.0, 1.0)),
+        (at(rect.x0, rect.y1), pos2(0.0, 1.0)),
+    ] {
+        mesh.vertices.push(egui::epaint::Vertex { pos: p, uv, color: Color32::WHITE });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 type Shared = Arc<Mutex<Cache>>;
@@ -236,12 +300,33 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, view: egui::Id, xf: &V
     if need.is_empty() {
         return true;
     }
+    if let (Some(r), Some(t)) = (cache.raster.as_mut(), cache.texture.as_ref())
+        && let Some(m) = r.moving_to(&map, time)
+    {
+        draw_mapped(painter, t.id(), r.rect, m, ppp);
+        // Rasterized where the view puts it once it rests.
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(SETTLE));
+        return true;
+    }
     let shift = match cache.raster.as_mut().and_then(|r| r.shift_for(&map, need, time)) {
         Some(shift) => shift,
         None => {
             let rect = raster_rect(need, reach, side);
             let mask = rasterize(&map, segs, rect);
-            cache.raster = Some(Raster { map, rect, mask, uploaded: false, phase: 0, fresh: Px::default(), seen: map.offset, moved: time });
+            cache.raster = Some(Raster {
+                map,
+                rect,
+                mask,
+                uploaded: false,
+                phase: 0,
+                fresh: Px::default(),
+                seen: map.offset,
+                moved: time,
+                lin_seen: map.lin,
+                lin_moved: time,
+                #[cfg(test)]
+                serial: RASTERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            });
             [0, 0]
         }
     };
@@ -644,13 +729,12 @@ mod tests {
             let c = shared.lock().unwrap();
             c.raster.as_ref().map(|r| (r.rect, r.map))
         };
-        // Whether the mask was rasterized again since the last call (a new mask buffer: the old
-        // one is still alive when it is allocated, so the address differs).
-        let last = std::cell::Cell::new(std::ptr::null::<u8>());
+        // Whether the mask was rasterized again since the last call.
+        let last = std::cell::Cell::new(None);
         let remade = || {
             let shared = ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap();
-            let p = shared.lock().unwrap().raster.as_ref().map_or(std::ptr::null(), |r| r.mask.as_ptr());
-            p != last.replace(p)
+            let serial = shared.lock().unwrap().raster.as_ref().map(|r| r.serial);
+            serial != last.replace(serial)
         };
         uploads(&ctx); // egui's own (the font atlas)
         assert!(draw(&ctx, &painter, id, &v, &segs, 0.0));
@@ -689,7 +773,9 @@ mod tests {
         assert!(draw(&ctx, &painter, id, &v, &segs, 1.0));
         uploads(&ctx);
         assert!(remade(), "a pan past the margin");
-        // Zoom, rotation, flip and aspect each make a new mask, which the next frame reuses.
+        // Zoom, rotation, flip and aspect: the mask is drawn mapped while they change, made
+        // again once the view rests, and that one reused.
+        let mut t = 1.01;
         for change in 0..4 {
             let mut w = v;
             match change {
@@ -698,30 +784,78 @@ mod tests {
                 2 => w.flip = true,
                 _ => w.aspect = 0.5,
             }
-            assert!(draw(&ctx, &painter, id, &w, &segs, 1.01));
+            assert!(draw(&ctx, &painter, id, &w, &segs, t));
+            assert_eq!(uploads(&ctx), (0, 0), "change {change}: the texture as it is");
+            assert!(!remade(), "change {change}: drawn mapped");
+            t += SETTLE * 1.5;
+            assert!(draw(&ctx, &painter, id, &w, &segs, t));
             uploads(&ctx);
-            assert!(remade(), "change {change}");
-            assert!(draw(&ctx, &painter, id, &w, &segs, 1.02));
+            assert!(remade(), "change {change}: made again at rest");
+            assert!(draw(&ctx, &painter, id, &w, &segs, t + 0.01));
             uploads(&ctx);
             assert!(!remade(), "change {change}, then reused");
+            t += 0.02;
         }
         let retraced = Arc::new(wide(speckle(2000, 1400)));
-        assert!(draw(&ctx, &painter, id, &v, &retraced, 1.03));
+        assert!(draw(&ctx, &painter, id, &v, &retraced, t));
         uploads(&ctx);
         assert!(remade(), "a new outline");
         ctx.input_mut(|i| i.pixels_per_point = 1.25);
-        assert!(draw(&ctx, &painter, id, &v, &retraced, 1.04));
+        t += 0.01;
+        assert!(draw(&ctx, &painter, id, &v, &retraced, t));
+        uploads(&ctx);
+        assert!(!remade(), "another display scale: drawn mapped first");
+        t += SETTLE * 1.5;
+        assert!(draw(&ctx, &painter, id, &v, &retraced, t));
         uploads(&ctx);
         assert!(remade(), "another display scale");
         // A canvas bigger than a texture can be keeps the mesh; an outline out of view draws nothing.
         ctx.input_mut(|i| i.max_texture_side = 100);
-        assert!(!draw(&ctx, &painter, id, &v, &retraced, 1.05));
+        assert!(!draw(&ctx, &painter, id, &v, &retraced, t + 0.01));
         ctx.input_mut(|i| i.max_texture_side = 2048);
         v.center = [-5000.0, -5000.0];
-        assert!(draw(&ctx, &painter, id, &v, &retraced, 1.06));
+        assert!(draw(&ctx, &painter, id, &v, &retraced, t + 0.02));
         assert_eq!(uploads(&ctx), (0, 0));
-        assert!(draw(&ctx, &painter, id, &v, &Arc::new(Vec::new()), 1.07));
+        assert!(draw(&ctx, &painter, id, &v, &Arc::new(Vec::new()), t + 0.03));
         clear(&ctx, id);
         assert!(ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).is_none());
+    }
+
+    /// Rotating the view a little every frame (user report: laggy with a complicated selection)
+    /// never rasterizes the outline again until it stops; the mask drawn mapped lands where a
+    /// fresh one would.
+    #[test]
+    fn a_rotation_in_progress_reuses_the_mask_until_it_rests() {
+        let ctx = egui::Context::default();
+        let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+        let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), canvas);
+        let segs = Arc::new(speckle(400, 300));
+        let id = egui::Id::unique("ants-rotate");
+        let mut v = ViewXform { rect: canvas, zoom: 1.0, center: [200.0, 150.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let mask = || ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap().lock().unwrap().raster.as_ref().map(|r| r.serial);
+        assert!(draw(&ctx, &painter, id, &v, &segs, 0.0));
+        let first = mask();
+        let mut t = 0.0;
+        for frame in 1..=60 {
+            t = f64::from(frame) / 60.0;
+            v.rotation = frame as f32 * 1.5;
+            assert!(draw(&ctx, &painter, id, &v, &segs, t));
+            assert_eq!(mask(), first, "frame {frame}: no new mask while rotating");
+        }
+        assert!(draw(&ctx, &painter, id, &v, &segs, t + SETTLE * 1.5));
+        assert_ne!(mask(), first, "made again once the rotation stops");
+        // The mapping takes a document point where the new view puts it.
+        let shared = ctx.data_mut(|d| d.get_temp::<Shared>(cache_id(id))).unwrap();
+        let mut c = shared.lock().unwrap();
+        let r = c.raster.as_mut().unwrap();
+        let w = ViewXform { rotation: 37.0, zoom: 1.7, ..v };
+        let to = map(&w, 1.0);
+        let m = r.moving_to(&to, 100.0).unwrap();
+        for (x, y) in [(0.0, 0.0), (123.0, -45.0), (400.0, 300.0)] {
+            let [px, py] = r.map.apply(x, y);
+            let mapped = [m[0] * px + m[1] * py + m[4], m[2] * px + m[3] * py + m[5]];
+            let want = to.apply(x, y);
+            assert!((mapped[0] - want[0]).abs() < 1e-6 && (mapped[1] - want[1]).abs() < 1e-6, "{mapped:?} {want:?}");
+        }
     }
 }

@@ -356,6 +356,9 @@ pub struct Workspace {
     pub large_tabs: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
+    /// A floated panel opens in its own OS window, which can leave the app window (off: it
+    /// floats inside the app window, where a drag fades it over the drop target).
+    pub float_panels_in_own_windows: bool,
 }
 
 impl Default for Workspace {
@@ -368,6 +371,7 @@ impl Default for Workspace {
             large_tabs: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
+            float_panels_in_own_windows: false,
         }
     }
 }

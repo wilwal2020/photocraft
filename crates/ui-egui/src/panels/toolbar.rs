@@ -75,12 +75,20 @@ fn toolbar_metrics(pro: bool, double: bool) -> (f32, f32, i8) {
     (if double { w1 + bx + 2.0 } else { w1 }, bx, m)
 }
 
+/// The Tools panel's width, margins included (one or two columns of tools).
+pub(crate) fn toolbar_width(pro: bool, double: bool) -> f32 {
+    toolbar_metrics(pro, double).0
+}
+
 /// A Tools panel drag in progress: the pointer's offset from the panel's top-left corner. It is
 /// tracked here rather than through the grip's own response, because the grip moves from the
 /// docked panel to the floating one when the drag starts.
 #[derive(Clone, Copy, Debug)]
 struct ToolbarDrag {
     offset: egui::Vec2,
+    /// The dock was given the drag too (`panel_docking::begin_tools_drag`), so it shows where the
+    /// panel would dock among the panels and docks it there on release.
+    in_dock: bool,
 }
 
 fn toolbar_drag_id() -> egui::Id {
@@ -111,9 +119,19 @@ pub(crate) fn toolbar_drop_place(pointer: Pos2, corner: Pos2, area: Rect, screen
 /// Follow a running Tools panel drag: the panel floats under the pointer, and the release docks it
 /// at a canvas edge or leaves it floating there. Shows where it would dock.
 fn toolbar_drag_update(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(drag) = ctx.data(|d| d.get_temp::<ToolbarDrag>(toolbar_drag_id())) else { return };
+    let Some(mut drag) = ctx.data(|d| d.get_temp::<ToolbarDrag>(toolbar_drag_id())) else { return };
     let (down, pointer) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
     let Some(p) = pointer else { return };
+    // A Tools panel dragged out of the dock leaves it at once and floats under the pointer; the
+    // dock takes the drag from the next frame, once it has drawn without the panel (a changed
+    // layout cancels its drags).
+    if app.ui.panels.toolbar_place == crate::state::ToolbarPlace::Dock {
+        crate::panel_docking::undock_tools(app);
+    } else if !drag.in_dock && down {
+        let (w, _, _) = toolbar_metrics(Tokens::get(ctx).pro, app.ui.panels.toolbar_double);
+        drag.in_dock = crate::panel_docking::begin_tools_drag(app, ctx, egui::Rect::from_min_size(p - drag.offset, vec2(w, 300.0)));
+        ctx.data_mut(|d| d.insert_temp(toolbar_drag_id(), drag));
+    }
     let screen = ctx.content_rect();
     let area = app.last_canvas_rect;
     let corner = p - drag.offset;
@@ -159,7 +177,7 @@ fn toolbar_grip(ui: &mut egui::Ui, t: &Tokens, corner: Pos2) {
     if resp.drag_started()
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
     {
-        ui.ctx().data_mut(|d| d.insert_temp(toolbar_drag_id(), ToolbarDrag { offset: p - corner }));
+        ui.ctx().data_mut(|d| d.insert_temp(toolbar_drag_id(), ToolbarDrag { offset: p - corner, in_dock: false }));
     }
 }
 
@@ -177,10 +195,15 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     toolbar_drag_update(app, &ctx);
-    // Docked among the panels needs the old native dock: a place saved there starts at the
-    // start side (the shared docking can't hold the Tools panel yet).
-    if app.ui.panels.toolbar_place == crate::state::ToolbarPlace::Dock {
-        app.ui.panels.toolbar_place = crate::state::ToolbarPlace::Start;
+    // The dock's layout decides whether the Tools panel is in it (a workspace reset or closing
+    // its tab takes it out; a saved workspace can bring it back).
+    let dragging = ctx.data(|d| d.get_temp::<ToolbarDrag>(toolbar_drag_id())).is_some();
+    if !dragging {
+        if crate::panel_docking::tools_docked(app) {
+            app.ui.panels.toolbar_place = crate::state::ToolbarPlace::Dock;
+        } else if app.ui.panels.toolbar_place == crate::state::ToolbarPlace::Dock {
+            app.ui.panels.toolbar_place = crate::state::ToolbarPlace::Start;
+        }
     }
     match app.ui.panels.toolbar_place {
         crate::state::ToolbarPlace::Start => {

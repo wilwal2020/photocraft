@@ -1,0 +1,46 @@
+# craft-ui from storytold/craft-libs at 92d392cff132eaf53e13afff77f38b5c11b73aa0, vendored for the
+# Photoshop-parity fork's docking changes (see PATCHES.md). Standalone: not a workspace member, so
+# the workspace's stricter lints don't apply to upstream's code.
+[package]
+name = "craft-ui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/storytold/craft-libs"
+rust-version = "1.95"
+description = "Reusable egui controls and icon catalogs for Craft frontends"
+
+[dependencies]
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+egui = { version = "0.37", default-features = false }
+epaint = { version = "0.37", default-features = false }
+log = "0.4"
+serde = { version = "1", features = ["derive"], optional = true }
+# Same version as epaint's, for reading a face's character map.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"], optional = true }
+fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+unicode-script = { version = "0.5.8", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "RequestInit", "Response", "console"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSEvent", "NSResponder", "NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSString"] }
+
+[features]
+default = []
+serde = ["dep:serde"]
+native-windows = []
+color_fonts = ["epaint/color_fonts"]
+system_fonts = ["dep:fontique", "dep:unicode-script"]
+testing = []
+screen-testing = ["dep:egui_kittest"]

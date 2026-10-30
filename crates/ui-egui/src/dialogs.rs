@@ -155,8 +155,15 @@ pub fn drag_off_canvas(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::
     }
     let rects = rects(ctx);
     let free = |p: egui::Pos2| canvas.contains(p) && !rects.iter().any(|r| r.contains(p));
+    // A dialog dragged by its title leaves the press origin on the canvas (user report: moving
+    // the Solid Color picker sampled colours on the way).
+    let grabbed = press_began_on_dialog(ctx, &rects);
     ctx.input(|i| {
-        let held = !i.key_down(egui::Key::Space) && i.pointer.primary_down() && i.pointer.is_decidedly_dragging() && i.pointer.press_origin().is_some_and(free);
+        let held = !grabbed
+            && !i.key_down(egui::Key::Space)
+            && i.pointer.primary_down()
+            && i.pointer.is_decidedly_dragging()
+            && i.pointer.press_origin().is_some_and(free);
         i.pointer.latest_pos().filter(|p| held && !free(*p))
     })
 }

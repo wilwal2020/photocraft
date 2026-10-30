@@ -26,6 +26,9 @@ const ABOVE: f32 = 3.5;
 const BELOW: f32 = 5.0;
 /// The eye column, left of the band: ⌥-click there shows only that layer.
 const EYE_W: f32 = 30.0;
+/// How far the pointer may move between press and release for it to count as a click on the
+/// line (a pen tip slides a little as it taps).
+const SLIDE: f32 = 12.0;
 /// Size of the clip cursors (points).
 const CURSOR_SIZE: f32 = 22.0;
 
@@ -99,23 +102,50 @@ pub fn at(doc: &Document, rows: &[RowRects], p: Pos2) -> Option<ClipLine> {
 
 /// After the panel drew its rows: while ⌥ is held over a line, show the clip cursor and turn a
 /// click there into Create / Release Clipping Mask.
+///
+/// The line owns the press until the release, so the rows under it never start a drag: a pen
+/// that slides a little while it taps (user report: "even a slight movement during the click
+/// while holding alt won't work") still clips, as long as it comes up within [`SLIDE`] of where
+/// it went down.
 pub fn show(ui: &mut egui::Ui, doc: &Document, actions: &mut Vec<(String, Value)>) {
     let ctx = ui.ctx().clone();
-    let (alt, hover) = ctx.input(|i| (i.modifiers.alt, i.pointer.hover_pos()));
-    let Some(p) = hover.filter(|_| alt && ctx.dragged_id().is_none()) else { return };
-    let Some(line) = at(doc, &crate::layer_row_ui::recorded(&ctx), p).filter(|l| ui.rect_contains_pointer(l.rect)) else { return };
-    // Registered after the rows, so it is on top of them and gets the click.
-    let resp = ui.interact(line.rect, ui.scope_id().with("clip-line"), Sense::click());
+    let id = ui.scope_id().with("clip-line");
+    let (alt, hover, pressed, released) = ctx.input(|i| (i.modifiers.alt, i.pointer.hover_pos(), i.pointer.primary_pressed(), i.pointer.primary_released()));
+    let held = ctx.data(|d| d.get_temp::<(ClipLine, Pos2)>(id));
+    let line = match held {
+        Some((line, _)) => Some(line),
+        None => hover
+            .filter(|_| alt && ctx.dragged_id().is_none())
+            .and_then(|p| at(doc, &crate::layer_row_ui::recorded(&ctx), p))
+            .filter(|l| ui.rect_contains_pointer(l.rect)),
+    };
+    let Some(line) = line else { return };
+    // Registered after the rows, so it is on top of them and gets the press, and the drag too.
+    let resp = ui.interact(line.rect, id, Sense::click_and_drag());
     let label = if line.release { "Release Clipping Mask" } else { "Create Clipping Mask" };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     // PhotoCraft's own cursors: a hooked arrow onto the layer below, and the same arrow with a
     // small "no" badge to release. The arrow's tip, (15, 16) of the 24-unit box, is the hot spot.
-    let icon = if line.release { "clip-release" } else { "clip-below" };
-    crate::icons::cursor(&ctx, icon, p, vec2(15.0, 16.0) / 24.0, CURSOR_SIZE, false);
-    ctx.set_cursor_icon(egui::CursorIcon::None);
-    if resp.clicked() {
-        let key = format!("clip-line:{}:{}", line.upper.0, ctx.cumulative_pass_nr());
-        actions.extend(line.commands(doc, &key));
+    if let Some(p) = hover {
+        let icon = if line.release { "clip-release" } else { "clip-below" };
+        crate::icons::cursor(&ctx, icon, p, vec2(15.0, 16.0) / 24.0, CURSOR_SIZE, false);
+        ctx.set_cursor_icon(egui::CursorIcon::None);
+    }
+    match held {
+        None if pressed && resp.contains_pointer() => {
+            if let Some(p) = hover {
+                ctx.data_mut(|d| d.insert_temp(id, (line, p)));
+            }
+        }
+        Some((_, from)) if released || !ctx.input(|i| i.pointer.primary_down()) => {
+            ctx.data_mut(|d| d.remove::<(ClipLine, Pos2)>(id));
+            let up = ctx.input(|i| i.pointer.interact_pos()).or(hover);
+            if released && up.is_some_and(|p| p.distance(from) <= SLIDE) {
+                let key = format!("clip-line:{}:{}", line.upper.0, ctx.cumulative_pass_nr());
+                actions.extend(line.commands(doc, &key));
+            }
+        }
+        _ => {}
     }
 }
 

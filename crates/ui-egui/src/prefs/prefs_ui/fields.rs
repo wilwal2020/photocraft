@@ -50,6 +50,9 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
     }
+    if key == "floatPanelsInOwnWindows" {
+        return "Float Panels in Own Windows".into();
+    }
     // The pasteboard menu's row of the same name toggles it too.
     if key == "centerWhenZoomedOut" {
         return "Center Canvas When Zoomed Out".into();

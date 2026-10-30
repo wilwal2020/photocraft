@@ -122,9 +122,66 @@ fn docked(layout: &Layout<String>) -> Layout<String> {
 }
 
 /// The Tools panel's id in a customized dock: it can sit between dock columns, as in Photoshop,
-/// at its own fixed width with an empty tab (`panels::ToolbarPlace::Dock`). It belongs to no
-/// legacy dock group.
+/// at its own fixed width (`panels::ToolbarPlace::Dock`). It belongs to no legacy dock group.
 pub(crate) const TOOLS: &str = "tools";
+
+/// Is the Tools panel in the customized dock?
+pub(crate) fn tools_docked(app: &PhotocraftApp) -> bool {
+    app.ui.docking.as_ref().is_some_and(|workspace| workspace.layout.contains(&TOOLS.to_string()))
+}
+
+/// Take the Tools panel out of the customized dock (it is being dragged away).
+pub(crate) fn undock_tools(app: &mut PhotocraftApp) {
+    if let Some(workspace) = app.ui.docking.as_mut()
+        && workspace.layout.contains(&TOOLS.to_string())
+        && workspace.apply(Action::Close { panel: TOOLS.into() }, permissions).is_err()
+    {
+        app.ui.status = "Couldn't take the Tools panel out of the dock".into();
+    }
+}
+
+/// Hand a Tools panel drag (from its grip, the panel at `rect`) to the dock as well: it previews
+/// where the panel would dock among the panels, and a release there docks it (craft-ui's move of
+/// an absent panel opens it; vendor/craft-ui/PATCHES.md). False when the dock can't take it (locked, or
+/// not customized: the panels come from the native dock until something is moved).
+pub(crate) fn begin_tools_drag(app: &mut PhotocraftApp, ctx: &egui::Context, rect: egui::Rect) -> bool {
+    if app.session.prefs().workspace_locked {
+        return false;
+    }
+    if app.ui.docking.is_none() {
+        app.ui.docking = Some(Workspace::new(legacy(app)));
+    }
+    craft_ui::docking::begin_external_drag(ctx, area_id(), TOOLS.to_string(), rect)
+}
+
+/// Give the Tools panel's dock column, or the split beside it, the toolbar's width `w`.
+fn fit_tools(node: &mut Node<String>, w: f32, depth: usize) {
+    let is_tools = |n: &Node<String>| matches!(n, Node::Tabs { panels, .. } if panels.len() == 1 && panels.first().is_some_and(|p| p == TOOLS));
+    if depth > craft_ui::docking::MAX_DEPTH {
+        return;
+    }
+    match node {
+        Node::Split { axis: SplitAxis::Horizontal, size, first, second } => {
+            if is_tools(first) {
+                *size = SplitSize::FixedFirst(w);
+            } else if is_tools(second) {
+                *size = SplitSize::FixedSecond(w);
+            }
+            fit_tools(first, w, depth + 1);
+            fit_tools(second, w, depth + 1);
+        }
+        Node::Split { first, second, .. } => {
+            fit_tools(first, w, depth + 1);
+            fit_tools(second, w, depth + 1);
+        }
+        Node::Dock { columns, .. } => {
+            for column in columns.iter_mut().filter(|c| c.groups.len() == 1 && c.groups.iter().all(|g| g.panels[..] == [TOOLS.to_string()])) {
+                column.width = w;
+            }
+        }
+        _ => {}
+    }
+}
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
     if raw.trim().eq_ignore_ascii_case(TOOLS) {
@@ -585,7 +642,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     style.right_to_left = crate::direction::is_rtl();
     style.new_dock_zones = true;
     let style = style.localized(|key| DOCK_LABELS.iter().find(|(k, _)| *k == key).map(|(_, english)| tl!(english).to_string()));
+    // Floating panels stay inside the app window unless Preferences › Workspace › Float Panels
+    // in Own Windows (user report): as their own OS windows on Windows they were moved one
+    // position command per frame (dragging felt low-rate), and the opaque, always-on-top window
+    // hid the drop preview right under it. In-window they fade over a drop target and move with
+    // the frame.
     let mut dock = craft_ui::docking::DockArea::new(area)
+        .native_windows(app.session.prefs().workspace.float_panels_in_own_windows)
         .locked(locked)
         .auto_collapse_iconic(app.session.prefs().workspace.auto_collapse_icon_panels)
         .input_blocked(modal_open(app, ui.ctx()));
@@ -608,11 +671,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         &layout,
         &style,
-        |id| PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()),
+        |id| if id == TOOLS { tl!("Tools").to_string() } else { PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()) },
         permissions,
         |id| {
             if id == CANVAS {
                 craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
+            } else if id == TOOLS {
+                craft_ui::docking::PanelLimits { min: egui::vec2(36.0, 120.0), ..Default::default() }
             } else if collapsed.contains(id) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
@@ -633,6 +698,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::shortcuts::handle_forwarded(app, ui.ctx(), forwarded, output.forwarded_modifiers.unwrap_or_default());
     let mut actions = output.actions;
     pin_group_heights(ui.ctx(), &layout, &mut actions);
+    let tools = TOOLS.to_string();
     for action in actions {
         let result = match action {
             // A dock group minimizes as PhotoCraft's collapsed group, which the native dock's
@@ -640,11 +706,30 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Action::SetMinimized { panel, minimized } if in_dock_column(&layout, &panel) => {
                 group_command(app, &json!({"panel": panel, "operation": if minimized {"collapse"} else {"expand"}}))
             }
+            // The Tools panel dragged by its grip over no dock target: the toolbar's own drag
+            // has placed it (a canvas edge, or floating).
+            Action::Float { panel, .. } | Action::MoveGroup { panel, to: craft_ui::docking::Target::Float { .. } }
+                if panel == tools && !layout.contains(&tools) =>
+            {
+                Ok(Value::Null)
+            }
+            // Dropped among the panels: it opens there (craft-ui's move of an absent panel) as a
+            // column the toolbar's width.
+            Action::Move { ref panel, .. } if *panel == tools && !layout.contains(&tools) => {
+                let result = app.run("window.panel.layout", json!({"action": action}));
+                if result.is_ok() {
+                    app.ui.panels.toolbar_place = crate::state::ToolbarPlace::Dock;
+                }
+                result
+            }
             action => app.run("window.panel.layout", json!({"action": action})),
         };
         if let Err(error) = result {
             app.ui.status = error;
         }
+    }
+    if let Some(root) = app.ui.docking.as_mut().and_then(|workspace| workspace.layout.root.as_mut()) {
+        fit_tools(root, crate::panels::toolbar_width(crate::theme::Tokens::get(ui.ctx()).pro, app.ui.panels.toolbar_double), 0);
     }
     for (id, params) in commands {
         if let Err(error) = app.run(id, params) {

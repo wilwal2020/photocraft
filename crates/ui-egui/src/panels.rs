@@ -150,12 +150,12 @@ pub use status_bar::{status_bar, status_bar_heights};
 #[cfg(test)]
 use title_bar::title_x;
 pub use title_bar::{sync_window_title, system_title_bar, title_bar, window_title};
-pub(crate) use toolbar::toolbar_docked;
 #[cfg(test)]
 use toolbar::toolbar_drop_place;
 #[cfg(test)]
 use toolbar::{STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections};
 pub use toolbar::{paint_toolbar_flyout_indicator, toolbar, toolbar_end};
+pub(crate) use toolbar::{toolbar_docked, toolbar_width};
 
 fn c32(c: [f32; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8)
@@ -1696,6 +1696,41 @@ mod embedding_tests {
         let ctx = h.ctx.clone();
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
         assert_eq!(h.state().ui.panels.toolbar_place, ToolbarPlace::Start);
+    }
+
+    /// The Tools panel docks among the panels again (user request): dropped by its grip on the
+    /// edge of the dock column it becomes a column of its own, the toolbar's width, and dragged
+    /// out by its grip it floats and leaves the dock.
+    #[test]
+    fn the_tools_panel_docks_among_the_panels() {
+        use crate::state::ToolbarPlace;
+        fn drag(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
+            h.input_mut().events.push(egui::Event::PointerMoved(from));
+            h.run_steps(1);
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.input_mut().events.push(button(from, true));
+            h.run_steps(1);
+            for i in 1..=10 {
+                h.input_mut().events.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 10.0)));
+                h.run_steps(1);
+            }
+            h.input_mut().events.push(button(to, false));
+            h.run_steps(4);
+        }
+        let mut h = whole_app(true, true);
+        let layers = crate::panel_docking::last_bodies(&h.ctx).into_iter().find(|(id, _)| id == "layers").map(|(_, r)| r).expect("the Layers panel is docked");
+        let grip = h.get_by_label("Move Tools panel").rect().center();
+        drag(&mut h, grip, pos2(layers.left() + 4.0, layers.center().y));
+        assert_eq!(h.state().ui.panels.toolbar_place, ToolbarPlace::Dock, "{}", h.state().ui.status);
+        assert!(crate::panel_docking::tools_docked(h.state()));
+        let grip = h.get_by_label("Move Tools panel").rect();
+        assert!(grip.right() <= layers.left() + 2.0, "beside the Layers column: {grip:?} {layers:?}");
+        let pro = crate::theme::Tokens::get(&h.ctx).pro;
+        assert!(grip.width() <= toolbar_width(pro, false), "the toolbar's width: {grip:?}");
+        // Out again by its grip: it floats, and the dock no longer holds it.
+        drag(&mut h, grip.center(), pos2(600.0, 300.0));
+        assert!(matches!(h.state().ui.panels.toolbar_place, ToolbarPlace::Floating { .. }), "{:?}", h.state().ui.panels.toolbar_place);
+        assert!(!crate::panel_docking::tools_docked(h.state()));
     }
 
     /// Settings saved before the flags existed load with both on.

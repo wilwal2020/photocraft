@@ -133,7 +133,8 @@ fn the_close_box_and_the_title_drag_keep_apart() {
 }
 
 /// #6810: dragging a dialog's title moves the dialog under the pointer, so the press origin is
-/// no longer inside it; that drag must not pan the canvas or reach a canvas tool.
+/// no longer inside it; that drag must not pan the canvas, reach a canvas tool or have the Color
+/// Picker sample the screen under the dialog (user report: moving the Solid Color picker).
 #[test]
 fn dragging_a_dialog_title_does_not_pan_the_canvas() {
     let ctx = egui::Context::default();
@@ -143,15 +144,16 @@ fn dragging_a_dialog_title_does_not_pan_the_canvas() {
     let run = |rect: egui::Rect, events: Vec<egui::Event>| {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(RECTS), vec![rect]));
         ctx.begin_pass(egui::RawInput { events, ..Default::default() });
-        let out = (pan_delta(&ctx, canvas, true), free_press(&ctx, canvas));
+        let out = (pan_delta(&ctx, canvas, true), free_press(&ctx, canvas), drag_off_canvas(&ctx, canvas));
         ctx.end_pass().textures_delta.clear();
         out
     };
     let press =
         egui::Event::PointerButton { pos: egui::pos2(150.0, 120.0), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE };
-    let (pan, click) = run(at_press, vec![egui::Event::PointerMoved(egui::pos2(150.0, 120.0)), press]);
-    assert!(pan.is_none() && click.is_none(), "the press is on the dialog");
-    let (pan, click) = run(moved, vec![egui::Event::PointerMoved(egui::pos2(600.0, 500.0))]);
+    let (pan, click, off) = run(at_press, vec![egui::Event::PointerMoved(egui::pos2(150.0, 120.0)), press]);
+    assert!(pan.is_none() && click.is_none() && off.is_none(), "the press is on the dialog");
+    let (pan, click, off) = run(moved, vec![egui::Event::PointerMoved(egui::pos2(600.0, 500.0))]);
+    assert!(off.is_none(), "the pointer over the moved dialog is no drag off the canvas: {off:?}");
     assert!(pan.is_none(), "the dialog moved away from the press origin: {pan:?}");
     assert!(click.is_none(), "and the drag is not a canvas tool drag: {click:?}");
 }

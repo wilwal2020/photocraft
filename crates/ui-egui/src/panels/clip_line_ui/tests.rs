@@ -211,3 +211,38 @@ fn outside_the_band_an_alt_click_does_not_clip() {
         assert!(!clipped(&h, cb), "{dy} px from the line");
     }
 }
+
+/// A pen tap slides a little between press and release (user report): up to 12 pt it is still a
+/// click on the line and clips, and the rows don't take it as a drag; further it does nothing.
+#[test]
+fn a_pen_tap_that_slides_a_little_still_clips() {
+    let (s, a, b) = two_layers();
+    let mut h = harness(s);
+    let below = recorded(&h.ctx).iter().find(|r| r.layer == a.0).unwrap().row;
+    let line = pos2(below.left() + 80.0, below.top());
+    let order = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    let before = order(&h);
+    let tap = |h: &mut Harness<'_, PhotocraftApp>, slide: egui::Vec2| {
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        h.hover_at(line);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: line, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+        h.run_steps(1);
+        for k in 1..=3 {
+            h.event(egui::Event::PointerMoved(line + slide * (k as f32 / 3.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: line + slide, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
+        h.run_steps(1);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+    };
+    tap(&mut h, vec2(7.0, 6.0));
+    assert!(clipped(&h, b), "a 9 pt slide still clips");
+    assert_eq!(order(&h), before, "no row was dragged");
+    tap(&mut h, vec2(-8.0, -5.0));
+    assert!(!clipped(&h, b), "and releases");
+    tap(&mut h, vec2(40.0, 30.0));
+    assert!(!clipped(&h, b), "a real drag is no click");
+    assert_eq!(order(&h), before);
+}
