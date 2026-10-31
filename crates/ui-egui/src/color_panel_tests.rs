@@ -595,20 +595,21 @@ fn the_cubes_hide_the_scroll_bar_and_the_sliders_keep_it() {
     }
 }
 
-/// While a layer mask is targeted the Color panel is the Grayscale slider, whatever mode was
-/// picked (Photoshop; user report: mask colours could be picked in colour), and its one field
-/// sets a grey. The picked mode comes back with the pixels.
+/// While a layer mask is targeted the Color panel keeps the mode it was given (user request), and
+/// a colour picked in it becomes its grey.
 #[test]
-fn a_targeted_mask_shows_the_grayscale_slider() {
+fn a_targeted_mask_keeps_the_panels_mode_and_greys_the_pick() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.color_panel.mode = ColorPanelMode::RgbSliders;
     app.session.tools.target_mask(true);
+    app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
     let mut h = color_tab_of(ThemeKind::Studio, app);
-    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).count(), 1, "K alone");
-    type_into(&mut h, egui::accesskit::Role::SpinButton, 0, "25");
-    assert_eq!(bytes(h.state().session.tools.foreground), [191, 191, 191]);
-    assert_eq!(h.state().ui.color_panel.mode, ColorPanelMode::RgbSliders, "the picked mode is kept");
-    h.state_mut().session.tools.target_mask(false);
-    h.run_steps(2);
-    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).count(), 3, "R, G and B again");
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).count(), 3, "R, G and B");
+    let g = h.get_by_label("G").rect();
+    press(&mut h, pos2(g.right() - 2.0, g.center().y), Modifiers::NONE);
+    // The panel set green; the app greys it (as `logic_frame` does every frame).
+    assert!(h.state_mut().session.tools.grey_for_mask());
+    let [r, gg, b] = bytes(h.state().session.tools.foreground);
+    assert!(r == gg && gg == b, "{:?}", [r, gg, b]);
+    assert_eq!(gg, (0.587f32 * 255.0).round() as u8, "green's grey");
 }

@@ -32,12 +32,10 @@ const UNIT_W: f32 = 14.0;
 /// Width of the white and black boxes at the right end of the ramp.
 const BOXES_W: f32 = 16.0;
 
-/// The Color tab: whatever the panel menu picked. While a layer mask is targeted the tool colours
-/// are greys (`ToolState::grey_for_mask`), and the panel shows the Grayscale slider, as Photoshop's
-/// does; the picked mode comes back with the pixels.
+/// The Color tab: whatever the panel menu picked. While a layer mask is targeted it stays as it is
+/// (user request) and a colour picked in it becomes its grey (`ToolState::grey_for_mask`).
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let mode = if app.session.tools.mask_targeted { ColorPanelMode::GrayscaleSlider } else { app.ui.color_panel.mode };
-    match mode {
+    match app.ui.color_panel.mode {
         ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => crate::panels::color_field(app, ui),
         ColorPanelMode::ColorWheel => wheel(app, ui),
         mode => sliders(app, ui, mode),

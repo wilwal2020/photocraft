@@ -98,3 +98,17 @@ fn operations_combine_with_the_selection() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(at(&s, 7, 7), 1.0);
 }
+
+/// A layer clipped to the one below shows only where that base has pixels, though the rest of
+/// what is below is left out of the measurement.
+#[test]
+fn a_clipped_layer_shows_only_inside_its_base() {
+    let (mut s, a, top) = covered();
+    s.execute("layer.setProps", json!({"layer": top.0, "clipped": true})).unwrap();
+    load(&mut s, json!({"layer": top.0}));
+    // Top (5..15) clipped to A (0..10): only their overlap shows.
+    assert_eq!((at(&s, 7, 7), at(&s, 12, 12), at(&s, 2, 2)), (1.0, 0.0, 0.0));
+    // A under its clipped layer shows where Top doesn't cover it.
+    load(&mut s, json!({"layer": a.0}));
+    assert_eq!((at(&s, 2, 2), at(&s, 7, 7)), (1.0, 0.0));
+}

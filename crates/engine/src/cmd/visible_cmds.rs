@@ -6,9 +6,11 @@
 //!
 //! The compositor measures it, so clipping, group masks and opacities, knockout and effects above
 //! all count as they draw: the document is rendered twice with the layer painted white and then
-//! black (a Color Overlay over its own pixels, or for a mask a full canvas of that colour through
-//! the mask), and how far the composite changes between the two at a pixel is how much of the
-//! layer shows there. Everything else is the same in both renders and cancels out.
+//! black (a layer of that colour clipped to it, or for a clipped layer a Color Overlay; for a mask
+//! a full canvas of that colour through the mask), and how far the composite changes between the two at a pixel is how much of the
+//! layer shows there. Everything else is the same in both renders and cancels out, so what is
+//! below the layer (but its clipping base) is left out of them: the renders cost what the layer
+//! and the layers above it do (user request: make it faster).
 
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_color::{BlendMode, Color};
@@ -52,13 +54,15 @@ fn bad(msg: impl Into<String>) -> EngineError {
 fn probe(doc: &Document, id: LayerId, source: Source, shade: f32) -> Option<Document> {
     let mut d = doc.clone();
     let path = d.path_of(id)?;
-    // The clicked layer and its groups show; Lock Selection layers and adjustments elsewhere don't.
+    // The clicked layer and its groups show; Lock Selection layers and adjustments elsewhere don't,
+    // nor does anything below it but its clipping base.
     let ancestors: Vec<LayerId> = (1..path.len()).filter_map(|n| d.layer_at(&path[..n]).map(|l| l.id)).collect();
+    let base = clip_base(&d, &path);
     let hide: Vec<LayerId> = d
         .walk()
         .iter()
-        .filter(|(_, _, l)| l.id != id && !ancestors.contains(&l.id))
-        .filter(|(_, _, l)| matches!(l.content, LayerContent::Adjustment(_)) || doc.effective_locks(l.id).selection)
+        .filter(|(_, _, l)| l.id != id && !ancestors.contains(&l.id) && Some(l.id) != base)
+        .filter(|(p, _, l)| *p < path || matches!(l.content, LayerContent::Adjustment(_)) || doc.effective_locks(l.id).selection)
         .map(|(_, _, l)| l.id)
         .collect();
     for h in hide.into_iter().chain(ancestors.iter().copied()) {
@@ -74,9 +78,22 @@ fn probe(doc: &Document, id: LayerId, source: Source, shade: f32) -> Option<Docu
     l.opacity = 1.0;
     l.fill_opacity = 1.0;
     l.fill_cache = None;
-    let overlay = Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(shade, shade, shade).in_mode(mode) };
+    let paint = Surface::with_default(fmt, &from_rgba(&fmt, [shade, shade, shade, 1.0]));
     if source == Source::Layer {
-        l.effects = Effects { enabled: true, items: vec![overlay], psd_raw: None, reference: l.effects.reference };
+        if l.clipped {
+            // Clipped itself: what is clipped above it still covers an overlay of its own.
+            let overlay = Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(shade, shade, shade).in_mode(mode) };
+            l.effects = Effects { enabled: true, items: vec![overlay], psd_raw: None, reference: l.effects.reference };
+            return Some(d);
+        }
+        // A clipping base's own effects draw over the layers clipped to it, so the colour is a
+        // layer clipped to it, first of its clipping group, and its effects are off.
+        l.effects = Effects::default();
+        let mut coat = photocraft_doc::Layer::new("probe", LayerContent::Raster(paint));
+        coat.clipped = true;
+        let (&last, parent) = path.split_last()?;
+        let siblings = if parent.is_empty() { &mut d.layers } else { d.layer_at_mut(parent)?.children_mut()? };
+        siblings.insert(last + 1, coat);
         return Some(d);
     }
     // A mask alone: an opaque canvas of the shade, shown through only that mask.
@@ -92,9 +109,22 @@ fn probe(doc: &Document, id: LayerId, source: Source, shade: f32) -> Option<Docu
     if let Some(v) = l.vector_mask.as_mut() {
         v.enabled = true;
     }
-    l.content = LayerContent::Raster(Surface::with_default(fmt, &from_rgba(&fmt, [shade, shade, shade, 1.0])));
+    l.content = LayerContent::Raster(paint);
     l.effects = Effects::default();
     Some(d)
+}
+
+/// The layer the one at `path` is clipped to: the nearest unclipped one below it in its group.
+fn clip_base(doc: &Document, path: &[usize]) -> Option<LayerId> {
+    let (&last, parent) = path.split_last()?;
+    if !doc.layer_at(path)?.clipped {
+        return None;
+    }
+    (0..last).rev().find_map(|i| {
+        let mut p = parent.to_vec();
+        p.push(i);
+        doc.layer_at(&p).filter(|l| !l.clipped).map(|l| l.id)
+    })
 }
 
 /// How dark the composite is at each pixel, premultiplied (a transparent pixel counts as black).
