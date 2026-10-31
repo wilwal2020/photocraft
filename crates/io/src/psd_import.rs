@@ -172,6 +172,56 @@ fn shape_mask_params(rec: &LayerRecord) -> (f32, f32) {
     (density, feather)
 }
 
+/// Whether `surface`, a solid fill's stored pixels, is that fill's colour on every pixel of
+/// `canvas` (within half a level of its depth): then the fill renders the same without it.
+pub(crate) fn plain_solid_cache(fill: &photocraft_doc::Fill, surface: &Surface, canvas: Rect) -> bool {
+    let fmt = surface.format();
+    // CMYK and Lab caches hold the document's own values, which the RGB colour doesn't give back.
+    if canvas.is_empty() || !matches!(fmt.mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return false;
+    }
+    let bpp = fmt.bytes_per_pixel();
+    let tw = TILE_SIZE as usize;
+    // Every tile over the canvas is stored: a missing one is transparent there.
+    let (tx0, ty0, tx1, ty1) =
+        (canvas.x0.div_euclid(TILE_SIZE), canvas.y0.div_euclid(TILE_SIZE), (canvas.x1 - 1).div_euclid(TILE_SIZE), (canvas.y1 - 1).div_euclid(TILE_SIZE));
+    let tiles: Vec<_> = surface.tiles().filter(|(c, _)| (tx0..=tx1).contains(&c.tx) && (ty0..=ty1).contains(&c.ty)).collect();
+    let want = (i64::from(tx1 - tx0) + 1) * (i64::from(ty1 - ty0) + 1);
+    if tiles.len() as i64 != want {
+        return false;
+    }
+    let mut first = vec![0u8; bpp];
+    let Some((_, t0)) = tiles.iter().find(|(c, _)| c.tx == tx0 && c.ty == ty0) else { return false };
+    let at = ((canvas.y0 - ty0 * TILE_SIZE) as usize * tw + (canvas.x0 - tx0 * TILE_SIZE) as usize) * bpp;
+    let Some(px) = t0.bytes().get(at..at + bpp) else { return false };
+    first.copy_from_slice(px);
+    // A tile row of that pixel: each stored row compares as one slice.
+    let pattern: Vec<u8> = first.iter().copied().cycle().take(tw * bpp).collect();
+    let uniform = tiles.iter().all(|(c, t)| {
+        let r = c.rect().intersect(&canvas);
+        let bytes = t.bytes();
+        (r.y0..r.y1).all(|y| {
+            let row = (y - c.ty * TILE_SIZE) as usize * tw;
+            let (a, b) = ((row + (r.x0 - c.tx * TILE_SIZE) as usize) * bpp, (row + (r.x1 - c.tx * TILE_SIZE) as usize) * bpp);
+            bytes.get(a..b).is_some_and(|run| pattern.get(..run.len()) == Some(run))
+        })
+    });
+    if !uniform {
+        return false;
+    }
+    // The stored colour is the fill's own, as the compositor renders it without the cache.
+    let stored = surface.rgba(canvas.x0, canvas.y0);
+    let layer = photocraft_doc::Layer::new("", photocraft_doc::LayerContent::Fill(fill.clone()));
+    let one = Rect::new(canvas.x0, canvas.y0, canvas.x0 + 1, canvas.y0 + 1);
+    let Some(rendered) = photocraft_compose::render_fill_content(&layer, fill, one, &[]).px.first().copied() else { return false };
+    let half = match fmt.sample {
+        SampleType::U8 => 0.5 / 255.0,
+        SampleType::U16 => 0.5 / 65535.0,
+        SampleType::F32 => 1e-6,
+    } + 1e-6;
+    stored.iter().zip(&rendered).all(|(a, b)| (a - b).abs() <= half)
+}
+
 /// The fill of a plain shape layer (fill block + vector path, no stroke) to import as a fill layer
 /// with a vector mask: when it fills with a pattern, which the shape renderer can't draw (`.1`
 /// true when its vector mask is also soft: a density below 100 % or a feather). Other soft
@@ -680,9 +730,16 @@ impl Ctx<'_> {
         } else if let Some(k) = fill_key {
             match rec.block(k).and_then(|b| blocks::parse_fill(k, &b.data)) {
                 Some(f) => {
-                    // Keep Photoshop's rendering of the fill so it composites exactly.
+                    // Keep Photoshop's rendering of the fill so it composites exactly, unless it is
+                    // a solid fill's own colour over the whole canvas: that renders the same from
+                    // the colour, without a canvas-sized copy in memory and on the GPU (user
+                    // report: 24 Color Fills held 4 GB and put a 6486 × 7000 file on the CPU).
                     if !rec.rect.is_empty() {
-                        fill_cache = Some(FillCache { fill: f.clone(), surface: self.record_surface(rec, &name) });
+                        let surface = self.record_surface(rec, &name);
+                        let canvas = Rect::new(0, 0, self.file.header.width as i32, self.file.header.height as i32);
+                        if !(matches!(f, photocraft_doc::Fill::Solid(_)) && plain_solid_cache(&f, &surface, canvas)) {
+                            fill_cache = Some(FillCache { fill: f.clone(), surface });
+                        }
                     }
                     LayerContent::Fill(f)
                 }

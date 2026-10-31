@@ -687,6 +687,48 @@ fn fill_layer_keeps_photoshop_pixels() {
     assert!(p[2] > 0.99 && p[0] < 0.01, "{p:?}");
 }
 
+/// A solid fill whose stored pixels are its own colour over the whole canvas opens without them
+/// (user report: 24 such Color Fills held a canvas-sized copy each, 4 GB, and put the document on
+/// the CPU for GPU memory); it renders the same from its colour. Pixels that cover part of the
+/// canvas, or differ from the colour, are kept.
+#[test]
+fn a_solid_fill_of_its_own_colour_keeps_no_pixel_copy() {
+    use photocraft_psd::{ChannelData, LayerRecord, TaggedBlock};
+    let soco = {
+        use photocraft_psd::descriptor::*;
+        let c = Descriptor::new("RGBC").with("Rd  ", Value::Double(255.0)).with("Grn ", Value::Double(128.0)).with("Bl  ", Value::Double(0.0));
+        VersionedDescriptor::new(Descriptor::new("null").with("Clr ", Value::Descriptor(c))).to_bytes()
+    };
+    let fill_layer = |w: u32, h: u32, rgb: [u8; 3]| {
+        let n = (w * h) as usize;
+        let plane = |v: u8| ChannelData::new(0, Some(Compression::Raw), vec![v; n]);
+        let mut chans = vec![plane(255), plane(rgb[0]), plane(rgb[1]), plane(rgb[2])];
+        for (i, c) in chans.iter_mut().enumerate() {
+            c.id = i as i16 - 1;
+        }
+        let mut f = testgen::small(Version::Psd, Compression::Raw);
+        f.layers_mut().push(LayerRecord {
+            rect: photocraft_psd::Rect::from_xywh(0, 0, w, h),
+            name: b"fill".to_vec(),
+            channels: chans,
+            blocks: vec![TaggedBlock::unicode_name("fill"), TaggedBlock::new(*b"SoCo", soco.clone())],
+            ..Default::default()
+        });
+        let (d, _) = psd_to_document(&f);
+        d
+    };
+    // The whole 4 × 3 canvas in the fill's colour: no copy, and the same render.
+    let d = fill_layer(4, 3, [255, 128, 0]);
+    let l = d.layers.last().unwrap();
+    assert!(matches!(l.content, LayerContent::Fill(_)));
+    assert!(l.fill_cache.is_none(), "a plain solid fill keeps no pixels");
+    let p = photocraft_compose::flatten(&d).get(3, 2);
+    assert!((p[0] - 1.0).abs() < 1e-6 && (p[1] - 128.0 / 255.0).abs() < 0.5 / 255.0 && p[2].abs() < 1e-6, "{p:?}");
+    // Part of the canvas, or another colour: Photoshop's pixels are kept.
+    assert!(fill_layer(2, 2, [255, 128, 0]).layers.last().unwrap().fill_cache.is_some(), "pixels over part of the canvas");
+    assert!(fill_layer(4, 3, [255, 129, 0]).layers.last().unwrap().fill_cache.is_some(), "pixels of another colour");
+}
+
 #[test]
 fn text_and_smart_detected() {
     use photocraft_psd::{LayerRecord, TaggedBlock};
