@@ -3,10 +3,10 @@
 //! starts [`SLOW_GAP_MS`] or more after the one before while a button is held and the pointer
 //! moves (a stroke or a pan going on: a pointer held still draws no frames, which is no lag), is
 //! logged as a warning with where its time went: the canvas refresh, eframe's CPU
-//! time for the frame before (tessellation, GPU submission), and the perf spans panel by panel. At
-//! most one line every [`EVERY_MS`], so a run of slow frames doesn't flood the log. The log file
-//! (`photocraft.log` in the settings folder's `logs`; on Windows `%APPDATA%\Photocraft\logs`) then
-//! names what a spike was without a trace running.
+//! time for the frame before (tessellation, GPU submission), the commands it ran and the perf
+//! spans panel by panel. At most one line every [`EVERY_MS`], so a run of slow frames doesn't
+//! flood the log. The log file (`photocraft.log` in the settings folder's `logs`; on Windows
+//! `%APPDATA%\Photocraft\logs`) then names what a spike was without a trace running.
 
 /// A UI build this long is logged (ms).
 pub(crate) const SLOW_BUILD_MS: f64 = 150.0;
@@ -34,6 +34,8 @@ pub(crate) struct Frame {
     /// The tool and the document's size, for context.
     pub tool: String,
     pub document: Option<(u32, u32)>,
+    /// The commands the frame ran, with their ms (`select.loadVisible 950`), biggest first.
+    pub commands: String,
 }
 
 /// The log line for `f` (`prev_start`: when the frame before started), or `None` when it isn't
@@ -53,12 +55,13 @@ pub(crate) fn report(f: &Frame, prev_start: f64, last_logged: &mut f64, spans: &
     let cpu = f.cpu_prev.map_or_else(|| "?".to_string(), |c| format!("{c:.0}"));
     let doc = f.document.map_or_else(|| "no document".to_string(), |(w, h)| format!("{w}x{h}"));
     Some(format!(
-        "slow frame: {:.0} ms since the last frame{}, UI build {:.0} ms (canvas {} {:.0} ms; spans: {}), previous frame's CPU {cpu} ms; tool {}, {doc}",
+        "slow frame: {:.0} ms since the last frame{}, UI build {:.0} ms (canvas {} {:.0} ms{}; spans: {}), previous frame's CPU {cpu} ms; tool {}, {doc}",
         gap,
         if f.held { " with a button held" } else { "" },
         f.build,
         if f.refresh_kind.is_empty() { "refresh" } else { f.refresh_kind },
         f.refresh,
+        if f.commands.is_empty() { String::new() } else { format!("; commands: {}", f.commands) },
         if spans.is_empty() { "none over 1 ms" } else { &spans },
         f.tool,
     ))
@@ -91,12 +94,14 @@ mod tests {
             moved: true,
             tool: "Brush".into(),
             document: Some((5217, 4200)),
+            commands: "select.loadVisible 412".into(),
         };
         let line = report(&slow, 29_990.0, &mut last, &spans()).unwrap();
         assert!(line.contains("UI build 460 ms") && line.contains("canvas gpu tiles 30 ms"), "{line}");
         assert!(line.find("layers 412").unwrap() < line.find("ui: document 20").unwrap(), "biggest first: {line}");
         assert!(!line.contains("color"), "spans under 1 ms are left out: {line}");
         assert!(line.contains("tool Brush, 5217x4200"), "{line}");
+        assert!(line.contains("ms; commands: select.loadVisible 412; spans:"), "{line}");
         let again = Frame { start: 31_000.0, ..slow.clone() };
         assert_eq!(report(&again, 30_500.0, &mut last, &spans()), None, "at most one line every 2 s");
         let still = Frame { start: 40_000.0, build: 6.0, held: true, moved: false, ..Default::default() };

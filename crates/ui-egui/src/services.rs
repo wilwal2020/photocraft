@@ -336,6 +336,10 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Show the OS busy cursor at once (`true`) or put back the cursor it replaced (`false`), around
+/// a command that holds the UI thread ([`Services::wait_cursor`]).
+pub type WaitCursorFn = Box<dyn Fn(bool)>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -448,6 +452,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// The busy cursor around a command expected to hold the window (Windows; elsewhere the OS
+    /// shows its own once the window stops answering).
+    pub wait_cursor: Option<WaitCursorFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.

@@ -64,6 +64,16 @@ pub struct Perf {
     /// Last command run through the app and its duration (ms).
     pub last_command: String,
     pub command_ms: f64,
+    /// How long each command took the last time it ran through the app (ms): one that held the
+    /// window shows the busy cursor the next time it runs (`PhotocraftApp::run_command`).
+    #[serde(skip)]
+    pub(crate) command_cost: std::collections::HashMap<String, f64>,
+    /// The busy cursor shows (for the outermost command only: an action's steps run inside it).
+    #[serde(skip)]
+    pub(crate) waiting: bool,
+    /// The commands this frame ran and how long each took, for the slow-frame log.
+    #[serde(skip)]
+    pub(crate) frame_commands: Vec<(String, f64)>,
     /// Most recent cost of occasional UI work (outline tracing, thumbnails, …), in ms.
     pub spans: std::collections::BTreeMap<&'static str, f64>,
     /// The spans this frame measured (cleared as each frame starts): what the slow-frame log

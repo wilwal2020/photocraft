@@ -61,6 +61,18 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
     None
 }
 
+/// The busy cursor around a command that holds the window (Windows: winit sets the cursor only
+/// while it handles messages; macOS and Linux show their own once the window stops answering).
+#[cfg(target_os = "windows")]
+pub fn wait_cursor_service() -> Option<photocraft_ui_egui::WaitCursorFn> {
+    Some(Box::new(photocraft_tablet::windows::wait_cursor))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn wait_cursor_service() -> Option<photocraft_ui_egui::WaitCursorFn> {
+    None
+}
+
 /// Install the AppKit tablet monitor (main thread, once winit created the shared application:
 /// from eframe's app creation, not before the event loop). Keep the result until the event loop
 /// returns. On failure this logs why: pens then paint like a mouse.

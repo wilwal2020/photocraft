@@ -161,7 +161,9 @@ pub fn visible_plane(doc: &Document, id: LayerId, source: Source) -> Option<Vec<
         return Some(out);
     }
     let k = full_change(doc);
-    let (w, b) = (tone(&white, area), tone(&black, area));
+    // The two renders side by side: each leaves cores idle while its effect maps are built and
+    // in its last band of tiles.
+    let (w, b) = rayon::join(|| tone(&white, area), || tone(&black, area));
     let (aw, cw) = (area.width() as usize, canvas.width() as usize);
     for (i, (w, b)) in w.iter().zip(&b).enumerate() {
         let (x, y) = (area.x0 as usize - canvas.x0 as usize + i % aw, area.y0 as usize - canvas.y0 as usize + i / aw);

@@ -937,3 +937,26 @@ fn small_feathered_tools_work_on_large_sparse_documents_at_every_depth() {
         assert!(coverage(&s, 3025, 2025) > 0.95);
     }
 }
+
+/// Sample All Layers keeps the composite between clicks, and an edit to a layer is seen by the
+/// next click.
+#[test]
+fn sample_all_layers_keeps_the_composite_until_a_layer_changes() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let wand = |s: &mut Session| {
+        s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false, "sampleAllLayers": true})).unwrap();
+    };
+    wand(&mut s);
+    assert_eq!((coverage(&s, 7, 7), coverage(&s, 2, 2)), (1.0, 0.0), "the red square on the Background, through the empty layer");
+    let kept = s.fill_reference.lock().unwrap().as_ref().map(|c| std::sync::Arc::as_ptr(&c.img));
+    assert!(kept.is_some(), "kept for the next click");
+    wand(&mut s);
+    assert_eq!(s.fill_reference.lock().unwrap().as_ref().map(|c| std::sync::Arc::as_ptr(&c.img)), kept, "the same composite");
+    // Paint white over the top half of the square on the upper layer: the next click lands on
+    // the white, and the red half below is left out.
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 5})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    wand(&mut s);
+    assert_eq!((coverage(&s, 7, 7), coverage(&s, 7, 12)), (1.0, 0.0));
+}

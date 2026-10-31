@@ -331,6 +331,9 @@ impl PhotocraftApp {
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);
+        if jobs_ui::busy_cursor(self) {
+            ctx.set_cursor_icon(egui::CursorIcon::Progress);
+        }
         if screen_picker::busy(&ctx) {
             // Block input without a backdrop: the worker may still be capturing the screen.
             egui::Modal::new(egui::Id::unique("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
@@ -360,11 +363,17 @@ impl PhotocraftApp {
             moved: self.frame_moved,
             tool: format!("{:?}", self.active_tool()),
             document: self.session.active().map(|d| (d.doc.size.width, d.doc.size.height)),
+            commands: {
+                let c = &mut self.perf.frame_commands;
+                c.sort_by(|a, b| b.1.total_cmp(&a.1));
+                c.iter().take(4).map(|(id, ms)| format!("{id} {ms:.0}")).collect::<Vec<_>>().join(", ")
+            },
         };
         if let Some(line) = crate::slow_frames::report(&slow, self.frame_starts[0], &mut self.slow_frame_logged, &self.perf.frame_spans) {
             log::warn!("{line}");
         }
         self.perf.frame_spans.clear();
+        self.perf.frame_commands.clear();
         crate::fill_tool_ui::tick(self);
         if self.stroke_trace.enabled() {
             self.stroke_trace.canvas(self.perf.frame_refresh_ms);

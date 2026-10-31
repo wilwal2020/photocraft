@@ -77,6 +77,18 @@ fn main() {
         ex(s, "filter.blur.gaussianBlur", json!({"radius": 4}));
     });
     run("fill tool click (all layers)", &mut |s, _| ex(s, "paint.fill", json!({"x": w * 0.5, "y": h * 0.5, "reference": "all", "closeGap": 3})));
+    run("fill tool click (current layer)", &mut |s, _| ex(s, "paint.fill", json!({"x": w * 0.5, "y": h * 0.5})));
+    run("magic wand click (all layers)", &mut |s, _| ex(s, "select.magicWand", json!({"x": w * 0.5, "y": h * 0.5, "sampleAllLayers": true})));
+    // Ctrl+Space clicks: the canvas, then rows low, middle and high in the stack.
+    run("load visible: canvas click", &mut |s, _| ex(s, "select.loadVisible", json!({"x": w * 0.5, "y": h * 0.5})));
+    let rows = |s: &Session| s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id.0).collect::<Vec<_>>();
+    for (label, at) in [("bottom", 0.0), ("middle", 0.5), ("top", 1.0)] {
+        run(&format!("load visible: {label} row"), &mut |s, _| {
+            let ids = rows(s);
+            let id = ids[((ids.len() - 1) as f64 * at) as usize];
+            ex(s, "select.loadVisible", json!({"layer": id}));
+        });
+    }
     run("full composite (compose::render)", &mut |s, _| {
         let doc = s.active().unwrap().doc.clone();
         let _ = photocraft_compose::render(&doc, doc.bounds());

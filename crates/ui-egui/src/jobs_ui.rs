@@ -411,6 +411,14 @@ pub fn foreground_save(app: &PhotocraftApp) -> Option<JobInfo> {
     app.jobs.saves.iter().filter(|s| s.foreground && !s.ended).find_map(|s| app.session.job(s.job))
 }
 
+/// The busy cursor shows (the arrow with a spinner: the window still answers, for Cancel): while
+/// a job locks the active document (a filter, Content-Aware Fill, a foreground save), not while
+/// a save goes on in the background.
+pub fn busy_cursor(app: &PhotocraftApp) -> bool {
+    let behind = |j: &JobInfo| app.jobs.saves.iter().any(|s| s.job == j.id && !s.foreground);
+    foreground_save(app).is_some() || app.session.active_job().is_some_and(|j| !behind(&j))
+}
+
 /// The job the user is looking at: a foreground save, the open tab in view, the active
 /// document's job, or (for the status bar) the newest running job.
 pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {

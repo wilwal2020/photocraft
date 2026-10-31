@@ -5,6 +5,9 @@ use super::{
 };
 use photocraft_doc::Document;
 
+/// A command that took this long (ms) the last time shows the busy cursor while it runs.
+const WAIT_CURSOR_MS: f64 = 100.0;
+
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -126,6 +129,13 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
+        // The busy cursor, for a command that held the window the last time it ran: set from a
+        // frame it would only show once the command is done.
+        let wait = !self.perf.waiting && self.perf.command_cost.get(id).is_some_and(|ms| *ms >= WAIT_CURSOR_MS);
+        if let Some(show) = self.services.wait_cursor.as_ref().filter(|_| wait) {
+            show(true);
+            self.perf.waiting = true;
+        }
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -133,6 +143,10 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
+        if let Some(show) = self.services.wait_cursor.as_ref().filter(|_| wait) {
+            show(false);
+            self.perf.waiting = false;
+        }
         if let Ok(v) = &r
             && id == photocraft_engine::gigapixel_cmds::ID
         {
@@ -143,6 +157,10 @@ impl PhotocraftApp {
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
+        self.perf.command_cost.insert(id.to_string(), self.perf.command_ms);
+        if self.perf.command_ms >= 1.0 {
+            self.perf.frame_commands.push((id.to_string(), self.perf.command_ms));
+        }
         match &r {
             Ok(_) => {
                 if self.ui.status_error {

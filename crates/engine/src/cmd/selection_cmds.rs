@@ -112,16 +112,14 @@ pub(crate) fn shown_gray_surface(st: &crate::DocState) -> Option<&photocraft_ras
 }
 
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
-pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
+pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, std::sync::Arc<Vec<[u8; 4]>>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();
     let layer = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface());
     match (all_layers, layer) {
-        (false, Some(surf)) => Ok((area, sel::rgba8_image(surf, area))),
-        _ => {
-            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            Ok((area, photocraft_compose::render(&d.doc, area).px.iter().map(|p| p.map(q)).collect()))
-        }
+        (false, Some(surf)) => Ok((area, std::sync::Arc::new(sel::rgba8_image(surf, area)))),
+        // The composite, kept between clicks while the layers don't change.
+        _ => Ok((area, crate::fill_tool_cmds::kept_composite(s, &d.doc, area))),
     }
 }
 
@@ -144,7 +142,7 @@ fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
         crate::fill_tool_cmds::region(s, &fp)?
     } else {
         let (area, img) = match gray {
-            Some(plane) => plane,
+            Some((area, plane)) => (area, std::sync::Arc::new(plane)),
             None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
         };
         sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true))

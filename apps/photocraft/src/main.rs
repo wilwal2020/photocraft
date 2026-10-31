@@ -668,6 +668,7 @@ fn main() -> eframe::Result {
                 *restart_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(restart);
             }));
             app.services.right_button_down = tablet::right_button_service();
+            app.services.wait_cursor = tablet::wait_cursor_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if let Some(text) = &device_loss_notice {

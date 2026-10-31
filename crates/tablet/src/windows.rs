@@ -73,6 +73,41 @@ unsafe extern "system" {
     fn GetPointerPenInfo(pointer_id: u32, pen_info: *mut POINTER_PEN_INFO) -> i32;
     fn RegisterRawInputDevices(devices: *const RAWINPUTDEVICE, count: u32, size: u32) -> i32;
     fn GetLastError() -> u32;
+    fn LoadCursorW(instance: *mut std::ffi::c_void, name: *const u16) -> *mut std::ffi::c_void;
+    fn SetCursor(cursor: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+}
+
+/// `IDC_WAIT` (winuser.h): the system's busy cursor.
+const IDC_WAIT: usize = 32514;
+
+/// The cursor [`wait_cursor`] replaced, while it shows (as an address: the handle is only ever
+/// passed back to `SetCursor` on the UI thread).
+static BEFORE_WAIT: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+/// Show the system's busy cursor at once (`true`), or the cursor it replaced again (`false`).
+/// For work about to hold the UI thread: winit sets the cursor only while it handles messages, so
+/// one set from a frame would never show during that frame. UI thread only.
+pub fn wait_cursor(on: bool) {
+    let Ok(mut before) = BEFORE_WAIT.lock() else { return };
+    match (on, *before) {
+        (true, None) => {
+            // SAFETY: a null instance with a predefined `IDC_` id loads a shared system cursor,
+            // which is never destroyed; SetCursor takes any cursor handle and returns the one it
+            // replaced (null for none).
+            let wait = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_WAIT as *const u16) };
+            if !wait.is_null() {
+                // SAFETY: see above.
+                *before = Some(unsafe { SetCursor(wait) } as usize);
+            }
+        }
+        (false, Some(old)) => {
+            // SAFETY: `old` is the handle SetCursor returned on this thread (null hides the
+            // cursor again, as it was).
+            unsafe { SetCursor(old as *mut std::ffi::c_void) };
+            *before = None;
+        }
+        _ => {}
+    }
 }
 
 #[repr(C)]
@@ -229,6 +264,29 @@ mod tests {
         let n = unsafe { GetRegisteredRawInputDevices(buf.as_mut_ptr(), &mut count, size) };
         buf.truncate(if n == u32::MAX { 0 } else { n as usize });
         buf.iter().map(|d| (d.us_usage_page, d.us_usage)).collect()
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetCursor() -> *mut std::ffi::c_void;
+    }
+
+    /// The busy cursor shows at once and the one it replaced comes back; a second `true` or
+    /// `false` changes nothing.
+    #[test]
+    fn the_wait_cursor_shows_and_the_old_one_comes_back() {
+        // SAFETY: GetCursor and LoadCursorW (a shared system cursor) have no preconditions.
+        let (before, wait) = unsafe { (GetCursor(), LoadCursorW(std::ptr::null_mut(), IDC_WAIT as *const u16)) };
+        wait_cursor(true);
+        wait_cursor(true);
+        // SAFETY: see above.
+        assert_eq!(unsafe { GetCursor() }, wait);
+        wait_cursor(false);
+        // SAFETY: see above.
+        assert_eq!(unsafe { GetCursor() }, before);
+        wait_cursor(false);
+        // SAFETY: see above.
+        assert_eq!(unsafe { GetCursor() }, before);
     }
 
     /// winit's raw mouse registration (as it makes it) is removed; nothing else is touched.

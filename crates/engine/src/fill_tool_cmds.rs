@@ -258,7 +258,7 @@ struct ReferenceKey {
 /// The last referenced composite and what it was made from.
 pub(crate) struct ReferenceCache {
     key: ReferenceKey,
-    img: Arc<Vec<[u8; 4]>>,
+    pub(crate) img: Arc<Vec<[u8; 4]>>,
 }
 
 /// The key of `doc` (with the layers left out of the reference already hidden), or `None` when a
@@ -438,28 +438,37 @@ fn reference_image(s: &Session, r: Reference, ex: Exclude, p: &Value, paper: boo
             .into(),
         ));
     }
-    let key = reference_key(&doc, area);
+    Ok((area, kept_composite(s, &doc, area)))
+}
+
+/// The composite of `doc` (the active document, or a copy of it with layers hidden) over `area`
+/// as straight RGBA8: the session's kept one while the layers it was made from are unchanged,
+/// patched where only some of their pixels changed, else made again and kept. The Fill tool's
+/// references and Sample All Layers (Magic Wand, Paint Bucket, Magic Eraser) share it: a click
+/// on a document of a hundred layers composited them all each time (1.5 s on 2296 × 3000).
+pub(crate) fn kept_composite(s: &Session, doc: &Document, area: Rect) -> Arc<Vec<[u8; 4]>> {
+    let key = reference_key(doc, area);
     let mut cache = s.fill_reference.lock().unwrap_or_else(PoisonError::into_inner);
     if let (Some(key), Some(c)) = (key, cache.as_mut()) {
         match changed_area(&c.key, &key) {
             // Unchanged: the kept composite.
-            Some(d) if d.is_empty() => return Ok((area, c.img.clone())),
+            Some(d) if d.is_empty() => return c.img.clone(),
             // Only some pixels changed (the last fill, with Refer to All Layers): those tiles
             // are composited again and patched in.
             Some(d) if pixels(d) * 2 < pixels(area) => {
-                patch(Arc::make_mut(&mut c.img).as_mut_slice(), area, &doc, d);
+                patch(Arc::make_mut(&mut c.img).as_mut_slice(), area, doc, d);
                 c.key = key;
-                return Ok((area, c.img.clone()));
+                return c.img.clone();
             }
             _ => {}
         }
     }
     // Let go of the old one before making the next.
     *cache = None;
-    let key = reference_key(&doc, area);
-    let img = Arc::new(composite_rgba8(&doc, area));
+    let key = reference_key(doc, area);
+    let img = Arc::new(composite_rgba8(doc, area));
     *cache = key.map(|key| ReferenceCache { key, img: img.clone() });
-    Ok((area, img))
+    img
 }
 
 /// A drag with the Fill tool (or the Magic Wand) going on from its click, `gesture` in the

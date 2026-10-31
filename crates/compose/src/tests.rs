@@ -4412,3 +4412,38 @@ fn branchless_floor_matches_floor_bitwise() {
         assert_eq!(branchless_floor(x).to_bits(), x.floor().to_bits(), "{x:e} ({:#010x})", x.to_bits());
     }
 }
+
+/// Tiles a layer's hide-all mask hides entirely are skipped (a fill layer, a group, pixels): the
+/// tiled render matches one made in a single tile, which every mask reaches, also where a
+/// feather carries a mask's edge into the next tile.
+#[test]
+fn tiles_a_mask_hides_are_skipped_without_changing_the_render() {
+    let mut d = doc_white(600, 300);
+    let masked = |painted: Rect, feather: f32| {
+        let mut m = LayerMask::hide_all();
+        m.surface.fill_rect(painted, &[1.0]);
+        m.feather = feather;
+        Some(m)
+    };
+    let mut red = Layer::new("red", LayerContent::Fill(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))));
+    // Painted up to the first tile's edge, feathered into the second.
+    red.mask = masked(Rect::new(200, 20, 256, 80), 6.0);
+    let mut blue = Layer::new("blue", LayerContent::Fill(Fill::Solid(Color::rgb(0.0, 0.0, 1.0))));
+    blue.blend = BlendMode::Multiply;
+    blue.mask = masked(Rect::new(500, 200, 540, 240), 0.0);
+    let mut group = Layer::group("g", vec![solid_layer("black", Rect::new(0, 0, 600, 300), [0.0, 0.0, 0.0, 1.0])]);
+    group.mask = masked(Rect::new(300, 100, 310, 110), 0.0);
+    d.layers.extend([red.clone(), blue, group]);
+    let tiled = render_tiled(&d, d.bounds(), 256);
+    let whole = render_tiled(&d, d.bounds(), 1024);
+    let worst = tiled.px.iter().zip(&whole.px).map(|(a, b)| (0..4).map(|i| (a[i] - b[i]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max);
+    assert!(worst <= E, "tiled and single-tile renders differ by {worst}");
+    assert!(close4(tiled.get(220, 50), [1.0, 0.0, 0.0, 1.0]) && close4(tiled.get(305, 105), [0.0, 0.0, 0.0, 1.0]));
+    assert!(tiled.get(258, 50)[1] < 0.9, "the feather reaches into the next tile: {:?}", tiled.get(258, 50));
+    assert!(close4(tiled.get(400, 50), [1.0; 4]) && close4(tiled.get(520, 220), [0.0, 0.0, 1.0, 1.0]));
+    // Which tiles are skipped: far from the painted area, and not within the feather's reach.
+    assert!(crate::content::empty_in(&red, Rect::new(512, 0, 600, 256)));
+    assert!(!crate::content::empty_in(&red, Rect::new(256, 0, 512, 256)), "within the feather's reach");
+    red.mask.as_mut().unwrap().density = 0.5;
+    assert!(!crate::content::empty_in(&red, Rect::new(512, 0, 600, 256)), "a mask below full density shows the layer");
+}
