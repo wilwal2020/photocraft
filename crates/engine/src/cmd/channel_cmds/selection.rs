@@ -87,10 +87,15 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     let p = &targeted;
+    let label = |s: &Session| match s.active().and_then(|st| p.get("channel").and_then(|v| parse_ref(v, &st.doc))) {
+        Some(ChanRef::Transparency) => "Load Transparency",
+        Some(ChanRef::LayerMask) => "Load Layer Mask",
+        _ => "Load Selection",
+    };
     if mode == SelectionMode::Replace
         && let Some(selection) = transparency_selection(s, p, cmd)?
     {
-        let selected = s.edit("Load Transparency", |doc, _| {
+        let selected = s.edit(label(s), |doc, _| {
             doc.selection = (selection.tile_count() > 0).then_some(selection);
             Ok(doc.selection.is_some())
         })?;
@@ -98,33 +103,53 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
     let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
-        Some(ChanRef::Transparency) => "Load Transparency",
-        Some(ChanRef::LayerMask) => "Load Layer Mask",
-        _ => "Load Selection",
-    };
-    let selected = s.edit(label, |doc, _| {
+    let selected = s.edit(label(s), |doc, _| {
         doc.selection = sel::combine(doc.selection.as_ref(), &plane, doc.bounds(), mode);
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
 }
 
-/// A layer's transparency as a new selection, straight from its tiles (`sel::alpha_selection`):
-/// ⌘-clicking a layer thumbnail on a large page read the whole canvas into planes first. `None`
-/// for anything else `p` loads (another channel or document, inverted), which goes through
-/// [`source`].
+/// A layer's transparency, or one of its masks, as a new selection straight from its tiles
+/// (`sel::alpha_selection`, `sel::gray_selection`; a fill or adjustment layer's transparency is
+/// the whole canvas): ⌘-clicking a thumbnail on a large page read the whole canvas into planes
+/// first. `None` for anything else `p` loads (another channel or document, inverted), which goes
+/// through [`source`].
 fn transparency_selection(s: &Session, p: &Value, cmd: &str) -> Result<Option<photocraft_raster::Surface>> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     if p.get("document").is_some_and(|d| !d.is_null()) || p.get("invert").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(None);
     }
-    if p.get("channel").and_then(|v| parse_ref(v, &st.doc)) != Some(ChanRef::Transparency) {
+    let channel = p.get("channel").and_then(|v| parse_ref(v, &st.doc));
+    if !matches!(channel, Some(ChanRef::Transparency | ChanRef::LayerMask | ChanRef::SecondMask)) {
         return Ok(None);
     }
     let Some(id) = source_layer(&st.doc, p, cmd)?.or(st.active_layer) else { return Ok(None) };
-    Ok(st.doc.layer(id).and_then(|l| l.surface()).and_then(|surf| sel::alpha_selection(surf, st.doc.bounds())))
+    let Some(l) = st.doc.layer(id) else { return Ok(None) };
+    let area = st.doc.bounds();
+    // A mask, tile by tile (a 6486 × 7000 page read the whole canvas into a plane first).
+    let mask = match channel {
+        Some(ChanRef::LayerMask) => l.mask.as_ref(),
+        Some(ChanRef::SecondMask) => l.second_mask.as_ref(),
+        _ => None,
+    };
+    if let Some(m) = mask {
+        return Ok(Some(sel::gray_selection(&m.surface, area)));
+    }
+    if channel != Some(ChanRef::Transparency) {
+        // No such mask: `source` says so.
+        return Ok(None);
+    }
+    Ok(match (&l.content, l.surface()) {
+        (_, Some(surf)) => sel::alpha_selection(surf, area),
+        // Fill and adjustment layers cover the whole canvas (as `source` reads them).
+        (photocraft_doc::LayerContent::Fill(_) | photocraft_doc::LayerContent::Adjustment(_), None) => {
+            let mut s = Surface::new(PixelFormat::GRAY8);
+            s.fill_rect(area, &[1.0]);
+            Some(s)
+        }
+        _ => None,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

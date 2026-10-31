@@ -1185,3 +1185,42 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
+
+/// A new selection from a mask, a second mask or a fill layer's transparency is built straight
+/// from the tiles, and is the selection the plane path makes (Intersect with everything still
+/// goes through it), on a canvas that is not whole tiles; it is one undo step with its own name.
+#[test]
+fn a_mask_or_a_fill_loads_from_its_tiles_as_the_plane_path_does() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 270})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let id = doc(&s).walk().last().map(|(_, _, l)| l.id).unwrap();
+    s.edit("masks", |doc, _| {
+        let l = doc.layer_mut(id).unwrap();
+        let mut m = photocraft_doc::LayerMask::hide_all();
+        m.surface.fill_rect(Rect::new(20, 30, 290, 60), &[0.4]);
+        m.surface.fill_rect(Rect::new(250, 200, 300, 270), &[1.0]);
+        l.mask = Some(m);
+        let mut second = photocraft_doc::LayerMask::reveal_all();
+        second.surface.fill_rect(Rect::new(0, 0, 120, 90), &[0.0]);
+        second.surface.fill_rect(Rect::new(100, 100, 140, 140), &[0.25]);
+        l.second_mask = Some(second);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.newFillLayer.solidColor", json!({"color": "#336699"})).unwrap();
+    let fill = s.active().unwrap().active_layer.unwrap();
+    let plane = |s: &Session| sel::mask_from_surface(doc(s).selection.as_ref(), doc(s).bounds());
+    for (layer, channel) in [(id, "mask"), (id, "secondMask"), (fill, "transparency")] {
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"channel": channel, "layer": layer.0, "operation": "intersect"})).unwrap();
+        let slow = plane(&s);
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"channel": channel, "layer": layer.0})).unwrap();
+        assert_eq!(plane(&s), slow, "{channel}");
+    }
+    assert!((sel_at(&s, 10, 10) - 1.0).abs() < 1e-6, "a fill covers the canvas");
+    s.execute("select.loadSelection", json!({"channel": "mask", "layer": id.0})).unwrap();
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Load Layer Mask"));
+    assert!((sel_at(&s, 30, 40) - 0.4).abs() < 0.01 && sel_at(&s, 30, 100) == 0.0);
+}

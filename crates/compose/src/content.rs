@@ -238,14 +238,7 @@ pub(crate) fn empty_in(layer: &Layer, rect: Rect) -> bool {
 /// took 1.6 s to composite). Knockout and Transparency Shapes off can change the backdrop where
 /// a layer is transparent, so those layers are drawn anyway.
 fn masked_out(layer: &Layer, rect: Rect) -> bool {
-    let Some(m) = layer.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0) else { return false };
-    if layer.advanced.knockout != photocraft_doc::Knockout::None || !layer.advanced.transparency_shapes {
-        return false;
-    }
-    // Three box passes of about the sigma each carry an edge at most 3σ + 3 px.
-    let sigma = crate::masks::feather_sigma(m.feather);
-    let reach = if sigma > 0.0 { (3.0 * sigma).ceil() as i32 + 3 } else { 0 };
-    m.surface.default_pixel().first().is_some_and(|v| *v <= 0.0) && !m.surface.has_tiles_in(rect.inflate(reach))
+    crate::extents::hiding_mask(layer).is_some_and(|(m, reach)| !m.surface.has_tiles_in(rect.inflate(reach)))
 }
 
 /// Blending Options › Channels as per-channel weights over display RGB (1 = the layer's result,

@@ -100,9 +100,15 @@ fn main() {
     let path = args.get(1).cloned().expect("give a file");
     let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(9).max(3);
     let (sw, sh) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((1920.0, 1080.0));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let t = Instant::now();
-    let doc = photocraft_io::import(&path, &bytes).unwrap_or_else(|e| panic!("{path}: {e}")).document;
+    // A folder: a crash recovery copy (the first autosave in it), as the app recovers it.
+    let doc = if std::path::Path::new(&path).is_dir() {
+        let entries = photocraft_format::list_recovery(std::path::Path::new(&path));
+        photocraft_format::recover(entries.first().expect("an autosave in the folder")).unwrap_or_else(|e| panic!("{path}: {e}"))
+    } else {
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        photocraft_io::import(&path, &bytes).unwrap_or_else(|e| panic!("{path}: {e}")).document
+    };
     println!("import {:.0} ms: {} × {}, {} layers", ms(t), doc.size.width, doc.size.height, doc.walk().len());
     let canvas = doc.bounds();
     let mut pixel: Vec<(i64, LayerId)> = doc
@@ -200,6 +206,10 @@ fn main() {
     );
     let _ = h.state_mut().run("layer.setProps", json!({"layer": small.0, "visible": true}));
     settle(&mut h, 3);
+    edit_rows(&mut h, reps, &picks);
+    if args.iter().any(|a| a == "--edits-only") {
+        return;
+    }
 
     // Brush strokes on a new layer above the middle of the stack.
     select(&mut h, small);
@@ -352,4 +362,47 @@ fn reexec_with_gpu_sync() {
     let exe = std::env::current_exe().expect("exe");
     let status = std::process::Command::new(exe).args(std::env::args().skip(1)).env("PHOTOCRAFT_GPU_SYNC", "1").status().expect("re-exec");
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Load Selection from a layer's pixels (⌘-click a thumbnail), Merge Down and Merge Visible,
+/// each followed by the frames that show it, and Undo; then where the frames' time went.
+fn edit_rows(h: &mut H, reps: usize, picks: &[LayerId]) {
+    let timed = |h: &mut H, label: &str, f: &mut dyn FnMut(&mut H, usize)| {
+        let mut spans: std::collections::BTreeMap<&'static str, f64> = Default::default();
+        let times = (0..reps)
+            .map(|i| {
+                h.state_mut().perf.spans.clear();
+                let t = Instant::now();
+                f(h, i);
+                let run = ms(t);
+                let shown = frame(h) + frame(h);
+                for (k, v) in &h.state().perf.spans {
+                    *spans.entry(k).or_default() += v / reps as f64;
+                }
+                run + shown
+            })
+            .collect();
+        row(label, times);
+        let mut by: Vec<_> = spans.into_iter().filter(|(_, v)| *v >= 1.0).collect();
+        by.sort_by(|a, b| b.1.total_cmp(&a.1));
+        println!("    mean spans: {}", by.iter().map(|(k, v)| format!("{k} {v:.0}")).collect::<Vec<_>>().join(", "));
+    };
+    timed(h, "load selection from a layer (+2 frames)", &mut |h, i| {
+        let _ = h.state_mut().run("select.loadSelection", json!({"channel": "transparency", "layer": picks[i % picks.len()].0}));
+    });
+    let _ = h.state_mut().run("select.deselect", json!({}));
+    settle(h, 3);
+    let ids: Vec<u64> = h.state().session.active().map(|d| d.doc.walk().iter().map(|(_, _, l)| l.id.0).collect()).unwrap_or_default();
+    timed(h, "merge down (+2 frames, then undo)", &mut |h, i| {
+        let _ = h.state_mut().run("layer.select", json!({"layer": ids[(ids.len() / 2 + i) % ids.len()]}));
+        let _ = h.state_mut().run("layer.mergeDown", json!({}));
+        frame(h);
+        let _ = h.state_mut().run("edit.undo", json!({}));
+    });
+    timed(h, "merge visible (+2 frames, then undo)", &mut |h, _| {
+        let _ = h.state_mut().run("layer.mergeVisible", json!({}));
+        frame(h);
+        let _ = h.state_mut().run("edit.undo", json!({}));
+    });
+    settle(h, 3);
 }

@@ -370,11 +370,41 @@ pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
         LayerContent::Adjustment(_) => Rect::EMPTY,
         _ => layer_bounds(layer, canvas),
     };
+    // A hide-all mask shows the layer only where it is painted (a masked Color Fill is the canvas
+    // in `layer_bounds`): merging one rendered the whole canvas.
+    let own = match mask_reveal(layer) {
+        Some(r) => own.intersect(&r),
+        None => own,
+    };
     if own.is_empty() {
         return Some(Rect::EMPTY);
     }
     let m = if effects::has_effects(layer) { effects::margin(layer) } else { 0 };
     Some(own.inflate(m).intersect(&canvas))
+}
+
+/// Whether the layer's pixel mask is an enabled hide-all mask at full density on a layer that
+/// adds nothing where it is transparent (no effects, knockout or Transparency Shapes off): the
+/// layer then shows only where the mask is painted, or within its feather's reach of it. Returns
+/// that reach in px.
+pub(crate) fn hiding_mask(layer: &Layer) -> Option<(&photocraft_doc::LayerMask, i32)> {
+    let m = layer.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0)?;
+    if effects::has_effects(layer) || layer.advanced.knockout != photocraft_doc::Knockout::None || !layer.advanced.transparency_shapes {
+        return None;
+    }
+    if !m.surface.default_pixel().first().is_some_and(|v| *v <= 0.0) {
+        return None;
+    }
+    // Three box passes of about the sigma each carry an edge at most 3σ + 3 px.
+    let sigma = masks::feather_sigma(m.feather);
+    Some((m, if sigma > 0.0 { (3.0 * sigma).ceil() as i32 + 3 } else { 0 }))
+}
+
+/// Where a [`hiding_mask`] can show the layer: its painted pixels grown by the feather's reach.
+pub(crate) fn mask_reveal(layer: &Layer) -> Option<Rect> {
+    let (m, reach) = hiding_mask(layer)?;
+    let b = bounds::content_bounds(&m.surface);
+    Some(if b.is_empty() { b } else { b.inflate(reach) })
 }
 
 /// The document pixels that showing, hiding, moving or restyling `layer` can change, or `None`

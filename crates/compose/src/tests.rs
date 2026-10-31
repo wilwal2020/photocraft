@@ -4468,3 +4468,22 @@ fn a_fill_rendered_in_bands_matches_one_rendering() {
     assert_eq!(rects, [0, 16, 32, 48].map(|y| Rect::new(0, y, 70, (y + 16).min(53))));
     assert_eq!(px, whole.px);
 }
+
+/// A layer under a hide-all mask shows only where the mask is painted (grown by its feather's
+/// reach): Merge Down of a masked fill renders that, not the canvas. A mask below full density,
+/// or effects, show it anywhere it has pixels.
+#[test]
+fn a_hide_all_mask_bounds_where_the_layer_can_show() {
+    let canvas = Rect::new(0, 0, 600, 300);
+    let mut l = Layer::new("f", LayerContent::Fill(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))));
+    let mut m = LayerMask::hide_all();
+    m.surface.fill_rect(Rect::new(100, 50, 140, 90), &[1.0]);
+    l.mask = Some(m);
+    assert_eq!(composite_bounds(&l, canvas), Some(Rect::new(100, 50, 140, 90)));
+    l.mask.as_mut().unwrap().feather = 2.0;
+    assert_eq!(composite_bounds(&l, canvas), Some(Rect::new(91, 41, 149, 99)), "3σ + 3 px of feather");
+    l.mask.as_mut().unwrap().density = 0.5;
+    assert_eq!(composite_bounds(&l, canvas), Some(canvas));
+    l.mask = Some(LayerMask::hide_all());
+    assert_eq!(composite_bounds(&l, canvas), Some(Rect::EMPTY), "nothing painted: nothing shows");
+}

@@ -237,16 +237,27 @@ pub fn composite_to_surface(doc: &Document, rect: Rect, fmt: photocraft_color::P
         };
         data.clear();
         data.resize(band.px.len() * n, 0.0);
-        photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
-            for (p, out) in band.px.iter().zip(data.chunks_exact_mut(n)) {
-                if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) && empty.len() == n {
-                    out.copy_from_slice(&empty);
-                } else {
-                    photocraft_raster::from_rgba_into(&fmt, *p, out);
+        let convert = |px: &[[f32; 4]], data: &mut [f32]| {
+            photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+                for (p, out) in px.iter().zip(data.chunks_exact_mut(n)) {
+                    if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) && empty.len() == n {
+                        out.copy_from_slice(&empty);
+                    } else {
+                        photocraft_raster::from_rgba_into(&fmt, *p, out);
+                    }
                 }
-            }
-        });
-        s.write_region(band.rect, &data);
+            });
+        };
+        // On every core off wasm: one core took 0.7 s of a 6486 × 7000 Merge Visible.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            const CHUNK: usize = 16 * 1024;
+            band.px.par_chunks(CHUNK).zip(data.par_chunks_mut(CHUNK * n)).for_each(|(px, data)| convert(px, data));
+        }
+        #[cfg(target_arch = "wasm32")]
+        convert(&band.px, &mut data);
+        s.write_region_par(band.rect, &data);
         Ok(())
     });
     s.prune();

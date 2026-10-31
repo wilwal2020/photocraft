@@ -129,6 +129,65 @@ fn surface_from_masks(area: Rect, new: &[f32], prev: Option<&[f32]>, f: impl Fn(
     s
 }
 
+/// The selection Load Layer Mask (⌘-click on a mask thumbnail) makes from the gray `mask` over
+/// `area`: each pixel's value, as [`combine`] makes it from the mask's plane, but built tile by
+/// tile from the mask's own tiles; where it stores none, its default (a reveal-all mask selects
+/// everything). The plane cost a 6486 × 7000 page about 100 ms (user report: selecting from a
+/// layer lagged).
+pub fn gray_selection(mask: &Surface, area: Rect) -> Surface {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let ts = TILE_SIZE as usize;
+    let n = mask.channels().max(1);
+    // Where the mask stores no tile it reads as its default (a reveal-all mask is white there).
+    let rest = coverage8(mask.default_pixel().first().copied().unwrap_or(0.0));
+    let solid = (rest > 0).then(|| s.solid_tile(&[f32::from(rest) / 255.0]));
+    let blank = s.solid_tile(&[0.0]);
+    let coords: Vec<TileCoord> = area.tiles().collect();
+    let built = par_map(coords.len(), |k| {
+        let tc = coords.get(k)?;
+        let tr = tc.rect().intersect(&area);
+        if mask.tile(*tc).is_none() {
+            // Part of a tile at the area's edge keeps the outside unselected.
+            return match &solid {
+                Some(t) if tr == tc.rect() => Some((*tc, Arc::clone(t))),
+                Some(_) => Some((*tc, edge_tile(&blank, *tc, tr, rest))),
+                None => None,
+            };
+        }
+        let span = tr.width() as usize;
+        let mut v = Vec::new();
+        mask.read_region_into(tr, &mut v);
+        let mut tile = Arc::clone(&blank);
+        let data = Arc::make_mut(&mut tile).bytes_mut();
+        let mut hi = 0u8;
+        for (y, row) in (tr.y0..tr.y1).zip(v.chunks_exact((span * n).max(1))) {
+            let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+            let Some(dst) = data.get_mut(o..o + span) else { continue };
+            for (d, p) in dst.iter_mut().zip(row.chunks_exact(n)) {
+                *d = coverage8(p.first().copied().unwrap_or(0.0));
+                hi = hi.max(*d);
+            }
+        }
+        (hi > 0).then_some((*tc, tile))
+    });
+    s.put_tiles(built.into_iter().flatten());
+    s
+}
+
+/// A blank GRAY8 tile with `tr` (inside the tile `tc`) set to `value`.
+fn edge_tile(blank: &Arc<photocraft_raster::Tile>, tc: TileCoord, tr: Rect, value: u8) -> Arc<photocraft_raster::Tile> {
+    let ts = TILE_SIZE as usize;
+    let mut tile = Arc::clone(blank);
+    let data = Arc::make_mut(&mut tile).bytes_mut();
+    for y in tr.y0..tr.y1 {
+        let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+        if let Some(dst) = data.get_mut(o..o + tr.width() as usize) {
+            dst.fill(value);
+        }
+    }
+    tile
+}
+
 /// The selection Load Transparency (⌘-click on a layer thumbnail) makes from `layer` over
 /// `area`: each pixel's alpha, as [`combine`] makes it from the alpha plane, but built tile by tile
 /// from the layer's own tiles. A canvas-sized plane first cost a 22 MP page about 350 MB of
