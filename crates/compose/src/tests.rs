@@ -4447,3 +4447,24 @@ fn tiles_a_mask_hides_are_skipped_without_changing_the_render() {
     red.mask.as_mut().unwrap().density = 0.5;
     assert!(!crate::content::empty_in(&red, Rect::new(512, 0, 600, 256)), "a mask below full density shows the layer");
 }
+
+/// A fill rendered in bands is the fill rendered in one piece, in the frame its mask gives it
+/// (a dithered angled gradient, so every row and column differs).
+#[test]
+fn a_fill_rendered_in_bands_matches_one_rendering() {
+    let canvas = Rect::new(0, 0, 70, 53);
+    let mut l = Layer::new("g", LayerContent::Fill(dithered_gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(1.0, 0.5, 0.0))], 33.0)));
+    let mut m = LayerMask::hide_all();
+    m.surface.fill_rect(Rect::new(10, 7, 50, 40), &[1.0]);
+    l.mask = Some(m);
+    let LayerContent::Fill(f) = &l.content else { unreachable!() };
+    let whole = render_fill_content(&l, f, canvas, &[]);
+    let mut px = Vec::new();
+    let mut rects = Vec::new();
+    render_fill_content_bands(&l, f, canvas, 16, &[], |b| {
+        rects.push(b.rect);
+        px.extend(b.px);
+    });
+    assert_eq!(rects, [0, 16, 32, 48].map(|y| Rect::new(0, y, 70, (y + 16).min(53))));
+    assert_eq!(px, whole.px);
+}

@@ -174,6 +174,20 @@ pub fn render_fill_content(layer: &Layer, f: &Fill, canvas: Rect, patterns: &[Pa
     render_fill(f, canvas, fill_frame(layer, canvas), &prepared, None)
 }
 
+/// [`render_fill_content`] in bands of `rows` rows, each handed to `sink` in turn: the same pixels
+/// without a float copy of the whole canvas (a 6486 × 7000 fill is 726 MB as one buffer, and a
+/// PSD save renders one fill layer per core at once: user report, a save ran out of memory).
+pub fn render_fill_content_bands(layer: &Layer, f: &Fill, canvas: Rect, rows: i32, patterns: &[Pattern], mut sink: impl FnMut(Buffer)) {
+    let prepared = pattern::PreparedPatterns::new(patterns, pattern::PREPARED_PATTERN_BYTES);
+    let frame = fill_frame(layer, canvas);
+    let mut y = canvas.y0;
+    while y < canvas.y1 {
+        let y1 = y.saturating_add(rows.max(1)).min(canvas.y1);
+        sink(render_fill(f, Rect::new(canvas.x0, y, canvas.x1, y1), frame, &prepared, None));
+        y = y1;
+    }
+}
+
 /// `quantum`: the document depth's levels, which a dithered gradient is rounded to
 /// ([`gradient_fill::render_quantized`]); `None` keeps it in float.
 pub(crate) fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern::PreparedPatterns<'_>, quantum: Option<f32>) -> Buffer {

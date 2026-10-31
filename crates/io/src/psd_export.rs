@@ -45,6 +45,10 @@ const PSD_SAVE_HEADROOM: u64 = 1024 * 1024;
 /// the channel planes made from them (or the band parts and the joined buffer) are alive together,
 /// so the peak is about twice this; it is also what fits in a file of at most [`PSD_MAX_FILE_SIZE`].
 const MAX_LAYER_GATHER_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
+/// Rows of a fill layer rendered at once when it is saved (`fill_pixels`).
+const FILL_BAND_ROWS: i32 = 256;
+/// Most bytes the layers being encoded at once may hold while a PSD is saved (see `prefetch`).
+const PREFETCH_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 512 << 20 };
 
 /// Options for [`document_to_psd_with`].
 #[derive(Debug, Clone)]
@@ -970,10 +974,15 @@ impl Ex {
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
-        let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
+        // Band by band: a save encodes a fill per core at once, and a canvas-sized float copy
+        // each ran a 6486 × 7000 document out of memory (user report).
         let mut s = Surface::new(self.fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
-        s.write_region(self.canvas, &vals);
+        let mut vals = Vec::new();
+        photocraft_compose::render_fill_content_bands(l, f, self.canvas, FILL_BAND_ROWS, &self.patterns, |buf| {
+            vals.clear();
+            vals.extend(buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)));
+            s.write_region(buf.rect, &vals);
+        });
         s.prune();
         s
     }
@@ -1008,7 +1017,13 @@ impl Ex {
             })
             .collect();
         jobs.sort_by_key(|j| std::cmp::Reverse(j.0));
-        let workers = std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32).min(jobs.len().max(1));
+        // A worker holds a canvas-sized layer about three times over while it encodes it (its
+        // pixels or fill rendering, the gathered samples, the channel planes): as many workers
+        // as fit in PREFETCH_BYTES (user report: a 6486 × 7000 save of 103 layers ran out of
+        // memory on 20 cores).
+        let layer_bytes = u64::from(self.canvas.width()) * u64::from(self.canvas.height()) * self.fmt.bytes_per_pixel() as u64 * 3;
+        let fit = usize::try_from(PREFETCH_BYTES / layer_bytes.max(1)).unwrap_or(usize::MAX).max(1);
+        let workers = std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32).min(fit).min(jobs.len().max(1));
         let mut shares: Vec<Vec<&Layer>> = vec![Vec::new(); workers];
         for (k, (_, l)) in jobs.into_iter().enumerate() {
             if let Some(s) = shares.get_mut(k % workers) {
