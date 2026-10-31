@@ -45,9 +45,10 @@ fn newly_created_layer_masks_follow_document_depth() {
                 assert_eq!(m.value(20, 20), white);
                 if selected {
                     assert_eq!(m.value(0, 0), 0.0);
-                    // The selection became the mask: Photoshop drops it, after Reveal Selection
-                    // (as Hide Selection does) and a new fill or adjustment layer alike.
+                    // The selection became the mask: Photoshop drops it, as Hide Selection does
+                    // (#5251; new fill and adjustment layers too, #8801).
                     assert!(d.doc.selection.is_none(), "{command}: the selection is dropped");
+                    assert!(before.selection.is_some());
                 } else {
                     assert_eq!(m.surface.tile_count(), 0, "uniform masks stay sparse");
                     assert_eq!(m.value(-300_000, 300_000), white);
@@ -137,7 +138,7 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
                 "{depth}-bit coverage is unchanged"
             );
             // The selection is in the new mask: Reveal Selection and new fill or adjustment layers
-            // all drop it, as in Photoshop.
+            // (the Gradient tool's too) all drop it, as in Photoshop.
             assert_eq!(after.selection, None, "{command}");
             assert_eq!(after.layers[0].mask, before.layers[0].mask, "creating a mask does not requantize an existing mask");
         }

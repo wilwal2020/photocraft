@@ -29,7 +29,7 @@ fn keys(id: &str) -> &'static [&'static str] {
 /// Steps that act on the current layer without a `layer`: theirs is left out for the current
 /// layer, Photoshop's "Set Current Layer" (an eye ⌥-click, a rename).
 fn current_by_default(id: &str) -> bool {
-    matches!(id, "layer.setProps" | "layer.showOnly")
+    matches!(id, "layer.setProps" | "layer.showOnly" | "edit.transform")
 }
 
 /// Steps that always act on the current layer when an action plays (user report: an action's
@@ -54,7 +54,9 @@ fn reference(doc: &Document, active: Option<LayerId>, id: LayerId) -> Option<Val
 pub(crate) fn record(s: &Session, id: &str, p: &Value) -> Option<Value> {
     let st = s.active()?;
     let keys = keys(id);
-    let mut out = p.clone();
+    // A Free Transform of the selected layers leaves its `layers` out, so it plays on the layers
+    // selected then (`layer_multi_cmds::recorded_step`, #6501); only other layers are named.
+    let mut out = if id == "edit.transform" { crate::layer_multi_cmds::recorded_step(s, id, p.clone(), None) } else { p.clone() };
     let fields = out.as_object_mut()?;
     let mut changed = false;
     for key in keys {

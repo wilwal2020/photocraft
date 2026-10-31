@@ -1517,10 +1517,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     // Where the window was last (user report: it always reopened small).
     let saved = WindowPlace::load(app);
-    let mut builder = egui::ViewportBuilder::default()
-        .with_title(window_title)
-        .with_inner_size(saved.map_or([1360.0, 900.0], |w| w.size))
-        .with_min_inner_size([900.0, 600.0]);
+    let mut builder =
+        crate::os_window::builder().with_title(window_title).with_inner_size(saved.map_or([1360.0, 900.0], |w| w.size)).with_min_inner_size([900.0, 600.0]);
     if let Some(w) = saved {
         if let Some(pos) = w.pos {
             builder = builder.with_position(pos);

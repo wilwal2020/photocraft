@@ -332,9 +332,11 @@ fn fill_layers_without_default_masks_keep_selection_and_explicit_path_masks() {
         assert!(!vector, "{cmd}");
         assert!(mask.surface.pixel(6, 6)[0] > 0.99, "{cmd}: inside the selection reveals");
         assert!(mask.surface.pixel(20, 12)[0] < 0.01, "{cmd}: outside the selection hides");
+        assert!(s.active().unwrap().doc.selection.is_none(), "{cmd}: the selection went into the mask (#8801)");
     }
 
     // An explicit path wins over the selection, as with the option on.
+    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 6})).unwrap();
     for selected in [true, false] {
         for (cmd, params) in KINDS {
             if selected {

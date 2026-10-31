@@ -47,6 +47,7 @@ impl PhotocraftApp {
             monitors: Default::default(),
             checker: None,
             drag: None,
+            cancelled_vector_drag: false,
             move_blocked: false,
             tool_override: None,
             live_stroke: None,
@@ -103,6 +104,7 @@ impl PhotocraftApp {
             tab_strip: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
+            path_document: None,
             fps: 0.0,
             last_frame_time: 0.0,
             thumbs: HashMap::new(),
@@ -131,6 +133,7 @@ impl PhotocraftApp {
             action_run: None,
             fill_drag: None,
             fill_gap_retry: None,
+            run_depth: 0,
             paused_playbacks: Default::default(),
             channel_thumbs: None,
             channel_views: HashMap::new(),
@@ -182,6 +185,7 @@ impl PhotocraftApp {
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             render_path: Default::default(),
+            slow_frames: Default::default(),
             prefs_rt: Default::default(),
             gigapixel: None,
             timelapse: Default::default(),
@@ -204,6 +208,7 @@ impl PhotocraftApp {
             frame_starts: [0.0; 2],
             slow_frame_logged: f64::NEG_INFINITY,
             frame_moved: false,
+            frame_panning: false,
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
@@ -271,11 +276,9 @@ impl eframe::App for PhotocraftApp {
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);
         }
-        if self.stroke_trace.enabled() {
-            // The OS's moves and the control channel's (injected just above).
-            let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
-            self.stroke_trace.begin_frame(frame_start, moves);
-        }
+        // The OS's moves and the control channel's (injected just above).
+        let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
+        self.perf.stage.start(frame_start, moves);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

@@ -307,6 +307,14 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
             break;
         }
+        let resolved = match actions_cmds::playback_params(&app.session, id, p) {
+            Ok(p) => p,
+            Err(e) => {
+                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                break;
+            }
+        };
+        let p = &resolved;
         // The gate judges the step before its dialog opens: a denied step neither runs nor
         // pauses.
         if let Some(auth) = app.session.authorize
@@ -336,6 +344,8 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         let target = app.session.active().map(|d| d.doc.id);
         let result = if id == "actions.play" {
             play(app, p)
+        } else if actions_cmds::saves_smart_contents(&app.session, id) {
+            app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())
         } else if actions_cmds::shell_save_command(id) {
             // Write synchronously, so the next step doesn't meet a document locked by a
             // background save.
@@ -2197,6 +2207,24 @@ pub(crate) mod tests {
         };
         assert!(bottom(700.0) - bottom(300.0) > 350.0, "list uses the additional panel height instead of stopping at 320 px");
         assert!(crate::dock::Group::History.scrolls_itself(1));
+    }
+
+    /// A recorded hide of a layer plays on a new document's layer of the same name.
+    #[test]
+    fn shell_playback_resolves_recorded_eye_target_on_new_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Target"})).unwrap();
+        app.run("actions.record", json!({"name": "Hide"})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.setProps", json!({"layer": id.0, "visible": false})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Target"})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let result = play(&mut app, &json!({"action": "Hide"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert!(!app.session.active().unwrap().doc.layer(id).unwrap().visible);
     }
 
     /// #7646: an action's function key can take Shift and Command, as in Photoshop's Action

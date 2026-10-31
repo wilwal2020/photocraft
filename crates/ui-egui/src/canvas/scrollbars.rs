@@ -152,7 +152,8 @@ fn clamp_view_by(view: &mut View, size: egui::Vec2, ppp: f32, aspect: f32, axis:
     let zoom = view.zoom / if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
     let c = if view.rotation.abs() < 1e-8 {
-        [axis(view.center[0], w as f32, size.x / aspect, zoom), axis(view.center[1], h as f32, size.y, zoom)]
+        // Across, a document pixel is `aspect` times as wide: the screen-space margins stay in points.
+        [axis(view.center[0], w as f32, size.x, zoom * aspect), axis(view.center[1], h as f32, size.y, zoom)]
     } else {
         if !zoom.is_finite() || zoom <= 0.0 || !size.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
             return false;

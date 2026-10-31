@@ -192,7 +192,7 @@ pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorI
 pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     if matches!(ev, ToolEvent::Down { .. }) {
         let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
-        app.alt_sampling = !physical_right && alt_samples(app.active_tool(), mods);
+        app.alt_sampling = !physical_right && !app.secondary_erase && alt_samples(app.active_tool(), mods);
     }
     if !app.alt_sampling {
         return false;
@@ -223,13 +223,16 @@ pub(super) fn samples_screen(app: &PhotocraftApp, xf: &ViewXform, p: Pos2, held:
 
 /// Sample at document point (x, y); `dragging` (a press that started on the canvas, moving): off
 /// the image, onto the pasteboard, a panel or another application, the screen's colour under the
-/// pointer is picked, as in Photoshop.
+/// pointer is picked, as in Photoshop. On a mask or channel the pick is its grey.
 pub(crate) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers, dragging: bool) {
     let on_image = app.session.active().is_some_and(|st| x >= 0.0 && y >= 0.0 && x < f64::from(st.doc.size.width) && y < f64::from(st.doc.size.height));
     let colour = if on_image || !dragging { eyedropper_color(app, x, y) } else { crate::screen_sample::under_cursor(app.ui.tool_options.eyedropper_size) };
-    if let Some([r, g, b]) = colour {
+    if let Some(mut rgb) = colour {
+        if super::paint_target(app) != json!("pixels") {
+            rgb = [photocraft_color::convert::rgb_to_gray(rgb); 3];
+        }
         let key = if mods.alt { "background" } else { "foreground" };
-        let _ = app.run("tools.setColors", json!({ key: [r, g, b, 1.0] }));
+        let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
     }
 }
 
@@ -260,4 +263,11 @@ pub(crate) fn eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Optio
 /// `None` off the image or over transparency.
 pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     sample_color(app, x, y, "all")
+}
+
+pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
+    mods.alt && !mods.ctrl && tool == Tool::MixerBrush
+}
+pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
+    alt_samples(tool, mods) || alt_loads_mixer(tool, mods)
 }

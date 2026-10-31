@@ -231,30 +231,25 @@ pub(super) fn show_only(layers: &mut [photocraft_doc::Layer], keep: &[LayerId]) 
 /// Hide every layer but `id` and the groups holding it, and unclip those, so a render shows that
 /// layer alone (the Free Transform preview, Liquify's one-layer backdrop).
 pub(crate) fn solo_layer(layers: &mut [photocraft_doc::Layer], id: LayerId) {
-    solo_layers(layers, &[id]);
-}
-
-/// [`solo_layer`] for several layers: they show together, and nothing else.
-pub(super) fn solo_layers(layers: &mut [photocraft_doc::Layer], ids: &[LayerId]) {
     for l in layers {
-        if ids.contains(&l.id) {
+        if l.id == id {
             l.clipped = false;
             continue;
         }
         match &mut l.content {
-            LayerContent::Group(g) if g.children.iter().any(|c| ids.iter().any(|id| contains(c, *id))) => {
+            LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)) => {
                 l.clipped = false;
                 // Isolate the child, not the artboard's paper. Keep the board for clipping.
                 if let Some(board) = &mut g.artboard {
                     board.background = photocraft_doc::ArtboardBackground::Transparent;
                 }
-                solo_layers(&mut g.children, ids);
+                solo_layer(&mut g.children, id);
             }
             _ => l.visible = false,
         }
     }
 }
 
-pub(super) fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
+fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
 }

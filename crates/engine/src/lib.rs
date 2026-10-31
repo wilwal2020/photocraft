@@ -135,7 +135,6 @@ pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
 pub use cmd::pick_cmds;
-pub use cmd::visible_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
@@ -169,6 +168,7 @@ pub use cmd::updates_cmds;
 use cmd::variables_cmds;
 pub use cmd::vector_cmds;
 use cmd::video_cmds;
+pub use cmd::visible_cmds;
 pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
@@ -294,6 +294,15 @@ pub struct Session {
     next_held_open: u64,
     /// File › Timelapse: recordings of the open documents ([`timelapse_cmds`]).
     pub timelapse: timelapse_cmds::Recorder,
+    /// The document before the latest [`Session::edit`] of the running command, which
+    /// [`Session::hint_damage`] checks a hint against. Set by `edit`, taken by `hint_damage`,
+    /// dropped when the command ends. Debug and test builds only.
+    #[cfg(any(test, debug_assertions))]
+    hint_before: Option<Arc<Document>>,
+    /// Damage hints that missed a tile their edit changed ([`Session::hint_damage`]): each one a
+    /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
+    /// tests read it.
+    pub damage_misses: usize,
 }
 
 #[cfg(test)]
@@ -305,3 +314,5 @@ mod tests;
 
 #[cfg(test)]
 mod fx_mode_tests;
+
+pub mod command_hints;

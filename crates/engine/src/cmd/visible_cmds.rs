@@ -189,7 +189,9 @@ fn load_visible(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let source = match p.get("source") {
         None | Some(Value::Null) => Source::Layer,
-        Some(v) => v.as_str().and_then(Source::parse).ok_or_else(|| bad(format!("`source` = {v} must be \"layer\", \"mask\", \"secondMask\" or \"vectorMask\"")))?,
+        Some(v) => {
+            v.as_str().and_then(Source::parse).ok_or_else(|| bad(format!("`source` = {v} must be \"layer\", \"mask\", \"secondMask\" or \"vectorMask\"")))?
+        }
     };
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let id = match (p.get("layer").and_then(Value::as_u64), p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {

@@ -26,7 +26,7 @@
 //!   group that takes its place in the clipping group, carrying its blend mode and opacity (an
 //!   adjustment clipped to a clipped layer would act on the whole clipping group, not just the
 //!   target; user report: on a clipped layer the dialogs were "extremely laggy");
-//! - the target uses Blend If (its "This Layer" ranges test the layer's adjusted colour);
+//! - the target uses Blend If (its "Current Layer" ranges test the layer's adjusted colour);
 //! - the target's untouched area is visible (a surface without alpha whose content doesn't cover
 //!   the canvas: the command only edits content);
 //! - the command targets an alpha channel, the Quick Mask or a single colour channel;

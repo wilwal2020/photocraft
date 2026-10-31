@@ -589,6 +589,8 @@ pub struct BrushSettings {
     pub background: [f32; 4],
     /// Erase instead of paint.
     pub erase: bool,
+    /// Paint beneath existing pixels; opaque pixels and transparency-locked layers are unchanged.
+    pub behind: bool,
     /// Brush blend mode (Normal, Multiply, Dissolve…).
     pub mode: BlendMode,
     // --- Brush Tip Shape ---
@@ -647,6 +649,7 @@ impl Default for BrushSettings {
             color_cmyk: None,
             background: [1.0, 1.0, 1.0, 1.0],
             erase: false,
+            behind: false,
             mode: BlendMode::Normal,
             tip: TipShape::Round,
             angle: 0.0,

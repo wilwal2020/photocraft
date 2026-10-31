@@ -133,12 +133,8 @@ const RIDEV_REMOVE: u32 = 0x0000_0001;
 /// 159 fps fell to 59 fps at 1 kHz and 14 fps at 8 kHz). Ordinary mouse messages, which egui
 /// reads, are coalesced and unaffected. Call it on the UI thread once the event loop exists.
 pub fn stop_raw_mouse_input() -> Result<(), crate::Error> {
-    let device = RAWINPUTDEVICE {
-        us_usage_page: HID_USAGE_PAGE_GENERIC,
-        us_usage: HID_USAGE_GENERIC_MOUSE,
-        dw_flags: RIDEV_REMOVE,
-        hwnd_target: std::ptr::null_mut(),
-    };
+    let device =
+        RAWINPUTDEVICE { us_usage_page: HID_USAGE_PAGE_GENERIC, us_usage: HID_USAGE_GENERIC_MOUSE, dw_flags: RIDEV_REMOVE, hwnd_target: std::ptr::null_mut() };
     // SAFETY: one valid, initialised RAWINPUTDEVICE with its own size; RIDEV_REMOVE with a null
     // target is the documented way to unregister a device class. GetLastError has no
     // preconditions.
@@ -295,7 +291,8 @@ mod tests {
         let size = std::mem::size_of::<RAWINPUTDEVICE>() as u32;
         let mouse = (HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_MOUSE);
         let keyboard = (HID_USAGE_PAGE_GENERIC, 0x06);
-        let devices = [mouse, keyboard].map(|(page, usage)| RAWINPUTDEVICE { us_usage_page: page, us_usage: usage, dw_flags: 0, hwnd_target: std::ptr::null_mut() });
+        let devices =
+            [mouse, keyboard].map(|(page, usage)| RAWINPUTDEVICE { us_usage_page: page, us_usage: usage, dw_flags: 0, hwnd_target: std::ptr::null_mut() });
         // SAFETY: two initialised devices of `size` bytes, no target window (the focus window).
         assert_ne!(unsafe { RegisterRawInputDevices(devices.as_ptr(), 2, size) }, 0);
         assert!(registered().contains(&mouse));

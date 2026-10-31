@@ -280,6 +280,9 @@ pub(super) fn make_from(d: &Descriptor) -> Option<Mapped> {
             if let Some(n) = get_text(d, "Nm  ") {
                 p["name"] = json!(n);
             }
+            if get_bool(d, "replaceExisting") == Some(true) {
+                p["replaceExisting"] = json!(true);
+            }
             Some(step("history.newSnapshot", p))
         }
         _ => None,

@@ -145,14 +145,14 @@ pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color
         }
         painter.layout_job(job)
     };
-    // A right-to-left name (Arabic, Hebrew) too long for the row is cut at its logical end and
-    // then put in display order, so its start stays and "…" is at the left (`bidi_text::elide`).
+    // A right-to-left name (Arabic, Hebrew) too long for the row is cut at its logical end, so its
+    // start stays and "…" is at the left (`bidi_text::elide`).
     if let Some(shown) = crate::bidi_text::elide(text, |s| layout(s, false).size().x <= max_width) {
         return Some(layout(&shown, false));
     }
-    // Right-to-left names in display order: egui lays words out left to right. Left-to-right
-    // names are cut at their right end by egui.
-    Some(layout(&crate::bidi_text::visual(text), true))
+    // egui puts a right-to-left name into display order itself; left-to-right names are cut at
+    // their right end by egui.
+    Some(layout(text, true))
 }
 
 /// Paint `l`'s right-hand indicators in `row` and handle the effects triangle. Returns the
@@ -454,7 +454,10 @@ pub(crate) fn second_click(ctx: &egui::Context, tapped: bool, layer: u64, part: 
     let id = egui::Id::unique("pc-layer-row-click");
     let now = ctx.input(|i| i.time);
     let last: Option<(f64, u64, u8)> = ctx.data(|d| d.get_temp(id));
-    let same_frame = ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary) && i.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count() >= 2);
+    let same_frame = ctx.input(|i| {
+        i.pointer.button_clicked(egui::PointerButton::Primary)
+            && i.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count() >= 2
+    });
     let double = same_frame || last.is_some_and(|(t, l, p)| l == layer && p == part && (0.0..DOUBLE_CLICK_S).contains(&(now - t)));
     ctx.data_mut(|d| {
         if double {

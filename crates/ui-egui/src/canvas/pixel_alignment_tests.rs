@@ -193,12 +193,7 @@ fn zooming_in_crop_mode_keeps_the_point_under_the_pointer_in_every_frame() {
                     modifiers: egui::Modifiers::ALT,
                 });
             }
-            let input = egui::RawInput {
-                screen_rect: Some(rect),
-                time: Some(f64::from(frame) / 60.0),
-                events,
-                ..Default::default()
-            };
+            let input = egui::RawInput { screen_rect: Some(rect), time: Some(f64::from(frame) / 60.0), events, ..Default::default() };
             let mut out = ctx.run_ui(input, |ui| {
                 let view = app.ui.views[0].clone();
                 let v = canvas_view(&mut app, ui, 0, rect, view, true);
