@@ -974,13 +974,24 @@ impl Ex {
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
+        let mut s = Surface::new(self.fmt);
+        if let photocraft_doc::Fill::Solid(c) = f {
+            // One colour (as `render_fill` gives it): filled as such, not pixel by pixel (5 s
+            // for a 6486 × 7000 canvas).
+            let rgb = c.to_rgb();
+            s.fill_rect(self.canvas, &photocraft_raster::from_rgba(&self.fmt, [rgb[0], rgb[1], rgb[2], c.alpha]));
+            s.prune();
+            return s;
+        }
         // Band by band: a save encodes a fill per core at once, and a canvas-sized float copy
         // each ran a 6486 × 7000 document out of memory (user report).
-        let mut s = Surface::new(self.fmt);
+        let n = self.fmt.channels();
         let mut vals = Vec::new();
         photocraft_compose::render_fill_content_bands(l, f, self.canvas, FILL_BAND_ROWS, &self.patterns, |buf| {
-            vals.clear();
-            vals.extend(buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)));
+            vals.resize(buf.px.len() * n, 0.0);
+            for (p, out) in buf.px.iter().zip(vals.chunks_exact_mut(n)) {
+                photocraft_raster::from_rgba_into(&self.fmt, *p, out);
+            }
             s.write_region(buf.rect, &vals);
         });
         s.prune();

@@ -568,3 +568,28 @@ fn alpha_names_count_the_merged_transparency() {
     assert_eq!(back.channels[0].name, "Alpha 1");
     assert!((back.channels[0].opacity - 0.5).abs() < 1e-6);
 }
+
+/// A solid fill layer's pixels, filled as one colour, are the pixels its rendering wrote pixel by
+/// pixel before (the bytes a save stores), in every mode and depth.
+#[test]
+fn a_solid_fill_is_stored_as_its_rendering_pixel_by_pixel() {
+    use photocraft_color::Color;
+    let canvas = photocraft_geom::Rect::new(0, 0, 300, 70);
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::new("fill", photocraft_geom::Size::new(300, 70), mode, depth);
+            let fill = photocraft_doc::Fill::Solid(Color::rgb(0.31, 0.57, 0.83));
+            let layer = Layer::new("f", LayerContent::Fill(fill.clone()));
+            doc.layers.push(layer.clone());
+            let fmt = doc.pixel_format();
+            let rendered = photocraft_compose::render_fill_content(&layer, &fill, canvas, &[]);
+            let vals: Vec<f32> = rendered.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
+            let mut pixels = Layer::raster("p", fmt);
+            pixels.surface_mut().unwrap().write_region(canvas, &vals);
+            doc.layers.push(pixels);
+            let file = document_to_psd(&doc);
+            let layers = &file.layer_info.as_ref().unwrap().layers;
+            assert_eq!(layers[0].channels, layers[1].channels, "{mode:?} {depth:?}");
+        }
+    }
+}

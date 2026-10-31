@@ -4457,11 +4457,11 @@ fn a_fill_rendered_in_bands_matches_one_rendering() {
     let mut m = LayerMask::hide_all();
     m.surface.fill_rect(Rect::new(10, 7, 50, 40), &[1.0]);
     l.mask = Some(m);
-    let LayerContent::Fill(f) = &l.content else { unreachable!() };
-    let whole = render_fill_content(&l, f, canvas, &[]);
+    let f = dithered_gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(1.0, 0.5, 0.0))], 33.0);
+    let whole = render_fill_content(&l, &f, canvas, &[]);
     let mut px = Vec::new();
     let mut rects = Vec::new();
-    render_fill_content_bands(&l, f, canvas, 16, &[], |b| {
+    render_fill_content_bands(&l, &f, canvas, 16, &[], |b| {
         rects.push(b.rect);
         px.extend(b.px);
     });
