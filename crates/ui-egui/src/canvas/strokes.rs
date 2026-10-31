@@ -240,6 +240,10 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
     if d.clear {
         p["mode"] = json!("clear");
     }
+    // Turn Tip with View off: the tip keeps its angle on screen.
+    if let Some(xf) = crate::canvas::ViewXform::active(app).filter(|xf| crate::brush_cursor::keeps_screen_angle(app, tool, xf)) {
+        p["brush"] = json!({"angle": crate::brush_cursor::upright_angle(&xf, app.session.tools.brush.angle)});
+    }
     if tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
@@ -697,4 +701,32 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
     let mask = app.ui.mask_target || viewing || crate::adjustment_layer_active(st);
     json!(if mask && has_mask { app.mask_target_name() } else { "pixels" })
+}
+
+#[cfg(test)]
+mod tip_angle_tests {
+    use super::*;
+
+    /// Brush › Turn Tip with View off: the stroke paints with the angle that keeps the tip's angle
+    /// on screen in the rotated view, the Brush only; on (the default) the brush's own angle.
+    #[test]
+    fn strokes_keep_the_tips_screen_angle_when_it_doesnt_turn_with_the_view() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
+        app.sync_views();
+        app.session.tools.brush.angle = 20.0;
+        app.ui.views[0].rotation = 30.0;
+        app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let drag = |tool| Drag::new(tool, [10.0, 10.0], vec![[10.0, 10.0, 1.0]], egui::Modifiers::NONE, false);
+        assert!(stroke_params(&app, &drag(Tool::Brush), &[]).get("brush").is_none(), "turns with the view by default");
+        app.ui.tool_options.brush_tip_turns_with_view = false;
+        let p = stroke_params(&app, &drag(Tool::Brush), &[]);
+        let xf = crate::canvas::ViewXform::active(&app).unwrap();
+        let want = crate::brush_cursor::upright_angle(&xf, 20.0);
+        assert!((p["brush"]["angle"].as_f64().unwrap() as f32 - want).abs() < 1e-3, "{p}");
+        assert!((want - 20.0).abs() > 10.0, "the view's turn is taken out: {want}");
+        assert!(stroke_params(&app, &drag(Tool::Eraser), &[]).get("brush").is_none(), "the Brush only");
+        app.ui.views[0].rotation = 0.0;
+        assert!(stroke_params(&app, &drag(Tool::Brush), &[]).get("brush").is_none(), "an upright view changes nothing");
+    }
 }

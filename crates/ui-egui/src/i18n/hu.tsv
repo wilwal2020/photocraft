@@ -4892,3 +4892,5 @@ cameraRaw	White Balance	Fehéregyensúly
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+	Turn Tip with View	Hegy forgatása a nézettel
+	Off: the brush tip keeps its angle on screen when the view is rotated	Ki: elforgatott nézetben az ecsethegy megtartja a szögét a képernyőn

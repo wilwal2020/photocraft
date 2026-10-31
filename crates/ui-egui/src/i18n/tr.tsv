@@ -4706,3 +4706,5 @@ cameraRaw	White Balance	Beyaz dengesi
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+	Turn Tip with View	Ucu görünümle döndür
+	Off: the brush tip keeps its angle on screen when the view is rotated	Kapalı: görünüm döndürüldüğünde fırça ucu ekrandaki açısını korur

@@ -50,6 +50,22 @@ pub(crate) fn tip_axes(xf: &crate::canvas::ViewXform, size: f32) -> [Vec2; 2] {
     [xf.map_vec(Vec2::new(r, 0.0)), xf.map_vec(Vec2::new(0.0, r))]
 }
 
+/// Brush › Turn Tip with View off (user request): the tip angle, in the document, that shows as
+/// `angle` on screen in view `xf`: the screen direction of `angle` mapped back through the view's
+/// rotation, flip and pixel aspect. `angle` itself when that isn't finite.
+pub(crate) fn upright_angle(xf: &crate::canvas::ViewXform, angle: f32) -> f32 {
+    let (s, c) = angle.to_radians().sin_cos();
+    let d = xf.unmap_vec(Vec2::new(c, -s));
+    let a = (-d.y).atan2(d.x).to_degrees();
+    if a.is_finite() { a } else { angle }
+}
+
+/// Whether `tool` paints with the tip kept upright on screen in view `xf` (the Brush with Turn Tip
+/// with View off, in a rotated or flipped view).
+pub(crate) fn keeps_screen_angle(app: &crate::PhotocraftApp, tool: crate::state::Tool, xf: &crate::canvas::ViewXform) -> bool {
+    tool == crate::state::Tool::Brush && !app.ui.tool_options.brush_tip_turns_with_view && (xf.rotation != 0.0 || xf.flip)
+}
+
 /// Apply pen orientation after the cached tip shape, in document space before the view.
 /// Keeping this outside `rings` avoids retracing a sampled tip on every tablet sample.
 pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen: Option<crate::stylus::PenSample>) -> [Vec2; 2] {
@@ -253,6 +269,32 @@ mod tests {
         assert!(close(axes[0], Vec2::new(10.0, 0.0)));
         assert!(close(axes[1], Vec2::new(0.0, 20.0)));
         assert_eq!(pen_axes(&xf, &brush, Some(crate::stylus::PenSample::default())), tip_axes(&xf, brush.size));
+    }
+
+    /// Turn Tip with View off (user request): with `upright_angle`, a flattened tip's outline is
+    /// the same on screen in a rotated or flipped view as in an upright one.
+    #[test]
+    fn an_upright_tip_keeps_its_outline_on_screen() {
+        let ctx = egui::Context::default();
+        let outline = |xf: &ViewXform, angle: f32| {
+            let brush = BrushSettings { size: 40.0, roundness: 0.3, angle, ..Default::default() };
+            on_screen(&rings(&ctx, &brush, true).unwrap(), tip_axes(xf, brush.size)).concat()
+        };
+        let near = |p: Vec2, set: &[Vec2]| set.iter().map(|q| (p - *q).length()).fold(f32::MAX, f32::min);
+        for angle in [0.0f32, 30.0, -60.0] {
+            let want = outline(&view(0.0, false, 1.0), angle);
+            for (rotation, flip) in [(30.0, false), (-75.0, false), (120.0, true), (0.0, true)] {
+                let xf = view(rotation, flip, 1.0);
+                let got = outline(&xf, upright_angle(&xf, angle));
+                let off = got.iter().map(|p| near(*p, &want)).chain(want.iter().map(|p| near(*p, &got))).fold(0.0, f32::max);
+                assert!(off < 1.5, "angle {angle}, view {rotation}° flip {flip}: {off} pt off");
+                // Turning with the view (the default) does move it.
+                if rotation != 0.0 && angle == 0.0 {
+                    let turned = outline(&xf, angle);
+                    assert!(turned.iter().map(|p| near(*p, &want)).fold(0.0, f32::max) > 5.0);
+                }
+            }
+        }
     }
 
     /// The axes are the screen offsets of the document points one radius right of and below the

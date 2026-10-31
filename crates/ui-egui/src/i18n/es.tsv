@@ -4940,3 +4940,5 @@ cameraRaw	White Balance	Balance de blancos
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+	Turn Tip with View	Girar la punta con la vista
+	Off: the brush tip keeps its angle on screen when the view is rotated	Desactivado: la punta del pincel mantiene su ángulo en pantalla cuando la vista está girada

@@ -1529,7 +1529,12 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 crate::tool_cursor::crosshair(painter, p, 6.0, 0.0)
             } else {
                 let painting = app.drag.is_some();
-                let brush = &app.session.tools.brush;
+                // Turn Tip with View off: the outline keeps the tip's angle on screen, as its strokes do.
+                let upright = crate::brush_cursor::keeps_screen_angle(app, tool, xf).then(|| {
+                    let b = &app.session.tools.brush;
+                    photocraft_paint::brush::BrushSettings { angle: crate::brush_cursor::upright_angle(xf, b.angle), ..b.clone() }
+                });
+                let brush = upright.as_ref().unwrap_or(&app.session.tools.brush);
                 let full = (brush.size / 2.0 * xf.zoom).max(1.0);
                 match cur.painting {
                     PaintingCursor::Standard => egui::CursorIcon::Default,

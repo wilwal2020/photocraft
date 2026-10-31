@@ -4661,3 +4661,5 @@ cameraRaw	White Balance	ホワイトバランス
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+	Turn Tip with View	表示に合わせて先端を回転
+	Off: the brush tip keeps its angle on screen when the view is rotated	オフ：表示を回転しても、ブラシ先端は画面上の角度を保ちます

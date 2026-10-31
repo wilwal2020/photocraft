@@ -3632,3 +3632,5 @@ cameraRaw	White Balance	白平衡
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+	Turn Tip with View	筆尖隨檢視旋轉
+	Off: the brush tip keeps its angle on screen when the view is rotated	關閉：旋轉檢視時，筆刷筆尖在螢幕上保持角度

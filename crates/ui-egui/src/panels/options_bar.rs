@@ -147,6 +147,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The per-tool options of the bar: the brush, mixer, marquee, pencil and view controls.
+/// Brush › Turn Tip with View (`ToolOptions::brush_tip_turns_with_view`).
+fn tip_turns_with_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    widgets::vline(ui, 22.0);
+    widgets::checkbox(ui, &mut app.ui.tool_options.brush_tip_turns_with_view, tl!("Turn Tip with View"))
+        .on_hover_text(tl!("Off: the brush tip keeps its angle on screen when the view is rotated"));
+}
+
 /// Brush family options share the same per-tool settings model.
 fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, b: &mut BrushSettings) {
     match app.ui.tool {
@@ -186,6 +193,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             widgets::vline(ui, 22.0);
             if icons::button(ui, "circle-dot", 24.0, b.pressure_size, tl!("Always use pressure for size")).clicked() {
                 b.pressure_size = !b.pressure_size;
+            }
+            if app.ui.tool == Tool::Brush {
+                tip_turns_with_view(app, ui);
             }
         }
         // Pencil: Photoshop's options (no hardness or flow: the pencil is always hard).
@@ -235,6 +245,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             widgets::vline(ui, 22.0);
             widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"));
             widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"));
+            if app.ui.tool == Tool::Brush {
+                tip_turns_with_view(app, ui);
+            }
         }
         Tool::MixerBrush => {
             brush_preset_chip(ui, b, &mut app.ui);

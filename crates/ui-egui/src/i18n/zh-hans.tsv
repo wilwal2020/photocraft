@@ -3676,3 +3676,5 @@ cameraRaw	White Balance	白平衡
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设
+	Turn Tip with View	笔尖随视图旋转
+	Off: the brush tip keeps its angle on screen when the view is rotated	关闭：旋转视图时，画笔笔尖在屏幕上保持角度

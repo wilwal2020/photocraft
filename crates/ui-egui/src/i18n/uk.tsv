@@ -4695,3 +4695,5 @@ cameraRaw	White Balance	Баланс білого
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу
+	Turn Tip with View	Обертати кінчик із виглядом
+	Off: the brush tip keeps its angle on screen when the view is rotated	Вимк.: кінчик пензля зберігає свій кут на екрані, коли вигляд повернуто

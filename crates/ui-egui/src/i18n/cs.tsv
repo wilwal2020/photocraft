@@ -4730,3 +4730,5 @@ cameraRaw	White Balance	Vyvážení bílé
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+	Turn Tip with View	Otáčet hrot s pohledem
+	Off: the brush tip keeps its angle on screen when the view is rotated	Vypnuto: hrot štětce si při otočeném pohledu zachová úhel na obrazovce

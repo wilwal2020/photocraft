@@ -4205,3 +4205,5 @@ cameraRaw	White Balance	화이트 밸런스
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정
+	Turn Tip with View	보기와 함께 팁 회전
+	Off: the brush tip keeps its angle on screen when the view is rotated	끄면: 보기를 회전해도 브러시 팁이 화면에서 각도를 유지합니다
