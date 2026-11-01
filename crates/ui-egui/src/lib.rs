@@ -232,6 +232,7 @@ pub use panels::layer_row_ui;
 use panels::layer_transfer;
 pub use panels::layer_tree_ui;
 pub use panels::layers_panel_ui;
+pub use panels::libraries_ui;
 use panels::mask_props_ui;
 pub use panels::mask_thumbs_ui;
 use panels::panel_docking;

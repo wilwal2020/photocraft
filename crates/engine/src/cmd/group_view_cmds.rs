@@ -3,6 +3,9 @@
 //! A group's open/closed state is document data ([`photocraft_doc::Group::expanded`], the PSD
 //! section divider's open/closed folder type, saved in `.pcraft` too) but, as in Photoshop,
 //! toggling it is a view change: no history step, and a clean document stays clean.
+//!
+//! Opening and closing groups is recorded into actions, so an action can close (or open) the
+//! current group: a step made on the only selected group replays on the group selected then.
 
 use std::sync::Arc;
 
@@ -146,10 +149,10 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Expand/Collapse Group",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"expanded":bool?,"all":bool?,"scope":"group"|"siblings"|"tree"|"siblingsTree"?} (no expanded: toggle; scope widens it within the group's folder: siblings = every group beside it, tree = it and every group inside it, siblingsTree = both; all: every group; not an undo step)"##,
+        params: r##"{"layer":id?,"expanded":bool?,"all":bool?,"scope":"group"|"siblings"|"tree"|"siblingsTree"?} (no expanded: toggle; scope widens it within the group's folder: siblings = every group beside it, tree = it and every group inside it, siblingsTree = both; all: every group; not an undo step, but recorded into actions)"##,
         enabled: has_group,
         run: set_expanded,
-        journal: false,
+        journal: true,
     }]
 }
 
@@ -258,5 +261,32 @@ mod tests {
         assert!(empty.execute(ID, json!({})).is_err());
         empty.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         assert!(empty.execute(ID, json!({"all": true})).is_err(), "no groups: disabled");
+    }
+
+    /// Closing and opening the current group are action steps: recorded on the only selected
+    /// group, they replay on whichever group is selected when the action plays, in any document.
+    #[test]
+    fn closing_and_opening_the_current_group_record_into_actions() {
+        let (mut s, _, outer) = session();
+        s.execute("layer.select", json!({"layer": outer, "mode": "replace"})).unwrap();
+        s.execute("actions.record", json!({"name": "Close Group"})).unwrap();
+        s.execute(ID, json!({"layer": outer, "expanded": false})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        s.execute("actions.record", json!({"name": "Open Group"})).unwrap();
+        s.execute(ID, json!({"layer": outer, "expanded": true})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        let steps = s.execute("actions.get", json!({"action": "Close Group"})).unwrap()["steps"].clone();
+        assert_eq!(steps, json!([[ID, {"expanded": false, "layer": {"current": true}}]]), "the step follows the selected group, not this id");
+
+        // Another document, another group.
+        let (mut t, inner, other) = session();
+        t.actions = std::mem::take(&mut s.actions);
+        t.execute("layer.select", json!({"layer": inner, "mode": "replace"})).unwrap();
+        t.execute("actions.play", json!({"action": "Close Group"})).unwrap();
+        assert!(!expanded(&t, inner) && expanded(&t, other), "only the selected group closed");
+        let before = t.active().unwrap().history.undo_label().map(str::to_string);
+        t.execute("actions.play", json!({"action": "Open Group"})).unwrap();
+        assert!(expanded(&t, inner));
+        assert_eq!(t.active().unwrap().history.undo_label().map(str::to_string), before, "still not an undo step");
     }
 }

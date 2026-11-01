@@ -1,5 +1,6 @@
 //! Window › Gradients, Patterns (tabs of the Color card, as in Photoshop's Essentials workspace),
-//! Styles, Shapes, Tool Presets and Clone Source (floating panels).
+//! Styles, Shapes, Tool Presets, Clone Source and Libraries (floating panels; Libraries is drawn by
+//! `libraries_ui` in the same browser).
 //!
 //! The preset panels share one browser: folders with disclosure triangles, a thumbnail grid (or a
 //! list when the size slider is at its minimum), a rename field, a context menu (Rename, Delete,
@@ -36,6 +37,7 @@ pub struct PresetUi {
     pub shapes: bool,
     pub tool_presets: bool,
     pub clone_source: bool,
+    pub libraries: bool,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
     /// Folders whose open state differs from the default (only the first folder starts open).
@@ -113,8 +115,15 @@ impl PresetUi {
     }
 }
 
-const PANELS: [&str; 6] =
-    ["window.panel.gradients", "window.panel.patterns", "window.panel.styles", "window.panel.shapes", "window.panel.toolPresets", "window.panel.cloneSource"];
+const PANELS: [&str; 7] = [
+    "window.panel.gradients",
+    "window.panel.patterns",
+    "window.panel.styles",
+    "window.panel.shapes",
+    "window.panel.toolPresets",
+    "window.panel.cloneSource",
+    "window.panel.libraries",
+];
 const MIN_THUMB: f32 = 20.0;
 
 /// Window-menu ids handled here.
@@ -137,6 +146,7 @@ fn float_flag<'a>(p: &'a mut PresetUi, id: &str) -> Option<&'a mut bool> {
         "window.panel.shapes" => &mut p.shapes,
         "window.panel.toolPresets" => &mut p.tool_presets,
         "window.panel.cloneSource" => &mut p.clone_source,
+        "window.panel.libraries" => &mut p.libraries,
         _ => return None,
     })
 }
@@ -184,7 +194,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, id: &str, p: Value) -> Option<Value> 
 
 // ------------------------------------------------------------------ textures
 
-fn cached_texture(ctx: &egui::Context, key: impl std::hash::Hash + std::fmt::Debug, make: impl FnOnce() -> ColorImage) -> TextureHandle {
+pub(crate) fn cached_texture(ctx: &egui::Context, key: impl std::hash::Hash + std::fmt::Debug, make: impl FnOnce() -> ColorImage) -> TextureHandle {
     let id = egui::Id::unique(("preset-tex", key));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return t;
@@ -346,8 +356,9 @@ pub(crate) enum Ev {
 }
 
 fn group_open(st: &PresetUi, panel: &str, gi: usize, name: &str) -> bool {
-    // Swatch groups are small and all start open (Photoshop); other panels open the first only.
-    (gi == 0 || panel == crate::swatches_ui::PANEL) != st.toggled.contains(&format!("{panel}/{name}"))
+    // Swatch groups are small and all start open (Photoshop), and so do libraries; other panels
+    // open the first only.
+    (gi == 0 || panel == crate::swatches_ui::PANEL || panel == crate::libraries_ui::PANEL) != st.toggled.contains(&format!("{panel}/{name}"))
 }
 
 /// The footer's height (gap, size slider and buttons) before it has been measured.
@@ -697,7 +708,7 @@ fn empty(ui: &mut egui::Ui, s: &str) {
 
 /// Where drops onto the canvas are accepted: the canvas proper, rulers excluded (a drop on the
 /// ruler strip is not a canvas drop).
-fn canvas_drop_rect(app: &PhotocraftApp) -> egui::Rect {
+pub(crate) fn canvas_drop_rect(app: &PhotocraftApp) -> egui::Rect {
     crate::rulers::content_rect(app, app.last_canvas_rect)
 }
 

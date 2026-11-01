@@ -454,6 +454,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("style.presets.exportAsl", serde_json::json!({"path": 5})),
         ("layer.layerStyle.contours.load", serde_json::json!({"path": "/outside/set.shc"})),
         ("layer.layerStyle.contours.save", serde_json::json!({"path": "/outside/set.shc"})),
+        ("library.addImage", serde_json::json!({"path": "/outside/leaf.png"})),
     ] {
         assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
     }
@@ -470,6 +471,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
         ("layer.layerStyle.contours.load", serde_json::json!({"data": "QUJD"})),
         ("layer.layerStyle.contours.save", serde_json::json!({"names": ["a"]})),
+        ("library.addImage", serde_json::json!({"merged": true})),
     ] {
         assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
     }

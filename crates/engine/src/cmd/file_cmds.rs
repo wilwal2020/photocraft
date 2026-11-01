@@ -23,8 +23,8 @@ use crate::{EngineError, Result, Session};
 mod batch_run;
 mod export;
 mod info;
-mod open;
-mod paths;
+pub(crate) mod open;
+pub(crate) mod paths;
 mod processing;
 mod save;
 

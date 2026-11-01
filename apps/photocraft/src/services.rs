@@ -347,6 +347,12 @@ pub fn presets_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("Presets"))
 }
 
+/// The Libraries panel's store (a manifest plus one `.pcraft` per item; see
+/// `photocraft_engine::library_cmds::store`).
+pub fn libraries_dir() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("Libraries"))
+}
+
 /// Camera Raw's preset folders: PhotoCraft's own (`<config dir>/Presets/Camera Raw`) and the
 /// ones Photoshop's Camera Raw keeps presets in, the user's (`%APPDATA%` on Windows, the user's
 /// Library on macOS) and Adobe's installed ones (`%PROGRAMDATA%`, the system Library), where they
@@ -807,6 +813,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         os_events: None,
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
+        library_store: None,
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }

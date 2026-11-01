@@ -326,7 +326,27 @@ pub enum Started {
 /// Commands that never edit the active document, allowed while a job runs on it.
 fn independent_of_document(id: &str) -> bool {
     const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets."];
-    const IDS: &[&str] = &["file.new", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
+    const IDS: &[&str] = &[
+        "file.new",
+        "file.close",
+        "file.closeAll",
+        "edit.preferences",
+        "edit.colorSettings",
+        "edit.keyboardShortcuts",
+        "edit.menus",
+        // Opening or closing a group in the Layers panel is a view change (recorded into actions).
+        "layer.setExpanded",
+        // Editing the Libraries panel's libraries, which no document holds.
+        "library.list",
+        "library.new",
+        "library.rename",
+        "library.delete",
+        "library.select",
+        "library.addColor",
+        "library.renameItem",
+        "library.deleteItem",
+        "library.moveItem",
+    ];
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
 

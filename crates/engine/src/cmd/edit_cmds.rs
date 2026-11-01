@@ -64,7 +64,7 @@ fn more_than_pixels(l: &Layer) -> bool {
 }
 
 /// A scratch document in the source's colour, to hold copied layers.
-fn scratch_doc(doc: &Document) -> Document {
+pub(crate) fn scratch_doc(doc: &Document) -> Document {
     let mut copies = Document::new("", doc.size, doc.mode, doc.depth);
     copies.icc_profile = doc.icc_profile.clone();
     copies.resolution_dpi = doc.resolution_dpi;
@@ -74,7 +74,7 @@ fn scratch_doc(doc: &Document) -> Document {
 
 /// Scope linked records to the copied layer tree: a PSD block can also hold files belonging
 /// to unselected or hidden layers, which must not follow this copy into a native save.
-fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
+pub(crate) fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
     fn collect<'a>(layers: &'a [Layer], depth: usize, paths: &mut std::collections::HashSet<&'a str>) -> Result<()> {
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(EngineError::Other("can't copy linked smart objects from layers nested too deeply".into()));
@@ -204,7 +204,7 @@ fn active_id(s: &Session) -> Result<LayerId> {
 /// selected or no selection, already in the clip's format) is shared copy-on-write, so a plain
 /// Copy or Select All, Copy costs a pointer per tile; only the other tiles are read and written,
 /// one at a time, instead of the whole area as one `f32` buffer.
-fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
+pub(crate) fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     let fmt = src.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let area = match sel {
@@ -278,7 +278,7 @@ fn lift_region(src: &Surface, sel: Option<&Surface>, r: Rect, n: usize) -> Resul
 }
 
 /// Merged composite of the visible document as a surface in the document's format.
-fn merged_surface(doc: &Document) -> Surface {
+pub(crate) fn merged_surface(doc: &Document) -> Surface {
     let fmt = doc.pixel_format();
     photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
 }
@@ -436,6 +436,15 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// converted to the document's colour, moved as the pixels would be, above the active layer. A pasted smart object gets its
 /// own contents, independent of the copied one (as across documents).
 fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<Value> {
+    let id = insert_layers(s, layers, dx, dy, "Paste", true)?;
+    Ok(json!({"layer": id.0, "offset": [dx, dy]}))
+}
+
+/// Inserts fresh copies of `layers` (a scratch document holding whole layers, as the clipboard
+/// and library items do) above the active layer of the active document, moved by `dx`, `dy`, as
+/// one history step named `label`; `deselect` drops the selection in the same step (Paste).
+/// Returns the topmost new layer.
+pub(crate) fn insert_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32, label: &str, deselect: bool) -> Result<LayerId> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut copies = layers.clone();
     for l in &mut copies.layers {
@@ -462,7 +471,7 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
             linked.push((*signature, *key, missing));
         }
     }
-    let id = s.edit("Paste", |doc, active| {
+    s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
         doc.metadata.psd_global_blocks.extend(linked);
         // The first pasted layer goes where a new layer would; the rest stack above it.
@@ -471,11 +480,12 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
             *active = Some(crate::layer_place::insert_new(doc, *active, l, place));
             place = crate::layer_place::Place::Above;
         }
-        crate::cmd::layer_multi_cmds::check_group_depth(doc, "Paste")?;
-        doc.selection = None;
+        crate::cmd::layer_multi_cmds::check_group_depth(doc, label)?;
+        if deselect {
+            doc.selection = None;
+        }
         active.ok_or(EngineError::Other("nothing to paste".into()))
-    })?;
-    Ok(json!({"layer": id.0, "offset": [dx, dy]}))
+    })
 }
 
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the

@@ -769,7 +769,7 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Opti
     }
 }
 
-fn missing_file(err: &str) -> bool {
+pub(crate) fn missing_file(err: &str) -> bool {
     let lower = err.to_ascii_lowercase();
     lower.contains("not found") || lower.contains("no such file") || lower.contains("os error 2")
 }
@@ -1222,7 +1222,8 @@ impl Session {
         warnings
     }
 
-    /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
+    /// Write pending brush preset, Actions and pattern changes to the attached store, and library
+    /// changes to the library store (no-op without them).
     pub fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
         let actions_rev = self.actions.rev;
@@ -1239,6 +1240,7 @@ impl Session {
             st.sync_actions(&self.actions.list, &self.actions.prefs, actions_rev);
             st.sync_patterns(&self.patterns);
         }
+        self.sync_library_store();
     }
 
     /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so

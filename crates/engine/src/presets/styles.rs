@@ -189,7 +189,7 @@ fn resolve_style_effects(s: &Session, fx_list: &[Effect]) -> Result<(Vec<Effect>
 }
 
 /// Writes a preset onto one layer: replaces its effects, or appends to them when `add`.
-fn apply_to_layer(l: &mut Layer, style: &StylePreset, effects: &[Effect], add: bool) {
+pub(crate) fn apply_to_layer(l: &mut Layer, style: &StylePreset, effects: &[Effect], add: bool) {
     if add {
         l.effects.items.extend(effects.iter().cloned());
     } else {
@@ -315,6 +315,20 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,
 /// transparent around the square).
 pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
+    let mut effects = Vec::new();
+    let mut patterns = Vec::new();
+    for fx in &style.effects {
+        if let Ok((fx, pat)) = crate::pattern_cmds::resolve_effect(s, fx.clone()) {
+            patterns.extend(pat);
+            effects.push(fx);
+        }
+    }
+    swatch(&StylePreset { effects, ..style.clone() }, &patterns, size)
+}
+
+/// [`thumbnail`] of a style whose effects already name their patterns, which `patterns` holds
+/// (a Libraries panel style carries its own).
+pub fn swatch(style: &StylePreset, patterns: &[Pattern], size: u32) -> Vec<u8> {
     let size = size.clamp(8, 256);
     let mut doc = Document::new("style", Size::new(size, size), ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
@@ -337,14 +351,10 @@ pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
         }
         surf.write_region(Rect::new(0, 0, size as i32, size as i32), &px);
     }
-    for fx in &style.effects {
-        if let Ok((fx, pat)) = crate::pattern_cmds::resolve_effect(s, fx.clone()) {
-            if let Some(p) = pat {
-                crate::pattern_cmds::ensure_in_doc(&mut doc, &p);
-            }
-            l.effects.items.push(fx);
-        }
+    for p in patterns {
+        crate::pattern_cmds::ensure_in_doc(&mut doc, p);
     }
+    l.effects.items = style.effects.iter().cloned().map(|e| e.in_mode(ColorMode::Rgb)).collect();
     l.effects.enabled = true;
     if let Some(b) = style.blend {
         l.blend = b;

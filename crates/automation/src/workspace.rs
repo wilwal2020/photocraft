@@ -498,6 +498,8 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
         }
         "plugin.reload" => true,
+        // Libraries: an image file added by path; selected pixels need none.
+        "library.addImage" => params.get("path").is_some(),
         _ => false,
     }
 }

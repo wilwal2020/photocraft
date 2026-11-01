@@ -148,9 +148,9 @@ note = "artboard_tool.rs: Artboard tool draws, selects, moves and resizes boards
 [[item]]
 id = "FILE-215-21"
 target = "Local libraries of colours, patterns, images and layers, as linked items or copies"
-status = "missing"
+status = "partial"
 issue = 215
-note = "Only preset libraries (preset_store.rs)"
+note = "Window › Libraries (library_cmds.rs, libraries_ui.rs): named libraries of layers (masks, effects, group children), images (a file or selected pixels), layer styles and colours, saved next to the preferences as a manifest plus one .pcraft per item, placed or applied as copies in any document. Missing: pattern items, linked (live-updating) library graphics, Creative Cloud sync"
 
 [[item]]
 id = "FILE-216-1"

@@ -243,4 +243,16 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
     if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
         app.ui.status = w;
     }
+    if let Some(rx) = &app.services.library_store {
+        match rx.try_recv() {
+            Ok(opened) => {
+                app.services.library_store = None;
+                if let Some(w) = app.session.attach_library_store(opened).into_iter().next() {
+                    app.ui.status = w;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.library_store = None,
+        }
+    }
 }
