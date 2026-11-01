@@ -27,6 +27,8 @@ pub enum Group {
     Color,
     /// Properties | Adjustments.
     Properties,
+    /// Libraries (not in the default workspace; Window › Libraries opens it).
+    Libraries,
     /// Character | Paragraph (not in the default workspace; Window › Character opens it, #150).
     Character,
     /// Brushes (not in the default workspace; Window › Brushes opens it). Brush Settings is a
@@ -45,13 +47,23 @@ pub enum Group {
 
 impl Group {
     /// Photoshop Essentials order, top to bottom.
-    pub const ALL: [Group; 8] =
-        [Group::Color, Group::Properties, Group::Character, Group::Brushes, Group::Navigator, Group::History, Group::Layers, Group::Timelapse];
+    pub const ALL: [Group; 9] = [
+        Group::Color,
+        Group::Properties,
+        Group::Libraries,
+        Group::Character,
+        Group::Brushes,
+        Group::Navigator,
+        Group::History,
+        Group::Layers,
+        Group::Timelapse,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
             Group::Color => "color",
             Group::Properties => "properties",
+            Group::Libraries => "libraries",
             Group::Character => "character",
             Group::Brushes => "brushes",
             Group::Navigator => "navigator",
@@ -67,6 +79,7 @@ impl Group {
         match self {
             Group::Color => 190.0,
             Group::Properties => 250.0,
+            Group::Libraries => 320.0,
             Group::Character => 270.0,
             Group::Brushes => 360.0,
             Group::Navigator => 210.0,
@@ -82,6 +95,7 @@ impl Group {
         match self {
             Group::Color => 130.0,
             Group::Properties => 160.0,
+            Group::Libraries => 160.0,
             Group::Character => 160.0,
             Group::Brushes => 200.0,
             Group::Navigator => 140.0,
@@ -119,6 +133,7 @@ impl Group {
             Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns"],
             Group::Color => &["Swatches", "Color", "Gradients", "Patterns"],
             Group::Properties => &["Properties", "Adjustments"],
+            Group::Libraries => &["Libraries"],
             Group::Character => &["Character", "Paragraph"],
             Group::Brushes => &["Brushes"],
             Group::Navigator => &["Navigator", "Histogram", "Info"],
@@ -144,6 +159,7 @@ impl Group {
         match self {
             Group::Color => &mut tabs.color,
             Group::Properties => &mut tabs.properties,
+            Group::Libraries => &mut tabs.libraries,
             Group::Character => &mut tabs.character,
             Group::Brushes => &mut tabs.brushes,
             Group::Navigator => &mut tabs.navigator,
@@ -162,6 +178,7 @@ impl Group {
         match self {
             Group::Color => panels.color,
             Group::Properties => panels.properties,
+            Group::Libraries => panels.libraries,
             Group::Character => panels.character,
             Group::Brushes => panels.brushes,
             Group::Navigator => panels.navigator,
@@ -175,6 +192,7 @@ impl Group {
         match self {
             Group::Color => &mut panels.color,
             Group::Properties => &mut panels.properties,
+            Group::Libraries => &mut panels.libraries,
             Group::Character => &mut panels.character,
             Group::Brushes => &mut panels.brushes,
             Group::Navigator => &mut panels.navigator,

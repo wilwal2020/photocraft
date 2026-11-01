@@ -42,6 +42,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),
     ("brushes", "Brushes", Group::Brushes),
+    ("libraries", "Libraries", Group::Libraries),
 ];
 
 /// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
@@ -1231,6 +1232,7 @@ pub(crate) fn prepare_legacy_update(
                 Group::Properties => tabs.properties,
                 Group::Character => tabs.character,
                 Group::Brushes => tabs.brushes,
+                Group::Libraries => tabs.libraries,
                 Group::Navigator => tabs.navigator,
                 Group::History => tabs.history,
                 Group::Layers => tabs.layers,

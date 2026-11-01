@@ -58,6 +58,9 @@ pub struct Panels {
     /// Settings stays a separate floating panel).
     #[serde(default)]
     pub brushes: bool,
+    /// Window › Libraries: a dock panel of its own (not in the default workspace).
+    #[serde(default)]
+    pub libraries: bool,
     /// Window › Timelapse: File › Timelapse's panel, a dock panel of its own (not in the
     /// default workspace).
     #[serde(default)]
@@ -112,6 +115,7 @@ impl Default for Panels {
             brush_settings: false,
             character: false,
             brushes: false,
+            libraries: false,
             timelapse: false,
             toolbar_double: false,
             toolbar_place: ToolbarPlace::Start,

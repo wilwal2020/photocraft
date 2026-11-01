@@ -12,6 +12,7 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "options" => "window.toggle.options",
         "brushSettings" => "window.toggle.brushSettings",
         "brushes" => "window.toggle.brushes",
+        "libraries" => "window.toggle.libraries",
         "timelapse" => "window.toggle.timelapse",
         _ => return None,
     })
@@ -765,6 +766,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         "options" => &mut panels.options_bar,
         "brushSettings" => &mut panels.brush_settings,
         "brushes" => &mut panels.brushes,
+        "libraries" => &mut panels.libraries,
         "timelapse" => &mut panels.timelapse,
         "dock" => &mut panels.dock,
         "rail" => &mut panels.rail_closed,

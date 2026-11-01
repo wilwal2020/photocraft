@@ -1,6 +1,6 @@
 //! Window › Gradients, Patterns (tabs of the Color card, as in Photoshop's Essentials workspace),
-//! Styles, Shapes, Tool Presets, Clone Source and Libraries (floating panels; Libraries is drawn by
-//! `libraries_ui` in the same browser).
+//! Styles, Shapes, Tool Presets and Clone Source (floating panels). The Libraries dock panel
+//! (`libraries_ui`) uses the same browser.
 //!
 //! The preset panels share one browser: folders with disclosure triangles, a thumbnail grid (or a
 //! list when the size slider is at its minimum), a rename field, a context menu (Rename, Delete,
@@ -37,7 +37,6 @@ pub struct PresetUi {
     pub shapes: bool,
     pub tool_presets: bool,
     pub clone_source: bool,
-    pub libraries: bool,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
     /// Folders whose open state differs from the default (only the first folder starts open).
@@ -115,15 +114,8 @@ impl PresetUi {
     }
 }
 
-const PANELS: [&str; 7] = [
-    "window.panel.gradients",
-    "window.panel.patterns",
-    "window.panel.styles",
-    "window.panel.shapes",
-    "window.panel.toolPresets",
-    "window.panel.cloneSource",
-    "window.panel.libraries",
-];
+const PANELS: [&str; 6] =
+    ["window.panel.gradients", "window.panel.patterns", "window.panel.styles", "window.panel.shapes", "window.panel.toolPresets", "window.panel.cloneSource"];
 const MIN_THUMB: f32 = 20.0;
 
 /// Window-menu ids handled here.
@@ -146,7 +138,6 @@ fn float_flag<'a>(p: &'a mut PresetUi, id: &str) -> Option<&'a mut bool> {
         "window.panel.shapes" => &mut p.shapes,
         "window.panel.toolPresets" => &mut p.tool_presets,
         "window.panel.cloneSource" => &mut p.clone_source,
-        "window.panel.libraries" => &mut p.libraries,
         _ => return None,
     })
 }

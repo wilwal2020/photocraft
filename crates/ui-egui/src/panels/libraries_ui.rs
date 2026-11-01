@@ -255,7 +255,7 @@ mod tests {
         let ctx = egui::Context::default();
         assert!(crate::menus::is_live("window.panel.libraries"));
         crate::menus::invoke(&mut app, &ctx, "window.panel.libraries", Value::Null).unwrap();
-        assert!(app.ui.presets_ui.libraries);
+        assert!(app.ui.panels.libraries, "Window › Libraries opens its dock group");
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 300.0)).build_ui_state(|ui, app: &mut PhotocraftApp| libraries_panel(app, ui), app);
         h.run_steps(2);
         assert!(h.query_by_label("No libraries yet").is_some());

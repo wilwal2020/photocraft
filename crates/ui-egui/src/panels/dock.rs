@@ -140,6 +140,7 @@ fn dock_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::doc
         (Group::Properties, _) => adjustments_grid(app, ui),
         (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),
         (Group::Brushes, _) => crate::brushes_tab::show(app, ui),
+        (Group::Libraries, _) => crate::libraries_ui::libraries_panel(app, ui),
         (Group::Navigator, 0) => navigator(app, ui),
         (Group::Navigator, 1) => crate::histogram_panel::show(app, ui),
         (Group::Navigator, _) => info_panel(app, ui),

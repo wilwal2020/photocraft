@@ -264,6 +264,32 @@ fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group
     assert!(valid(layout));
 }
 
+/// Window › Libraries opens a dock panel like any other: its tab drags into another group, and it
+/// floats and docks back.
+#[test]
+fn libraries_opens_in_the_dock_and_groups_like_any_panel() {
+    let mut app = app();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.libraries", json!({})).unwrap();
+    assert!(app.ui.panels.libraries);
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    assert!(h.query_by_label("No libraries yet").is_some(), "the panel body draws in the dock");
+    let source = tab_rect(&h, "libraries").center();
+    let destination = tab_rect(&h, "layers").center();
+    drag(&mut h, source, destination);
+    let layout = lay(h.state());
+    let mut members = group_members(layout, "libraries");
+    members.sort();
+    assert_eq!(members, ["channels", "layers", "libraries", "paths"]);
+    assert!(in_dock_column(layout, "libraries") && valid(layout));
+
+    h.state_mut().run("window.panel.float", json!({"panel":"libraries"})).unwrap();
+    assert!(lay(h.state()).floating.iter().any(|window| window.contains("libraries")));
+    h.state_mut().run("window.panel.dock", json!({"panel":"libraries"})).unwrap();
+    assert!(group_members(lay(h.state()), "libraries").contains(&"layers".to_string()));
+    crate::menus::invoke(h.state_mut(), &egui::Context::default(), "window.panel.libraries", json!({})).unwrap();
+    assert!(!lay(h.state()).contains(&"libraries".to_string()), "the menu item closes it again");
+}
+
 #[test]
 fn saved_workspace_restores_the_custom_tree_and_hidden_panel_placement() {
     let mut app = app();

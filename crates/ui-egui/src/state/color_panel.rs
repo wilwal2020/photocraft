@@ -15,6 +15,8 @@ pub struct DockTabs {
     pub character: usize,
     /// Brushes (a group of one).
     pub brushes: usize,
+    /// Libraries (a group of one).
+    pub libraries: usize,
     /// Timelapse (a group of one).
     pub timelapse: usize,
 }
