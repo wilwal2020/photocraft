@@ -308,7 +308,9 @@ fn build() -> Vec<CommandSpec> {
         ),
         cmd!("file.close", "Close", ["File"], Some("Cmd+W"), r##"{"document":index?}"##, has_doc, |s, p| {
             let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
-            s.close(i).ok_or(EngineError::NoDocument)?;
+            if !s.close_and_free(i) {
+                return Err(EngineError::NoDocument);
+            }
             Ok(Value::Null)
         }),
         // Edit

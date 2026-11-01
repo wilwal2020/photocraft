@@ -26,11 +26,26 @@ fn main() {
     let mut s = Session::new();
     s.add_document(doc, None);
     let doc = s.active().unwrap().doc.clone();
-    let pixel_layers: Vec<u64> = doc.walk().iter().filter(|(_, _, l)| l.surface().is_some()).map(|(_, _, l)| l.id.0).collect();
-    println!("{} × {}, {} layers ({} pixel)", doc.size.width, doc.size.height, doc.walk().len(), pixel_layers.len());
+    // Shown pixel layers only: a hidden target refuses strokes, fills and moves.
+    let pixel_layers: Vec<u64> = doc.walk().iter().filter(|(p, _, l)| l.surface().is_some() && doc.shown_at(p)).map(|(_, _, l)| l.id.0).collect();
+    println!("{} × {}, {} layers ({} shown pixel)", doc.size.width, doc.size.height, doc.walk().len(), pixel_layers.len());
     let mid = pixel_layers[pixel_layers.len() / 2];
     let (w, h) = (doc.size.width as f64, doc.size.height as f64);
     let stroke: Vec<Value> = (0..200).map(|i| json!([w * 0.2 + i as f64 * 3.0, h * 0.3 + (i as f64 * 0.1).sin() * 80.0, 0.8])).collect();
+    // The first live stroke on the document as opened (the canvas begins one at pen-down), then
+    // more: user report of a 254 ms first push.
+    let _ = s.execute("layer.select", json!({"layer": mid}));
+    let live_pts =
+        |n: usize, at: usize| -> Value { json!({"points": (0..n).map(|i| json!([w * 0.4 + (at + i) as f64 * 2.0, h * 0.4, 0.7])).collect::<Vec<_>>()}) };
+    for round in 0..3 {
+        let t = Instant::now();
+        let mut live = photocraft_engine::brush_cmds::LiveStroke::begin(&s, &live_pts(1, 0)).unwrap_or_else(|e| panic!("live stroke: {e}"));
+        let begun = t.elapsed().as_secs_f64() * 1e3;
+        let pts: Vec<_> = (1..40).map(|i| photocraft_engine::paint::StrokePoint::new(w * 0.4 + i as f64 * 2.0, h * 0.4, 0.7)).collect();
+        let t = Instant::now();
+        let _ = live.push(&pts);
+        println!("  live stroke {round}: begin {begun:.1} ms, 39 more points {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
     let mut run = |label: &str, f: &mut dyn FnMut(&mut Session, usize)| {
         let mut times = Vec::new();
         for i in 0..reps {
@@ -41,7 +56,10 @@ fn main() {
         println!("  {label:<40} {:8.1} ms  (max {:.1})", median(times.clone()), times.iter().copied().fold(0.0, f64::max));
     };
     let ex = |s: &mut Session, id: &str, p: Value| {
-        s.execute(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
+        // A step this document refuses (a hidden target layer, say) is reported, and the rest run.
+        if let Err(e) = s.execute(id, p) {
+            eprintln!("    ({id}: {e})");
+        }
     };
     run("select a layer", &mut |s, i| ex(s, "layer.select", json!({"layer": pixel_layers[i % pixel_layers.len()]})));
     run("opacity of a layer", &mut |s, i| ex(s, "layer.setProps", json!({"layer": mid, "opacity": 0.5 + i as f64 * 0.05})));
@@ -66,7 +84,10 @@ fn main() {
         ex(s, "select.deselect", json!({}));
     });
     // A pixel layer that is still there after the deletes.
-    let live = |s: &Session| s.active().unwrap().doc.walk().iter().filter(|(_, _, l)| l.surface().is_some()).map(|(_, _, l)| l.id.0).nth(3).unwrap();
+    let live = |s: &Session| {
+        let d = &s.active().unwrap().doc;
+        d.walk().iter().filter(|(p, _, l)| l.surface().is_some() && d.shown_at(p)).map(|(_, _, l)| l.id.0).next_back().unwrap()
+    };
     run("move a layer 10 px", &mut |s, _| {
         let id = live(s);
         ex(s, "layer.translate", json!({"layer": id, "dx": 10, "dy": 0}));
@@ -78,7 +99,17 @@ fn main() {
     });
     run("fill tool click (all layers)", &mut |s, _| ex(s, "paint.fill", json!({"x": w * 0.5, "y": h * 0.5, "reference": "all", "closeGap": 3})));
     run("fill tool click (current layer)", &mut |s, _| ex(s, "paint.fill", json!({"x": w * 0.5, "y": h * 0.5})));
+    // The click options the user paints with: all layers, Close Gap 2, Area Scaling 1, the
+    // editing layer's paint blocks the fill.
+    let user_fill = |x: f64, y: f64| json!({"x": x, "y": y, "reference": "all", "closeGap": 2.0, "areaScaling": 1.0, "scalingMode": "square", "layerBlocks": true, "tolerance": 33.0, "antiAlias": true});
+    run("fill tool click (user's options)", &mut |s, i| ex(s, "paint.fill", user_fill(w * (0.3 + 0.1 * i as f64), h * 0.5)));
+    run("fill tool click (user's, same spot)", &mut |s, _| ex(s, "paint.fill", user_fill(w * 0.5, h * 0.6)));
     run("magic wand click (all layers)", &mut |s, _| ex(s, "select.magicWand", json!({"x": w * 0.5, "y": h * 0.5, "sampleAllLayers": true})));
+    // The user's wand: the Fill tool's Close Gap 2 and Area Scaling 1 to the darkest pixel, all layers.
+    run("magic wand click (user's options)", &mut |s, i| {
+        let p = json!({"x": w * (0.3 + 0.1 * i as f64), "y": h * 0.5, "tolerance": 57.0, "sampleAllLayers": true, "closeGap": 2.0, "areaScaling": 1.0, "scalingMode": "darkest", "reference": "all", "gesture": format!("w{i}")});
+        ex(s, "select.magicWand", p)
+    });
     // Ctrl+Space clicks: the canvas, then rows low, middle and high in the stack.
     run("load visible: canvas click", &mut |s, _| ex(s, "select.loadVisible", json!({"x": w * 0.5, "y": h * 0.5})));
     let rows = |s: &Session| s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id.0).collect::<Vec<_>>();
@@ -93,4 +124,8 @@ fn main() {
         let doc = s.active().unwrap().doc.clone();
         let _ = photocraft_compose::render(&doc, doc.bounds());
     });
+    // Closing it, with the history the edits above left (the window waits for this).
+    let t = Instant::now();
+    ex(&mut s, "file.close", json!({}));
+    println!("  {:<40} {:8.1} ms", "close the document", t.elapsed().as_secs_f64() * 1e3);
 }

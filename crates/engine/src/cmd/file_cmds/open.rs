@@ -40,7 +40,7 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult
 pub(super) fn close_all(s: &mut Session) -> Result<Value> {
     let n = s.documents().len();
     while !s.documents().is_empty() {
-        s.close(s.documents().len() - 1);
+        s.close_and_free(s.documents().len() - 1);
     }
     Ok(json!({"closed": n}))
 }
@@ -53,7 +53,7 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.documents().len() - 1;
     for i in (0..s.documents().len()).rev() {
         if i != keep {
-            s.close(i);
+            s.close_and_free(i);
         }
     }
     s.set_active(0);

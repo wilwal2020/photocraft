@@ -850,10 +850,18 @@ fn scale(fill: &mut [bool], strength: &[u8], free: &[bool], w: usize, h: usize, 
     if amount.abs() < 0.5 || !fill.iter().any(|f| *f) {
         return;
     }
+    // Square: the pixels within `amount` steps, diagonals counting one (a chessboard distance,
+    // always whole), so a box of that reach.
+    let reach = amount.abs() as usize;
     if amount < 0.0 {
         let outside: Vec<bool> = fill.iter().map(|f| !f).collect();
-        let d = if o.scaling == Scaling::Square { chessboard(&outside, w, h) } else { edt(&outside, w, h) };
-        for (f, d) in fill.iter_mut().zip(&d) {
+        if o.scaling == Scaling::Square {
+            for (f, near) in fill.iter_mut().zip(square_grow(&outside, w, h, reach)) {
+                *f &= !near;
+            }
+            return;
+        }
+        for (f, d) in fill.iter_mut().zip(&edt(&outside, w, h)) {
             if *d <= -amount {
                 *f = false;
             }
@@ -861,8 +869,14 @@ fn scale(fill: &mut [bool], strength: &[u8], free: &[bool], w: usize, h: usize, 
         return;
     }
     match o.scaling {
-        Scaling::Round | Scaling::Square => {
-            let d = if o.scaling == Scaling::Square { chessboard(fill, w, h) } else { edt(fill, w, h) };
+        Scaling::Square => {
+            let grown = square_grow(fill, w, h, reach);
+            for (f, near) in fill.iter_mut().zip(grown) {
+                *f |= near;
+            }
+        }
+        Scaling::Round => {
+            let d = edt(fill, w, h);
             for (f, d) in fill.iter_mut().zip(&d) {
                 if *d <= amount {
                     *f = true;
@@ -881,21 +895,20 @@ fn grow_to_darkest(fill: &mut [bool], strength: &[u8], free: &[bool], w: usize, 
     let mut cost = vec![f32::INFINITY; n];
     let key = |c: f32| Reverse((c * 1024.0) as u32);
     let mut heap: BinaryHeap<(Reverse<u32>, usize)> = BinaryHeap::new();
-    // Only filled pixels beside a line pixel can step anywhere: the rest start the queue for
-    // nothing (a whole page of them took seconds).
-    let at_line = |i: usize| {
-        let (x, y) = (i % w, i / w);
-        (y.saturating_sub(1)..(y + 2).min(h))
-            .any(|ny| (x.saturating_sub(1)..(x + 2).min(w)).any(|nx| free.get(ny * w + nx) == Some(&false) && fill.get(ny * w + nx) == Some(&false)))
-    };
-    for (i, f) in fill.iter().enumerate() {
+    // Only filled pixels beside a line pixel (one of the 8 around, unfilled and not free) can step
+    // anywhere: the rest start the queue for nothing (a whole page of them took seconds).
+    let line: Vec<bool> = free.iter().zip(fill.iter()).map(|(f, filled)| !f && !filled).collect();
+    let at_line = square_grow(&line, w, h, 1);
+    drop(line);
+    for (i, (f, near)) in fill.iter().zip(&at_line).enumerate() {
         if *f && let Some(c) = cost.get_mut(i) {
             *c = 0.0;
-            if at_line(i) {
+            if *near {
                 heap.push((key(0.0), i));
             }
         }
     }
+    drop(at_line);
     let s = |j: usize| strength.get(j).copied().unwrap_or(0);
     while let Some((_, i)) = heap.pop() {
         let here = cost.get(i).copied().unwrap_or(f32::INFINITY);
@@ -931,29 +944,47 @@ fn grow_to_darkest(fill: &mut [bool], strength: &[u8], free: &[bool], w: usize, 
     }
 }
 
-/// Chessboard distance to the nearest `true` pixel (two chamfer passes; 1e10 with none).
-fn chessboard(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
-    let mut d: Vec<f32> = inside.iter().map(|v| if *v { 0.0 } else { 1e10 }).collect();
-    let at = |d: &[f32], x: i64, y: i64| {
-        if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 { 1e10 } else { d.get(y as usize * w + x as usize).copied().unwrap_or(1e10) }
-    };
-    for y in 0..h as i64 {
-        for x in 0..w as i64 {
-            let v = [(-1, 0), (-1, -1), (0, -1), (1, -1)].iter().map(|(dx, dy)| at(&d, x + dx, y + dy) + 1.0).fold(at(&d, x, y), f32::min);
-            if let Some(c) = d.get_mut(y as usize * w + x as usize) {
-                *c = v;
-            }
+/// The pixels no more than `reach` from a `true` one of `mask` across, down and diagonally (a
+/// chessboard distance): within `reach` along the row, then within `reach` of that down the
+/// column. Two sweeps each way, so the cost doesn't grow with `reach` (the chamfer distance it
+/// replaces was a fifth of a large fill click). Outside the image counts as nothing there.
+fn square_grow(mask: &[bool], w: usize, h: usize, reach: usize) -> Vec<bool> {
+    if w == 0 || mask.len() != w * h {
+        return mask.to_vec();
+    }
+    let reach = u32::try_from(reach).unwrap_or(u32::MAX);
+    // Along each row: how far the nearest `true` to the left, then to the right, is.
+    let mut rows = vec![false; mask.len()];
+    crate::par::chunks_mut(&mut rows, w, mask.len() >= 65_536, |y, out| {
+        let src = mask.get(y * w..(y + 1) * w).unwrap_or(&[]);
+        let mut gap = u32::MAX;
+        for (o, m) in out.iter_mut().zip(src) {
+            gap = if *m { 0 } else { gap.saturating_add(1) };
+            *o = gap <= reach;
+        }
+        gap = u32::MAX;
+        for (o, m) in out.iter_mut().zip(src).rev() {
+            gap = if *m { 0 } else { gap.saturating_add(1) };
+            *o |= gap <= reach;
+        }
+    });
+    // Down each column the same, a row at a time: rows since the last one near above, then below.
+    let mut near = vec![false; mask.len()];
+    let mut gap = vec![u32::MAX; w];
+    for (src, out) in rows.chunks_exact(w).zip(near.chunks_exact_mut(w)) {
+        for ((g, o), r) in gap.iter_mut().zip(out).zip(src) {
+            *g = if *r { 0 } else { g.saturating_add(1) };
+            *o = *g <= reach;
         }
     }
-    for y in (0..h as i64).rev() {
-        for x in (0..w as i64).rev() {
-            let v = [(1, 0), (1, 1), (0, 1), (-1, 1)].iter().map(|(dx, dy)| at(&d, x + dx, y + dy) + 1.0).fold(at(&d, x, y), f32::min);
-            if let Some(c) = d.get_mut(y as usize * w + x as usize) {
-                *c = v;
-            }
+    gap.fill(u32::MAX);
+    for (src, out) in rows.chunks_exact(w).zip(near.chunks_exact_mut(w)).rev() {
+        for ((g, o), r) in gap.iter_mut().zip(out).zip(src) {
+            *g = if *r { 0 } else { g.saturating_add(1) };
+            *o |= *g <= reach;
         }
     }
-    d
+    near
 }
 
 fn to_region(fill: &[bool], w: usize, h: usize, area: Rect, anti_alias: bool) -> Option<Region> {

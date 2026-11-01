@@ -156,6 +156,25 @@ impl Session {
         self.note_active_change();
         Some(d)
     }
+
+    /// [`Session::close`] for good (File › Close, Close All, Close Others): the document and its
+    /// history are let go of on a thread of their own, so the window doesn't wait for the memory
+    /// to be freed (user report: Close took 1.2 s on 2936 × 3000 with a long history).
+    /// `false` when there is no such document.
+    pub fn close_and_free(&mut self, index: usize) -> bool {
+        let Some(d) = self.close(index) else { return false };
+        free_later(d);
+        true
+    }
+}
+
+/// Drops `v` on a short-lived thread (where there are threads; else here).
+fn free_later<T: Send + 'static>(v: T) {
+    // A refused spawn drops the closure, and `v` with it, here.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = std::thread::Builder::new().name("photocraft-free".into()).spawn(move || drop(v));
+    #[cfg(target_arch = "wasm32")]
+    drop(v);
 }
 
 pub(super) fn fix_active(st: &mut DocState) {

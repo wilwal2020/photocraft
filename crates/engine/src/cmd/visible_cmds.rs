@@ -17,6 +17,7 @@ use photocraft_color::{BlendMode, Color};
 use photocraft_doc::{Document, Effect, Effects, FxCommon, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba};
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -127,9 +128,14 @@ fn clip_base(doc: &Document, path: &[usize]) -> Option<LayerId> {
     })
 }
 
-/// How dark the composite is at each pixel, premultiplied (a transparent pixel counts as black).
+/// How light a composite pixel is, premultiplied (a transparent pixel counts as black).
+fn shade_of(p: &[f32; 4]) -> f32 {
+    photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]) * p[3]
+}
+
+/// How dark the composite is at each pixel.
 fn tone(doc: &Document, rect: Rect) -> Vec<f32> {
-    photocraft_compose::render(doc, rect).px.iter().map(|p| photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]) * p[3]).collect()
+    photocraft_compose::render(doc, rect).px.iter().map(shade_of).collect()
 }
 
 /// The change between white and black probes of an opaque layer alone: 1 in RGB, less where the
@@ -163,13 +169,19 @@ pub fn visible_plane(doc: &Document, id: LayerId, source: Source) -> Option<Vec<
     let k = full_change(doc);
     // The two renders side by side: each leaves cores idle while its effect maps are built and
     // in its last band of tiles.
-    let (w, b) = rayon::join(|| tone(&white, area), || tone(&black, area));
+    let render = |d: &Document| photocraft_compose::render(d, area).px;
+    let (w, b) = rayon::join(|| render(&white), || render(&black));
+    // How far the tone moved, row by row on all cores (one pass over both renders was a fifth of
+    // the time on 2936 × 3000).
     let (aw, cw) = (area.width() as usize, canvas.width() as usize);
-    for (i, (w, b)) in w.iter().zip(&b).enumerate() {
-        let (x, y) = (area.x0 as usize - canvas.x0 as usize + i % aw, area.y0 as usize - canvas.y0 as usize + i / aw);
-        let v = (w - b) / k;
-        out[y * cw + x] = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
-    }
+    let (ox, oy) = ((area.x0 - canvas.x0) as usize, (area.y0 - canvas.y0) as usize);
+    let rows = out.par_chunks_mut(cw).skip(oy).take(area.height() as usize);
+    rows.zip(w.par_chunks(aw).zip(b.par_chunks(aw))).for_each(|(row, (w, b))| {
+        for (o, (w, b)) in row.iter_mut().skip(ox).zip(w.iter().zip(b)) {
+            let v = (shade_of(w) - shade_of(b)) / k;
+            *o = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        }
+    });
     Some(out)
 }
 

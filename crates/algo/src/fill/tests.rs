@@ -150,6 +150,37 @@ fn round_and_square_scaling_grow_by_distance() {
 }
 
 #[test]
+fn square_growth_reaches_what_a_chessboard_distance_does() {
+    // Every pixel against the nearest marked one by brute force, on scattered marks and edges.
+    let (w, h) = (37, 23);
+    let mut seed = 12345u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        seed >> 16
+    };
+    for density in [3u32, 40, 400] {
+        let mask: Vec<bool> = (0..w * h).map(|_| next() % 1000 < density).collect();
+        for reach in [0, 1, 2, 5, 40] {
+            let grown = square_grow(&mask, w, h, reach);
+            for (i, g) in grown.iter().enumerate() {
+                let (x, y) = ((i % w) as i64, (i / w) as i64);
+                let near = mask.iter().enumerate().any(|(j, m)| *m && ((j % w) as i64 - x).abs().max(((j / w) as i64 - y).abs()) <= reach as i64);
+                assert_eq!(*g, near, "density {density}, reach {reach}, pixel ({x}, {y})");
+            }
+        }
+    }
+    // Square Area Scaling both ways: grown by 2 from one pixel, then shrunk back by 2.
+    let mut img = Img::new(21, 21, INK);
+    for y in 6..15 {
+        for x in 6..15 {
+            img.set(x, y, CLEAR);
+        }
+    }
+    let shrunk = img.click(10, 10, FillOptions { scale: -2.0, scaling: Scaling::Square, ..hard() }).unwrap();
+    assert!(filled(&shrunk, 8, 8) && !filled(&shrunk, 7, 7) && !filled(&shrunk, 7, 10) && filled(&shrunk, 12, 12) && !filled(&shrunk, 13, 12));
+}
+
+#[test]
 fn negative_scaling_shrinks_the_fill() {
     let mut img = Img::new(20, 20, CLEAR);
     img.outline(5, 5, 15, 15);
