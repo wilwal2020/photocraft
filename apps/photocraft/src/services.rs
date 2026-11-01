@@ -366,6 +366,15 @@ fn camera_raw_preset_dirs(env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> p
             env("PROGRAMDATA").filter(|v| !v.is_empty()).map(|a| settings(PathBuf::from(a))),
             cfg!(target_os = "macos").then(|| settings(PathBuf::from("/Library/Application Support"))),
         ]),
+        favorites: [
+            env("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from),
+            env("HOME").filter(|v| !v.is_empty()).map(|h| PathBuf::from(h).join("Library").join("Application Support")),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|base| base.join("Adobe").join("CameraRaw").join("Defaults").join("FavoriteStyles.xmp"))
+        .find(|p| p.is_file())
+        .and_then(|p| p.to_str().map(str::to_string)),
     }
 }
 

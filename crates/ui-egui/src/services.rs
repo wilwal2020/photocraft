@@ -292,6 +292,9 @@ pub struct CameraRawPresetDirs {
     pub photoshop: Vec<String>,
     /// Adobe's presets installed with Photoshop, read as they are, listed when asked for.
     pub adobe: Vec<String>,
+    /// Camera Raw's favourites (`Defaults/FavoriteStyles.xmp`): listed first, as Camera Raw's
+    /// Presets panel lists them, Adobe's among them.
+    pub favorites: Option<String>,
 }
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.

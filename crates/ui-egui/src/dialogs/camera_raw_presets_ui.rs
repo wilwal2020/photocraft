@@ -26,6 +26,10 @@ pub(crate) struct Presets {
     pub(crate) search: String,
     /// Adobe's presets installed with Photoshop are listed too.
     pub(crate) show_adobe: bool,
+    /// Camera Raw's favourites file ([`CameraRawPresetDirs::favorites`]) and the preset UUIDs it
+    /// names, read with each new list.
+    favorites_path: Option<String>,
+    pub(crate) favorites: Arc<std::collections::HashSet<String>>,
     /// The preset applied last, while its Amount can still change.
     pub(crate) applied: Option<Applied>,
     create: Option<CreateForm>,
@@ -59,11 +63,12 @@ impl Default for CreateForm {
     }
 }
 
-/// The folders to list for `dirs`, Adobe's when asked for.
+/// The folders to list for `dirs`: Adobe's when asked for, or when Camera Raw has favourites
+/// (Adobe's presets among them show in Favorites with the Adobe section hidden).
 pub(super) fn folders(dirs: &CameraRawPresetDirs, adobe: bool) -> Vec<(String, Source)> {
     let mut out: Vec<(String, Source)> = dirs.own.iter().map(|d| (d.clone(), Source::Own)).collect();
     out.extend(dirs.photoshop.iter().map(|d| (d.clone(), Source::Photoshop)));
-    if adobe {
+    if adobe || dirs.favorites.is_some() {
         out.extend(dirs.adobe.iter().map(|d| (d.clone(), Source::Adobe)));
     }
     out
@@ -93,8 +98,14 @@ impl Presets {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = ctx;
-            self.list = Arc::new(store::scan(&folders));
+            self.set_list(store::scan(&folders));
         }
+    }
+
+    /// A finished scan's list, with Camera Raw's favourites as they are now.
+    fn set_list(&mut self, list: Vec<PresetFile>) {
+        self.list = Arc::new(list);
+        self.favorites = Arc::new(self.favorites_path.as_deref().map(store::favorites).unwrap_or_default());
     }
 
     /// Takes a finished scan's list.
@@ -102,7 +113,7 @@ impl Presets {
         let Some(rx) = &self.pending else { return };
         match rx.try_recv() {
             Ok(list) => {
-                self.list = Arc::new(list);
+                self.set_list(list);
                 self.pending = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -119,7 +130,7 @@ impl Presets {
             return;
         }
         self.pending = None;
-        self.list = Arc::new(store::scan(&folders));
+        self.set_list(store::scan(&folders));
         self.scanned = Some(folders);
     }
 
@@ -251,6 +262,7 @@ fn report_status(name: &str, r: &Value) -> (String, bool) {
 pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRawPresetDirs) -> Status {
     let t = Tokens::get(ui.ctx());
     let mut status: Status = None;
+    d.presets.favorites_path.clone_from(&dirs.favorites);
     d.presets.poll();
     d.presets.refresh(folders(dirs, d.presets.show_adobe), ui.ctx());
     let width = ui.available_width();
@@ -308,47 +320,77 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
     let mut clicked: Option<PresetFile> = None;
     let mut action: Option<(&'static str, PresetFile)> = None;
     let applied_path = d.presets.applied.as_ref().filter(|a| a.current == d.params).map(|a| a.path.clone());
+    // Camera Raw's Favorites first, as its Presets panel lists them (user report: Photoshop's
+    // favourites, Adobe's among them, were missing): each preset once, by name.
+    let favorites = d.presets.favorites.clone();
+    let mut fav: Vec<&PresetFile> = Vec::new();
+    for p in shown.iter().filter(|p| !p.uuid.is_empty() && favorites.contains(&p.uuid)) {
+        if !fav.iter().any(|f| f.uuid == p.uuid) {
+            fav.push(p);
+        }
+    }
+    fav.sort_by_key(|p| p.name.to_lowercase());
+    // (section title, groups: label, presets, open by default, id).
+    type Group<'a> = (&'a str, Vec<&'a PresetFile>, bool, (Option<Source>, &'a str));
+    let mut sections: Vec<(Option<&str>, Vec<Group<'_>>)> = Vec::new();
+    if !fav.is_empty() {
+        sections.push((None, vec![(tl!("Favorites"), fav, true, (None, "favorites"))]));
+    }
     for (source, title) in [(Source::Own, tl!("My Presets")), (Source::Photoshop, tl!("Photoshop")), (Source::Adobe, tl!("Adobe"))] {
-        let of_source: Vec<&&PresetFile> = shown.iter().filter(|p| p.source == source).collect();
+        if source == Source::Adobe && !d.presets.show_adobe {
+            continue;
+        }
+        let of_source: Vec<&PresetFile> = shown.iter().filter(|p| p.source == source).copied().collect();
         if of_source.is_empty() {
             continue;
         }
-        widgets::section_label(ui, title);
         let mut groups: Vec<&str> = of_source.iter().map(|p| p.group.as_str()).collect();
         groups.dedup();
-        for group in groups {
-            let label = if group.is_empty() { tl!("User Presets") } else { group };
-            let open = !query.is_empty() || source == Source::Own;
-            egui::CollapsingHeader::new(label).id_salt(("cr-preset-group", source, group)).default_open(open).show(ui, |ui| {
-                for p in of_source.iter().filter(|p| p.group == group) {
+        let groups = groups
+            .into_iter()
+            .map(|group| {
+                let label = if group.is_empty() { tl!("User Presets") } else { group };
+                let presets = of_source.iter().filter(|p| p.group == group).copied().collect();
+                (label, presets, !query.is_empty() || source == Source::Own, (Some(source), group))
+            })
+            .collect();
+        sections.push((Some(title), groups));
+    }
+    for (title, groups) in sections {
+        if let Some(title) = title {
+            widgets::section_label(ui, title);
+        }
+        for (label, presets, open, salt) in groups {
+            egui::CollapsingHeader::new(label).id_salt(("cr-preset-group", salt)).default_open(open).show(ui, |ui| {
+                for p in presets {
                     let selected = applied_path.as_deref() == Some(p.path.as_str());
                     let response = ui.add_sized([ui.available_width(), 16.0], egui::Button::selectable(selected, p.name.as_str()));
                     if response.hovered() {
                         hovered_now = Some(p.path.clone());
                     }
                     if response.clicked() {
-                        clicked = Some((**p).clone());
+                        clicked = Some(p.clone());
                     }
                     response.context_menu(|ui| {
                         if ui.button(tl!("Apply")).clicked() {
-                            clicked = Some((**p).clone());
+                            clicked = Some(p.clone());
                             ui.close();
                         }
                         if p.source == Source::Own {
                             if ui.button(tl!("Rename…")).clicked() {
-                                action = Some(("rename", (**p).clone()));
+                                action = Some(("rename", p.clone()));
                                 ui.close();
                             }
                             if ui.button(tl!("Update with Current Settings")).clicked() {
-                                action = Some(("update", (**p).clone()));
+                                action = Some(("update", p.clone()));
                                 ui.close();
                             }
                             if ui.button(tl!("Delete")).clicked() {
-                                action = Some(("delete", (**p).clone()));
+                                action = Some(("delete", p.clone()));
                                 ui.close();
                             }
                         } else if dirs.own.is_some() && ui.button(tl!("Copy to My Presets")).clicked() {
-                            action = Some(("copy", (**p).clone()));
+                            action = Some(("copy", p.clone()));
                             ui.close();
                         }
                     });

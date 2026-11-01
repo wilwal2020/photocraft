@@ -41,6 +41,8 @@ pub struct PresetFile {
     pub group: String,
     pub path: String,
     pub source: Source,
+    /// Its `crs:UUID`, which Camera Raw's favourites name it by (empty when it has none).
+    pub uuid: String,
     pub supports_amount: bool,
     /// The file's contents, applied with [`photocraft_io::camera_raw_xmp::load`].
     #[serde(skip)]
@@ -104,10 +106,29 @@ fn walk(root: &std::path::Path, dir: &std::path::Path, source: Source, depth: us
             group: if info.group.trim().is_empty() { folder } else { info.group },
             path: path.to_string(),
             source,
+            uuid: info.uuid,
             supports_amount: info.supports_amount,
             bytes: Arc::new(bytes),
         });
     }
+}
+
+/// The UUIDs of the presets Camera Raw has as favourites, from its `FavoriteStyles.xmp` at
+/// `path` (none when there is no such file or it can't be read).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn favorites(path: &str) -> std::collections::HashSet<String> {
+    std::fs::metadata(path)
+        .ok()
+        .filter(|m| m.is_file() && m.len() <= MAX_PRESET_BYTES)
+        .and_then(|_| std::fs::read(path).ok())
+        .map(|b| photocraft_io::camera_raw_xmp::favorite_preset_ids(&b).into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// No file system on the web.
+#[cfg(target_arch = "wasm32")]
+pub fn favorites(_: &str) -> std::collections::HashSet<String> {
+    std::collections::HashSet::new()
 }
 
 /// `name` as a file or folder name: characters file systems refuse replaced, at most 100

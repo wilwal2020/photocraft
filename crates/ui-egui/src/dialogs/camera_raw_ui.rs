@@ -2180,6 +2180,7 @@ mod tests {
                 own: Some(own.to_str().unwrap().into()),
                 photoshop: vec![ps.to_str().unwrap().into()],
                 adobe: vec![],
+                favorites: None,
             },
             ..Default::default()
         };

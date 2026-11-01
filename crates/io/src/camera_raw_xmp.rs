@@ -415,6 +415,27 @@ pub fn preset_info(bytes: &[u8]) -> Result<PresetInfo, String> {
     Ok(info)
 }
 
+/// The presets marked as favourites in Camera Raw's `Defaults/FavoriteStyles.xmp`: the `crs:ID`s
+/// of `crs:FavoritePresets` entries with `crs:Favorite="True"` (a preset's `crs:UUID`). Anything
+/// else (profiles, unfavourited entries, a file that isn't XMP) gives none.
+pub fn favorite_preset_ids(bytes: &[u8]) -> Vec<String> {
+    if bytes.len() > MAX_XMP_BYTES {
+        return Vec::new();
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else { return Vec::new() };
+    let Ok(doc) = crate::xml::parse(text.trim_start_matches('\u{feff}'), roxmltree::ParsingOptions::default()) else { return Vec::new() };
+    let Some(presets) = doc.descendants().find(|n| n.is_element() && n.tag_name().namespace() == Some(CRS_NS) && n.tag_name().name() == "FavoritePresets")
+    else {
+        return Vec::new();
+    };
+    presets
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "li")
+        .filter(|li| li.attribute((CRS_NS, "Favorite")).is_some_and(|v| v.eq_ignore_ascii_case("true")))
+        .filter_map(|li| li.attribute((CRS_NS, "ID")).map(str::to_string))
+        .collect()
+}
+
 /// The groups of settings a preset can hold, as Camera Raw's Create Preset dialog lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
@@ -714,6 +735,24 @@ mod tests {
   </rdf:Description>
  </rdf:RDF>
 </x:xmpmeta>"#;
+
+    /// Camera Raw's favourites file: the IDs marked True, in order; profiles and unmarked entries
+    /// are not presets the panel lists.
+    #[test]
+    fn favourite_presets_are_read_from_camera_raws_file() {
+        let xml = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+   <crs:FavoritePresets><rdf:Bag>
+     <rdf:li crs:ID="1D1BF39AA7AC3D1E1AC096C3B279CA11" crs:Favorite="True"/>
+     <rdf:li crs:ID="23ECD4229B562E83E18CBF7040324AAE" crs:Favorite="False"/>
+     <rdf:li crs:ID="27C285F2A54449ED7115129ED0978BE8" crs:Favorite="True"/>
+   </rdf:Bag></crs:FavoritePresets>
+   <crs:FavoriteProfiles><rdf:Bag><rdf:li crs:ID="3E4888AD7C466DF04528B795426B41DF" crs:Favorite="True"/></rdf:Bag></crs:FavoriteProfiles>
+  </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(favorite_preset_ids(xml.as_bytes()), ["1D1BF39AA7AC3D1E1AC096C3B279CA11", "27C285F2A54449ED7115129ED0978BE8"]);
+        assert!(favorite_preset_ids(b"not xml").is_empty());
+        assert!(favorite_preset_ids(&[0xff, 0xfe]).is_empty());
+    }
 
     #[test]
     fn reads_a_photoshop_preset() {
