@@ -510,10 +510,58 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     {
         return composite_pixel_layer(layer, surf, backdrop, cx);
     }
+    if clipped.is_empty() && composite_fill_rows(layer, backdrop, cx) {
+        return;
+    }
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
     blend_layer_into(backdrop, &content, layer, cx, text_gamma(layer));
     recycle_buffer(content);
+}
+
+/// A fill layer (nothing clipped to it) onto `backdrop` a row at a time, as a pixel layer is: its
+/// stored pixels while they are its rendering, or its solid colour (user report: Merge Layers of
+/// dozens of Color Fills took 1.3 s, most of it rendering each fill into a tile-sized buffer
+/// before blending it). False, having drawn nothing, for the other fills, and in Lab and CMYK
+/// documents, which keep the general path.
+fn composite_fill_rows(layer: &Layer, backdrop: &mut Buffer, cx: &Ctx) -> bool {
+    let LayerContent::Fill(f) = &layer.content else { return false };
+    if !(layer.advanced.transparency_shapes || !psblend::fill_is_special(layer.blend))
+        || !matches!(cx.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale)
+    {
+        return false;
+    }
+    match (&layer.fill_cache, f) {
+        (Some(c), _) if c.fill == *f => composite_pixel_layer(layer, &c.surface, backdrop, cx),
+        (_, Fill::Solid(c)) => {
+            let rgb = c.to_rgb();
+            composite_solid_layer(layer, [rgb[0], rgb[1], rgb[2], c.alpha], backdrop, cx);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// A solid colour `px` (straight RGBA) under `layer`'s masks onto `backdrop`, a row at a time:
+/// the arithmetic of `render_content` (the colour, its alpha times the masks) and
+/// `blend_into_fill`, without a tile-sized buffer of one colour.
+fn composite_solid_layer(layer: &Layer, px: [f32; 4], backdrop: &mut Buffer, cx: &Ctx) {
+    let rect = backdrop.rect;
+    let w = rect.width() as usize;
+    if w == 0 {
+        return;
+    }
+    let mv = mask_vals(layer, rect, cx);
+    let mut row = vec![px; w];
+    for (ry, dst) in backdrop.px.chunks_exact_mut(w).enumerate() {
+        let y = rect.y0 + ry as i32;
+        if let Some(m) = mv.as_ref().and_then(|m| m.get(ry * w..(ry + 1) * w)) {
+            for (p, k) in row.iter_mut().zip(m) {
+                p[3] = px[3] * k;
+            }
+        }
+        blend_span_fill(dst, &row, rect.x0, y, layer.blend, layer.opacity, layer.fill_opacity, 1.0);
+    }
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -570,6 +618,12 @@ pub(crate) fn texture_ctx<'a>(layer: &Layer, region: Rect, cx: &Ctx<'a>) -> effe
 /// Composite `layer` onto `base` restricted to the base's alpha (clipping mask semantics),
 /// honouring its channel restrictions and Blend If.
 pub(crate) fn composite_atop(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
+    // Nothing of it here (its hide-all mask hides all of the tile, no pixels, no effects that
+    // reach in): it leaves the base as it is. Every clipped Color Fill was drawn over every tile
+    // of its base and masked away (user report: Merge Layers of dozens of them took 1.3 s).
+    if empty_in(layer, base.rect) {
+        return;
+    }
     let w = channel_weights(layer, cx.mode);
     let blend_if = blend_if_active(layer, cx.mode);
     let before = (w.is_some() || blend_if).then(|| base.clone());

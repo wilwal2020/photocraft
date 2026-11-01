@@ -81,15 +81,18 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         })
     };
     // Tiles are written straight into the output, one row of tiles (a band) at a time, so the
-    // peak is the output plus the tiles in flight, not a second full-size copy.
+    // peak is the output plus the tiles in flight, not a second full-size copy. Bands and tiles
+    // are cut on the document's `tile` grid, whatever `rect`'s origin: a rect off the grid (a
+    // merge grown by a layer effect's reach) put every render tile across four of the layers'
+    // stored tiles, so no mask skip applied (user report: Merge Layers 0.2 s → 0.75 s).
     let w = rect.width() as usize;
     let mut out = Buffer::transparent(rect);
-    let band_tiles = |y0: i32| {
-        let y1 = y0.saturating_add(tile).min(rect.y1);
+    let next = |v: i32| v.div_euclid(tile).saturating_mul(tile).saturating_add(tile);
+    let band_tiles = |y0: i32, y1: i32| {
         let mut v = Vec::new();
         let mut x = rect.x0;
         while x < rect.x1 {
-            let x1 = x.saturating_add(tile).min(rect.x1);
+            let x1 = next(x).min(rect.x1);
             v.push(Rect::new(x, y0, x1, y1));
             x = x1;
         }
@@ -102,41 +105,48 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
             band[o..o + pw].copy_from_slice(src);
         }
     };
-    let band_len = w * tile as usize;
+    // The output split into its bands: (rows, first row, end row).
+    let mut bands: Vec<(&mut [[f32; 4]], i32, i32)> = Vec::new();
+    let mut rest = out.px.as_mut_slice();
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let y1 = next(y).min(rect.y1);
+        let (band, tail) = std::mem::take(&mut rest).split_at_mut(w * (y1 - y) as usize);
+        bands.push((band, y, y1));
+        rest = tail;
+        y = y1;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        let bands = rect.height().div_ceil(tile as u32) as usize;
-        if bands >= 2 * rayon::current_num_threads() {
+        if bands.len() >= 2 * rayon::current_num_threads() {
             // Enough bands to keep every core busy: one band per task, its tiles in turn.
-            out.px.par_chunks_mut(band_len).enumerate().for_each(|(i, band)| {
-                let y0 = rect.y0 + i as i32 * tile;
-                for t in band_tiles(y0) {
-                    put(band, y0, &run(t));
+            bands.par_iter_mut().for_each(|(band, y0, y1)| {
+                for t in band_tiles(*y0, *y1) {
+                    put(band, *y0, &run(t));
                 }
             });
         } else {
             // Few, wide bands: the tiles of each band in parallel, and the bands too, so a band's
             // slowest tile doesn't leave the other cores idle until the next band starts. Each
             // tile is written as soon as it is done, so only the tiles in flight are held.
-            out.px.par_chunks_mut(band_len).enumerate().for_each(|(i, band)| {
-                let y0 = rect.y0 + i as i32 * tile;
-                let band = std::sync::Mutex::new(band);
-                band_tiles(y0).into_par_iter().for_each(|t| {
+            bands.par_iter_mut().for_each(|(band, y0, y1)| {
+                let band = std::sync::Mutex::new(&mut **band);
+                band_tiles(*y0, *y1).into_par_iter().for_each(|t| {
                     let part = run(t);
                     let mut band = band.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    put(&mut band, y0, &part);
+                    put(&mut band, *y0, &part);
                 });
             });
         }
     }
     #[cfg(target_arch = "wasm32")]
-    for (i, band) in out.px.chunks_mut(band_len).enumerate() {
-        let y0 = rect.y0 + i as i32 * tile;
-        for t in band_tiles(y0) {
-            put(band, y0, &run(t));
+    for (band, y0, y1) in &mut bands {
+        for t in band_tiles(*y0, *y1) {
+            put(band, *y0, &run(t));
         }
     }
+    drop(bands);
     out
 }
 
@@ -174,7 +184,8 @@ pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: imp
     let rows = band_rows_for(rect.width(), band_rows);
     let mut y = rect.y0;
     while y < rect.y1 {
-        let y1 = y.saturating_add(rows).min(rect.y1);
+        // On the tile grid, as `render_tiled_with` cuts its tiles.
+        let y1 = y.div_euclid(RENDER_TILE).saturating_mul(RENDER_TILE).saturating_add(rows).min(rect.y1);
         sink(render_tiled_with(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx))?;
         y = y1;
     }

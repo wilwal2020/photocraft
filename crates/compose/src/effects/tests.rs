@@ -1047,3 +1047,40 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         assert_eq!(s.v.len(), 144);
     }
 }
+
+/// The spread's dilation, built in overlapping strips of rows in parallel, is the whole chamfer
+/// transform's bit for bit: shapes with soft edges, specks and big empty stretches, strips taller
+/// and shorter than the map, spreads from under a pixel to the widest.
+#[test]
+fn a_spread_built_in_strips_matches_the_whole_transform() {
+    let mut seed = 7u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as f32 / u32::MAX as f32
+    };
+    for (w, h) in [(97, 1500), (640, 37), (300, 900)] {
+        let mut m = Map::new(w, h, 0.0);
+        for _ in 0..40 {
+            let (cx, cy, rad) = (rnd() * w as f32, rnd() * h as f32, 1.0 + rnd() * 30.0);
+            for y in 0..h {
+                for x in 0..w {
+                    let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                    let a = (rad - d + 0.5).clamp(0.0, 1.0);
+                    let v = &mut m.v[y * w + x];
+                    *v = v.max(a);
+                }
+            }
+        }
+        for _ in 0..60 {
+            let i = (rnd() * (w * h) as f32) as usize % (w * h);
+            m.v[i] = rnd();
+        }
+        for r in [0.4, 1.0, 3.0, 5.0, 12.0, 60.0] {
+            let (a, b) = (blur::dilate(&m, r), blur::dilate_whole(&m, r));
+            let same = a.v.iter().zip(&b.v).all(|(x, y)| x.to_bits() == y.to_bits());
+            assert!(same, "{w}x{h}, spread {r}");
+        }
+    }
+}

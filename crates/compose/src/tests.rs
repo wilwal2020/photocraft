@@ -3381,8 +3381,9 @@ fn render_bands_cover_the_rect_in_order() {
         Ok(())
     })
     .unwrap();
-    // 100 rows round up to one 256-row tile band.
-    assert_eq!(rows, vec![(10, 266), (266, 522), (522, 690)]);
+    // 100 rows round up to one 256-row tile band, cut on the document's tile grid (the layers'
+    // stored tiles), not from the rect's top.
+    assert_eq!(rows, vec![(10, 256), (256, 512), (512, 690)]);
     assert_eq!(px, render(&d, r).px);
     // The sink's error stops the render.
     let mut n = 0;

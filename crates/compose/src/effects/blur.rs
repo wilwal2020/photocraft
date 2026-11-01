@@ -1,4 +1,3 @@
-use super::distance::{Metric, dist_outside_by};
 use super::{MAX_REACH, Map};
 
 /// The soft falloff of an effect of `size` pixels: two box passes of width `size` (a tent),
@@ -19,7 +18,8 @@ pub(super) fn dilate(s: &Map, r: f32) -> Map {
     if r <= 0.0 {
         return s.clone();
     }
-    let d = dist_outside_by(s, Metric::Chamfer);
+    // Distances from `r + 0.5` on leave a pixel as it is (below): only nearer ones need be exact.
+    let d = super::distance::chamfer_outside_within(s, r + 1.0);
     let mut out = s.clone();
     for (o, d) in out.v.iter_mut().zip(d) {
         // Partly covered pixels (distance sentinel < 0) grow by `r` from their own coverage, so a
@@ -209,4 +209,18 @@ fn tent_fast(m: &mut Map, w: f32) {
     let mut b = vec![0.0f32; t.len()];
     rows_par(&t, &mut b, mh, twice);
     m.v = transpose_map(&b, mh, mw);
+}
+
+/// [`dilate`] from the whole chamfer transform, as it was built before the strips: tests compare.
+#[cfg(test)]
+pub(super) fn dilate_whole(s: &Map, r: f32) -> Map {
+    if r <= 0.0 {
+        return s.clone();
+    }
+    let d = super::distance::dist_outside_by(s, super::distance::Metric::Chamfer);
+    let mut out = s.clone();
+    for (o, d) in out.v.iter_mut().zip(d) {
+        *o = if d < 0.0 { (*o + r).min(1.0) } else { o.max((r + 0.5 - d).clamp(0.0, 1.0)) };
+    }
+    out
 }

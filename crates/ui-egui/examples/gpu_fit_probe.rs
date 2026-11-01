@@ -5,7 +5,11 @@
 //!
 //! ```sh
 //! cargo run --release -p photocraft-ui-egui --example gpu_fit_probe -- [--prefs preferences.json] a.psd b.psd …
+//! cargo run --release -p photocraft-ui-egui --example gpu_fit_probe -- --action actions.json "name" file.psd layer…
 //! ```
+//!
+//! `--action` plays a saved action (accelerated, as the Actions panel does) with the named layers
+//! selected and times it and the frames that follow, with each frame's biggest spans.
 
 use egui_kittest::Harness;
 use photocraft_ui_egui::{PhotocraftApp, Services};
@@ -111,6 +115,9 @@ fn main() {
         }
         return;
     }
+    if args.first().is_some_and(|a| a == "--action") {
+        return action(&args[1..]);
+    }
     let prefs =
         args.iter().position(|a| a == "--prefs").and_then(|i| args.get(i + 1)).map(|p| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p}: {e}")));
     let files: Vec<&String> = args.iter().enumerate().filter(|(i, a)| *a != "--prefs" && (*i == 0 || args[i - 1] != "--prefs")).map(|(_, a)| a).collect();
@@ -149,5 +156,77 @@ fn main() {
         let fit =
             app.perf.gpu_layer_fit.map_or_else(|| "none".to_string(), |f| format!("doc {} needs {:.0} MB of {:.0} MB", f.doc, mb(f.needed), mb(f.budget)));
         println!("{path}: {w}x{hh}, {n} layers (doc {id}); fit {fit}; last refresh {}; reason {:?}", app.perf.last_refresh, app.render_path.current(id));
+    }
+}
+
+fn action(args: &[String]) {
+    let (file, name, path) = (&args[0], &args[1], &args[2]);
+    let layers = &args[3..];
+    let all: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let list: Vec<photocraft_engine::actions_cmds::Action> = serde_json::from_value(all["actions"].clone()).unwrap();
+    let prefs = std::env::var("APPDATA").ok().and_then(|d| std::fs::read_to_string(format!("{d}/Photocraft/preferences.json")).ok());
+    let mut h: Harness<'static, PhotocraftApp> = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1080.0))
+        .with_pixels_per_point(1.0)
+        .wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup())
+        .build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut session = photocraft_engine::Session::new();
+            if let Some(text) = prefs.as_deref() {
+                let _ = session.load_prefs_json(text);
+            }
+            session.actions.list = list.clone();
+            let mut app = PhotocraftApp::new(session, Services::default());
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                app.set_wgpu(rs.clone());
+                app.warm_up_gpu();
+            }
+            app
+        });
+    let bytes = std::fs::read(path).unwrap();
+    let doc = photocraft_io::import(path, &bytes).unwrap().document;
+    let ids: Vec<u64> = layers.iter().filter_map(|n| doc.walk().into_iter().find(|(_, _, l)| &l.name == n).map(|(_, _, l)| l.id.0)).collect();
+    h.state_mut().session.open_document(doc, Some(path.clone()));
+    h.state_mut().sync_views();
+    for _ in 0..40 {
+        h.step();
+    }
+    for rep in 0..3 {
+        let app = h.state_mut();
+        app.run("layer.select", serde_json::json!({"layer": ids[0]})).unwrap();
+        for id in &ids[1..] {
+            app.run("layer.select", serde_json::json!({"layer": id, "mode": "add"})).unwrap();
+        }
+        for _ in 0..10 {
+            h.step();
+        }
+        let before = h.state().session.active().unwrap().history.past_len();
+        let t = std::time::Instant::now();
+        let r = h.state_mut().run("actions.play", serde_json::json!({"action": name}));
+        let play = t.elapsed().as_secs_f64() * 1e3;
+        let mut frames = Vec::new();
+        for _ in 0..12 {
+            h.state_mut().perf.spans.clear();
+            let f = std::time::Instant::now();
+            h.step();
+            let mut spans: Vec<(&str, f64)> = h.state().perf.spans.iter().map(|(k, v)| (*k, *v)).filter(|(_, v)| *v >= 5.0).collect();
+            spans.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let spans: Vec<String> = spans.iter().take(4).map(|(k, v)| format!("{k} {v:.0}")).collect();
+            frames.push(format!("{:.0}{}", f.elapsed().as_secs_f64() * 1e3, if spans.is_empty() { String::new() } else { format!(" [{}]", spans.join(", ")) }));
+        }
+        let total = t.elapsed().as_secs_f64() * 1e3;
+        println!(
+            "rep {rep}: play {play:.0} ms ({}), then frames: {}; total {total:.0} ms, refresh {}",
+            if r.is_ok() { "ok" } else { "ERR" },
+            frames.join(" | "),
+            h.state().perf.last_refresh
+        );
+        while h.state().session.active().unwrap().history.past_len() > before {
+            h.state_mut().session.undo();
+        }
+        h.state_mut().sync_views();
+        for _ in 0..20 {
+            h.step();
+        }
     }
 }

@@ -259,6 +259,70 @@ fn chamfer_from(mut d: Vec<f32>, w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
     (d, near)
 }
 
+/// The distances of [`chamfer_from`] alone, without the nearest seeds: the same relaxations in
+/// the same order, so the same values.
+fn chamfer_values(d: &mut [f32], w: usize, h: usize) {
+    const S2: f32 = std::f32::consts::SQRT_2;
+    const S5: f32 = 2.236_068;
+    const FWD: [(i64, i64, f32); 8] = [(-1, 0, 1.0), (-1, -1, S2), (0, -1, 1.0), (1, -1, S2), (-1, -2, S5), (1, -2, S5), (-2, -1, S5), (2, -1, S5)];
+    let (wi, hi) = (w as i64, h as i64);
+    let relax = |x: i64, y: i64, sign: i64, d: &mut [f32]| {
+        let i = (y * wi + x) as usize;
+        let mut best = d[i];
+        for &(ox, oy, wt) in &FWD {
+            let (nx, ny) = (x + ox * sign, y + oy * sign);
+            if nx < 0 || ny < 0 || nx >= wi || ny >= hi {
+                continue;
+            }
+            let c = d[(ny * wi + nx) as usize] + wt;
+            if c < best {
+                best = c;
+            }
+        }
+        d[i] = best;
+    };
+    for y in 0..hi {
+        for x in 0..wi {
+            relax(x, y, 1, d);
+        }
+    }
+    for y in (0..hi).rev() {
+        for x in (0..wi).rev() {
+            relax(x, y, -1, d);
+        }
+    }
+}
+
+/// [`dist_outside_by`] with the chamfer metric, exact wherever it is below `limit` and at least
+/// `limit` elsewhere: what a spread of `limit - 1` px needs ([`super::blur::dilate`]). Every
+/// chamfer step costs at least one pixel per row it crosses, so a distance below `limit` comes
+/// from seeds less than `limit` rows away, through pixels whose own distances come from seeds
+/// as near to them: strips of rows, each with `2 · limit` rows more on either side, give those
+/// distances exactly, and the strips run in parallel. The whole transform ran on one thread
+/// (user report: a 6486 × 7000 merge spent 0.3 s growing one Outer Glow's shape).
+pub(super) fn chamfer_outside_within(s: &Map, limit: f32) -> Vec<f32> {
+    let (w, h) = (s.w, s.h);
+    if !(limit.is_finite() && limit > 0.0) || w == 0 || h == 0 {
+        return dist_outside_by(s, Metric::Chamfer);
+    }
+    let halo = 2 * (limit.ceil() as usize) + 4;
+    let strip = (8 * halo).max(64);
+    let start = |a: f32| if a > INSIDE_EPS { 1.0 - a.min(1.0) } else { CHAMFER_INF };
+    let mut out = vec![0.0f32; w * h];
+    par_units(w * h, &mut out, strip * w, &mut [] as &mut [()], 0, Vec::new, |d: &mut Vec<f32>, k, rows, _| {
+        let (y0, y1) = (k * strip, (k * strip + rows.len() / w).min(h));
+        let (d0, d1) = (y0.saturating_sub(halo), (y1 + halo).min(h));
+        d.clear();
+        d.extend(s.v[d0 * w..d1 * w].iter().map(|&a| start(a)));
+        chamfer_values(d, w, d1 - d0);
+        let own = &d[(y0 - d0) * w..(y1 - d0) * w];
+        for ((o, dv), &a) in rows.iter_mut().zip(own).zip(&s.v[y0 * w..y1 * w]) {
+            *o = if a > INSIDE_EPS { -0.5 } else { dv - 0.5 };
+        }
+    });
+    out
+}
+
 /// Distance from each pixel centre outside the shape to the shape's edge.
 /// Pixels with non-zero alpha are inside; the edge inside the nearest such
 /// pixel is placed by its alpha (coverage), as Photoshop does. Inside pixels
