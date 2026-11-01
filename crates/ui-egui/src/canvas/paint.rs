@@ -401,10 +401,12 @@ fn crop_overlay_turned(painter: &egui::Painter, q: [Pos2; 4], shield: Option<Col
 }
 
 /// The crop overlay's guides, each unit-square point placed on screen by `at`.
+/// The crop overlay's guide lines ([`crate::crop_overlay::GUIDE`] over its dark edge).
 fn draw_crop_guides(painter: &egui::Painter, guides: &[crate::crop_overlay::Polyline], at: impl Fn(f32, f32) -> Pos2) {
-    let thin = Stroke::new(1.0, Color32::from_white_alpha(90));
     for l in guides {
-        painter.add(egui::Shape::line(l.iter().map(|p| at(p[0], p[1])).collect(), thin));
+        let pts: Vec<Pos2> = l.iter().map(|p| at(p[0], p[1])).collect();
+        painter.add(egui::Shape::line(pts.clone(), Stroke::new(3.0, crate::crop_overlay::GUIDE_EDGE)));
+        painter.add(egui::Shape::line(pts, Stroke::new(1.0, crate::crop_overlay::GUIDE)));
     }
 }
 

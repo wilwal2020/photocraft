@@ -123,6 +123,12 @@ impl OverlayShow {
 /// A guide polyline in the frame's unit square.
 pub type Polyline = Vec<[f32; 2]>;
 
+/// The guide lines' colour, over a soft dark edge ([`GUIDE_EDGE`]), so they read on light and
+/// dark images alike, as Photoshop's do (user report: no 3 × 3 grid while cropping; the faint
+/// white line it was all but vanished on a light image).
+pub(crate) const GUIDE: egui::Color32 = egui::Color32::from_rgba_premultiplied(230, 230, 230, 230);
+pub(crate) const GUIDE_EDGE: egui::Color32 = egui::Color32::from_rgba_premultiplied(0, 0, 0, 110);
+
 /// Golden section: 1/φ.
 const INV_PHI: f32 = 0.618_034;
 /// Target spacing (screen points) of the Grid overlay's lines.
@@ -550,6 +556,58 @@ mod tests {
         assert_eq!(current_guides(&app, 300.0, 200.0).len(), 3);
         app.ui.tool = Tool::Brush;
         assert!(current_guides(&app, 300.0, 200.0).is_empty(), "a pending frame under another tool shows no guide");
+    }
+
+    /// The default (Auto) overlay is painted while a crop handle is dragged in the default crop
+    /// mode, through the real canvas and pointer, and gone once the button is let go.
+    #[test]
+    fn the_thirds_show_while_a_handle_is_dragged() {
+        use egui::{Event, PointerButton, pos2};
+        let doc = photocraft_doc::Document::with_background(
+            "crop",
+            photocraft_doc::Size::new(200, 100),
+            photocraft_color::ColorMode::Rgb,
+            photocraft_color::SampleType::U8,
+            photocraft_doc::Color::WHITE,
+        );
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(doc, None);
+        let mut a = PhotocraftApp::new(s, crate::Services::default());
+        a.ui.tool = Tool::Crop;
+        a.ui.extras.snap = false;
+        a.ui.view.show.smart_guides = false;
+        a.ui.views = vec![crate::state::View { zoom: 2.0, center: [100.0, 50.0], doc_size: [200, 100], ..Default::default() }];
+        crate::crop_ui::ensure_frame(&mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let v = app.ui.views[0].clone();
+                crate::canvas::canvas_view(app, ui, 0, ui.max_rect(), v, true);
+            },
+            a,
+        );
+        h.run_steps(2);
+        let guides = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            h.output()
+                .shapes
+                .iter()
+                .filter(|c| matches!(&c.shape, egui::Shape::Path(p) if p.stroke.color == egui::epaint::ColorMode::Solid(GUIDE) && p.points.len() == 2))
+                .count()
+        };
+        assert_eq!(guides(&h), 0, "Auto: no grid before a drag");
+        // The bottom-right corner handle of the default frame (the whole 200 × 100 image at 200%).
+        let (from, to) = (pos2(500.0, 300.0), pos2(470.0, 280.0));
+        h.event(Event::PointerMoved(from));
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(Event::PointerMoved(to));
+        h.step();
+        h.step();
+        assert!(h.state().crop.drag.is_some(), "the handle is being dragged");
+        assert_eq!(guides(&h), 4, "the rule of thirds while dragging");
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        h.step();
+        assert_eq!(guides(&h), 0, "gone once let go");
     }
 
     #[test]
