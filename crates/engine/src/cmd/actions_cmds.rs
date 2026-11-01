@@ -132,6 +132,9 @@ pub struct ActionPrefs {
     pub sets: Vec<String>,
     /// The panel menu's Allow Tool Recording: painting and toning strokes are recorded too.
     pub allow_tool_recording: bool,
+    /// The panel menu's Relative Layer Recording (user request): layers are recorded by how many
+    /// Layers panel rows they are from the current layer, not by name (`layer_refs`).
+    pub relative_layers: bool,
     /// The panel menu's Playback Options.
     pub playback: Playback,
 }
@@ -176,8 +179,14 @@ pub struct ActionState {
 }
 
 /// Visibility gestures name a layer for replay, since document-local ids change on another image.
+/// A layer `layer_refs` recorded already (another layer's eye: its name, or its rows from the
+/// current one) keeps that, and a relative recording names no layer: the current one's eye stays
+/// the current layer's.
 pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
     if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
+        return p;
+    }
+    if s.actions.prefs.relative_layers || p.get("layer").is_some_and(Value::is_object) {
         return p;
     }
     let Some(st) = s.active() else { return p };

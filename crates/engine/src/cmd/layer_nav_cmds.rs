@@ -35,7 +35,7 @@ pub fn panel_rows(doc: &Document) -> Vec<LayerId> {
 
 /// Where `id` is in `rows`; a layer inside a collapsed group counts as that group's row (the
 /// nearest enclosing one that has a row).
-fn row_of(doc: &Document, rows: &[LayerId], id: LayerId) -> Option<usize> {
+pub(crate) fn row_of(doc: &Document, rows: &[LayerId], id: LayerId) -> Option<usize> {
     let path = doc.path_of(id)?;
     (1..=path.len()).rev().find_map(|n| doc.layer_at(&path[..n]).and_then(|l| rows.iter().position(|r| *r == l.id)))
 }

@@ -190,6 +190,11 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err(bad(cmd, "`allowToolRecording` must be true or false")),
     };
+    let relative = match p.get("relativeLayers") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(cmd, "`relativeLayers` must be true or false")),
+    };
     let playback = match p.get("playback") {
         None | Some(Value::Null) => None,
         Some(v) => {
@@ -207,11 +212,14 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(t) = tools {
         prefs.allow_tool_recording = t;
     }
+    if let Some(r) = relative {
+        prefs.relative_layers = r;
+    }
     if let Some(pb) = playback {
         prefs.playback = pb;
     }
-    let result = json!({"allowToolRecording": prefs.allow_tool_recording, "playback": prefs.playback});
-    if tools.is_some() || playback.is_some() {
+    let result = json!({"allowToolRecording": prefs.allow_tool_recording, "relativeLayers": prefs.relative_layers, "playback": prefs.playback});
+    if tools.is_some() || relative.is_some() || playback.is_some() {
         s.actions.touch();
     }
     Ok(result)
@@ -244,7 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "actions.options",
             "Actions Options",
-            r##"{"allowToolRecording":bool?, "playback":{"mode":"accelerated"|"stepByStep"}|{"mode":"pause","seconds":0..60}?} → {allowToolRecording, playback}. Allow Tool Recording records painting and toning strokes and brush settings; Playback Options paces playback in the app (headless playback is always accelerated). Omitted keys are left alone."##,
+            r##"{"allowToolRecording":bool?, "relativeLayers":bool?, "playback":{"mode":"accelerated"|"stepByStep"}|{"mode":"pause","seconds":0..60}?} → {allowToolRecording, relativeLayers, playback}. Allow Tool Recording records painting and toning strokes and brush settings; Relative Layer Recording records each layer a step names as how many Layers panel rows it is from the current layer (`{"relative":n}`, up positive), not by name; Playback Options paces playback in the app (headless playback is always accelerated). Omitted keys are left alone."##,
             options,
         ),
     ]

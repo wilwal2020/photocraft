@@ -632,7 +632,8 @@ fn step_label(id: &str, params: &Value) -> String {
             .and_then(Value::as_str)
             .or_else(|| params.get("layer").and_then(Value::as_str))
             .map(str::to_owned)
-            .or_else(|| params.get("layer").and_then(Value::as_u64).map(|id| format!("ID {id}")));
+            .or_else(|| params.get("layer").and_then(Value::as_u64).map(|id| format!("ID {id}")))
+            .or_else(|| params.get("layer").and_then(photocraft_engine::layer_refs::describe).map(layer_text));
         target.map_or_else(|| label_of(id), |target| format!("{} ({target})", label_of(id)))
     } else if id == "actions.conditional" {
         // "If hasLayers: FS8-Layers / FS8-No-Layers"
@@ -650,22 +651,36 @@ fn step_label(id: &str, params: &Value) -> String {
     }
 }
 
+/// A recorded layer as a step shows it: "Current Layer", its name, or "2 Layers Down".
+fn layer_text(d: photocraft_engine::layer_refs::Described) -> String {
+    use photocraft_engine::layer_refs::Described;
+    match d {
+        Described::Current => tl!("Current Layer").to_string(),
+        Described::Named(name) => name,
+        Described::Relative(n) => {
+            let text = match (n > 0, n.unsigned_abs() == 1) {
+                (true, true) => tl!("1 Layer Up"),
+                (true, false) => tl!("{n} Layers Up"),
+                (false, true) => tl!("1 Layer Down"),
+                (false, false) => tl!("{n} Layers Down"),
+            };
+            crate::i18n::fmt(text, &[("n", &n.unsigned_abs().to_string())])
+        }
+    }
+}
+
 /// A step's recorded values as Photoshop lists them under an opened step: "Name: Layer 1".
 fn param_lines(params: &Value) -> Vec<String> {
     let Some(o) = params.as_object() else { return Vec::new() };
     o.iter()
         .filter(|(k, _)| !k.starts_with("__") && k.as_str() != "coalesce")
         .map(|(k, v)| {
-            use photocraft_engine::layer_refs::{Described, describe};
-            let layer = |d: Described| match d {
-                Described::Current => tl!("Current Layer").to_string(),
-                Described::Named(name) => name,
-            };
+            use photocraft_engine::layer_refs::describe;
             // Recorded layers: their names, or the current layer.
             let layers = v.as_array().and_then(|a| a.iter().map(describe).collect::<Option<Vec<_>>>()).filter(|l| !l.is_empty());
             let value = match (v, describe(v), layers) {
-                (_, Some(d), _) => layer(d),
-                (_, _, Some(l)) => l.into_iter().map(layer).collect::<Vec<_>>().join(", "),
+                (_, Some(d), _) => layer_text(d),
+                (_, _, Some(l)) => l.into_iter().map(layer_text).collect::<Vec<_>>().join(", "),
                 (Value::String(s), ..) => s.clone(),
                 (Value::Number(n), ..) => {
                     n.as_f64().filter(|f| f.fract() != 0.0).map_or_else(|| n.to_string(), |f| format!("{f:.2}").trim_end_matches('0').to_string())
@@ -1208,6 +1223,14 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         act = Some("tools");
     }
+    let mut relative = app.session.actions.prefs.relative_layers;
+    if ui
+        .checkbox(&mut relative, tl!("Relative Layer Recording"))
+        .on_hover_text(tl!("Record layers by how many rows they are above or below the current layer, not by name"))
+        .clicked()
+    {
+        act = Some("relative");
+    }
     ui.separator();
     if entry(ui, list_len > 0 && !recording, tl!("Clear All Actions")) {
         act = Some("clear");
@@ -1264,6 +1287,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         "playback" => Ok(json!(crate::actions_dialogs::playback_options(app))),
         "tools" => app.run("actions.options", json!({"allowToolRecording": tools})),
+        "relative" => app.run("actions.options", json!({"relativeLayers": relative})),
         "clear" => {
             let r = app.run("actions.clear", json!({}));
             if r.is_ok() {
@@ -2189,6 +2213,10 @@ pub(crate) mod tests {
         h.get_by_label("Select Layer (Background)");
         assert_eq!(step_label("layer.select", &json!({"layer":26})), "Select Layer (ID 26)");
         assert_eq!(step_label("layer.select", &json!({"layer":"Background"})), "Select Layer (Background)");
+        // Relative Layer Recording: rows from the current layer.
+        assert_eq!(step_label("layer.select", &json!({"layer":{"relative": -2}})), "Select Layer (2 Layers Down)");
+        assert_eq!(step_label("layer.select", &json!({"layer":{"relative": 1}})), "Select Layer (1 Layer Up)");
+        assert_eq!(param_lines(&json!({"layer":{"relative": 3}, "visible": false})), ["Layer: 3 Layers Up", "Visible: false"]);
     }
 
     #[test]

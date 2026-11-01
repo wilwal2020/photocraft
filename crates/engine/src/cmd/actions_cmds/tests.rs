@@ -1274,3 +1274,60 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
     assert_eq!(played["ran"], 0, "{played}");
     assert!(played["failed"].is_object(), "{played}");
 }
+
+/// User request: with Relative Layer Recording on, a click on a layer, an eye and a drag are
+/// recorded as rows from the current layer, and play on a document whose layers have other names.
+#[test]
+fn relative_recording_replays_by_rows_from_the_current_layer() {
+    let stack = |s: &mut Session, names: &[&str]| {
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        names.iter().map(|n| photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": n})).unwrap()["layer"].as_u64().unwrap())).collect::<Vec<_>>()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.options", json!({"relativeLayers": true})).unwrap();
+    assert_eq!(r["relativeLayers"], true);
+    // Panel rows, top to bottom: L4 (current), L3, L2, L1, Background.
+    let l = stack(&mut s, &["L1", "L2", "L3", "L4"]);
+    s.execute("actions.record", json!({"name": "Relative"})).unwrap();
+    s.execute("layer.select", json!({"layer": l[1].0})).unwrap();
+    s.execute("layer.setProps", json!({"layer": l[2].0, "visible": false})).unwrap();
+    s.execute("layer.moveTo", json!({"layer": l[1].0, "target": l[0].0, "position": "below"})).unwrap();
+    s.execute("layer.setProps", json!({"layer": l[1].0, "opacity": 0.5})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(
+        s.actions.list[0].steps,
+        vec![
+            ("layer.select".to_string(), json!({"layer": {"relative": -2}})),
+            ("layer.setProps".to_string(), json!({"layer": {"relative": 1}, "visible": false})),
+            ("layer.moveTo".to_string(), json!({"layer": {"current": true}, "target": {"relative": -1}, "position": "below"})),
+            ("layer.setProps".to_string(), json!({"opacity": 0.5})),
+        ]
+    );
+    // The option and the action persist.
+    let saved = serde_json::to_string(&s.actions).unwrap();
+    let mut replay = Session::new();
+    replay.actions = serde_json::from_str(&saved).unwrap();
+    assert!(replay.actions.prefs.relative_layers);
+    let r = stack(&mut replay, &["x", "y", "z", "w", "v"]);
+    let played = replay.execute("actions.play", json!({"action": "Relative"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let doc = &replay.active().unwrap().doc;
+    let names: Vec<_> = doc.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Background", "x", "z", "y", "w", "v"], "z, two rows below v, went below the row under it");
+    assert!(doc.walk().iter().all(|(_, _, l)| l.visible == (l.id != r[3])), "only w, the row above z, is hidden");
+    assert_eq!(doc.layer(r[2]).unwrap().opacity, 0.5);
+    // Too few rows below: the action stops there and says why.
+    let mut short = Session::new();
+    short.actions = serde_json::from_str(&saved).unwrap();
+    stack(&mut short, &["only"]);
+    let played = short.execute("actions.play", json!({"action": "Relative"})).unwrap();
+    assert_eq!(played["failed"]["step"], 0, "{played}");
+    assert!(played["failed"]["error"].as_str().unwrap().contains("no layer 2 rows below the current one"), "{played}");
+    // Turned off, layers are named again.
+    s.execute("actions.options", json!({"relativeLayers": false})).unwrap();
+    s.execute("actions.record", json!({"name": "Named"})).unwrap();
+    s.execute("layer.setProps", json!({"layer": l[3].0, "visible": false})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[1].steps, vec![("layer.setProps".to_string(), json!({"layer": {"name": "L4"}, "visible": false}))]);
+    assert!(s.execute("actions.options", json!({"relativeLayers": 1})).is_err());
+}

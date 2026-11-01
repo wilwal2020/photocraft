@@ -119,7 +119,7 @@ fn set_step_replaces_the_values() {
 fn options_set_tool_recording_and_playback() {
     let mut s = Session::new();
     let r = s.execute("actions.options", json!({})).unwrap();
-    assert_eq!(r, json!({"allowToolRecording": false, "playback": {"mode": "accelerated"}}));
+    assert_eq!(r, json!({"allowToolRecording": false, "relativeLayers": false, "playback": {"mode": "accelerated"}}));
     s.execute("actions.options", json!({"allowToolRecording": true, "playback": {"mode": "pause", "seconds": 2}})).unwrap();
     assert!(s.actions.prefs.allow_tool_recording);
     assert_eq!(s.actions.prefs.playback, Playback::Pause { seconds: 2.0 });
@@ -128,6 +128,7 @@ fn options_set_tool_recording_and_playback() {
     assert!(s.actions.prefs.allow_tool_recording, "omitted keys are left alone");
     for bad in [
         json!({"allowToolRecording": "yes"}),
+        json!({"relativeLayers": "yes"}),
         json!({"playback": "fast"}),
         json!({"playback": {"mode": "pause", "seconds": -1}}),
         json!({"playback": {"mode": "pause", "seconds": 1000}}),
