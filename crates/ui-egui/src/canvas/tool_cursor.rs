@@ -200,15 +200,16 @@ pub(crate) fn path_type(painter: &Painter, at: Pos2) -> CursorIcon {
     outline(painter, at, path_type_rings(), false)
 }
 
-/// Can this pass show an OS cursor bitmap? eframe's immediate viewports and its web integration
-/// don't upload cursor images; every desktop root viewport does (winit custom cursors). Wayland at
+/// Can this pass show an OS cursor bitmap? eframe's web integration doesn't upload cursor images;
+/// every desktop viewport does (winit custom cursors), immediate ones too with the vendored
+/// eframe (`vendor/eframe/PATCHES.md`; Camera Raw's window is one). Wayland at
 /// any scale but 1 doesn't either: winit sizes the bitmap there with a `wp_viewport` destination
 /// that some compositors ignore on cursor surfaces (Hyprland 0.56; Mutter before GNOME 48). They
 /// show it one bitmap pixel per logical pixel, so at 1.25 a brush outline was 1.25× too large and
 /// its centre sat 0.2 × its half-width right of and below the pointer, which is where the brush
 /// painted. Nothing tells the app which compositor does what, so the outline is painted instead.
 fn native(ctx: &egui::Context) -> bool {
-    cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT && !scaled_wayland(ctx)
+    cfg!(not(target_arch = "wasm32")) && !scaled_wayland(ctx)
 }
 
 /// Whether the pointer this viewport last saw has moved on to another of the app's windows,
@@ -323,24 +324,7 @@ fn resize_on_screen(s: Vec2) -> CursorIcon {
 /// `Grabbing` to the four-arrow move cursor on Windows, so there it is a bitmap; macOS and the
 /// Linux themes already draw hands, and the OS moves those without waiting for a frame.
 pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
-    if painted_in_window(ctx, "hand") {
-        return CursorIcon::Default;
-    }
-    hand_with(ctx, closed, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
-}
-
-/// On Windows the bitmap pointers reach only the main window; another window (Camera Raw's)
-/// would show the plain arrow for `Grab` or `ZoomIn` (user report: no zoom pointer there). A
-/// pointer painted in its place moved only as often as the window redraws (user report: "at a
-/// low hertz"), so the system arrow stays, moving with the mouse, and icon `name` is painted as a
-/// small badge beside it. True when it was.
-fn painted_in_window(ctx: &egui::Context, name: &str) -> bool {
-    if !cfg!(target_os = "windows") || ctx.viewport_id() == egui::ViewportId::ROOT {
-        return false;
-    }
-    let Some(p) = ctx.pointer_latest_pos() else { return false };
-    crate::icons::cursor_badge(ctx, name, p);
-    true
+    hand_with(ctx, closed, cfg!(target_os = "windows"))
 }
 
 fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
@@ -359,12 +343,10 @@ pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCur
 
 /// The Zoom tool's pointer: a magnifier with a plus, or a minus when it zooms `out`. winit maps
 /// `ZoomIn` and `ZoomOut` to the plain arrow on Windows (#3735), so there it is a bitmap; macOS and
-/// the Linux themes already draw magnifiers.
+/// the Linux themes already draw magnifiers. In every window, Camera Raw's too: there a magnifier
+/// painted beside the arrow trailed the pointer by a frame (user report: the zoom symbol lags).
 pub(crate) fn zoom(ctx: &egui::Context, out: bool) -> CursorIcon {
-    if painted_in_window(ctx, if out { "zoom-out" } else { "zoom-in" }) {
-        return CursorIcon::Default;
-    }
-    zoom_with(ctx, out, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
+    zoom_with(ctx, out, cfg!(target_os = "windows"))
 }
 
 fn zoom_with(ctx: &egui::Context, out: bool, bitmap: bool) -> CursorIcon {

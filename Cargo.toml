@@ -200,7 +200,13 @@ egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968
 egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+# eframe is vendored (vendor/eframe/PATCHES.md): its immediate viewports take cursor bitmaps.
+eframe = { path = "vendor/eframe" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+# The egui fork's own crates (egui_kittest) take eframe from its git source: the vendored copy
+# there too, so there is one eframe.
+[patch."https://github.com/storytold/egui.git"]
+eframe = { path = "vendor/eframe" }
