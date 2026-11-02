@@ -114,6 +114,41 @@ fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
+/// Continue on Error (user request): with `step`, whether playback passes over that step when it
+/// fails; without it, every step of the action (the action's own option).
+fn continue_on_error(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.continueOnError";
+    not_playing(s, cmd)?;
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    let enabled = match p.get("enabled") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
+    };
+    let step = index(p, "step", cmd)?;
+    let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
+    if step.is_some_and(|step| step >= len) {
+        return Err(bad(cmd, "step is out of range"));
+    }
+    if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+        flush_recording(s)?;
+    }
+    let action = &mut s.actions.list[idx];
+    match step {
+        Some(step) => {
+            if enabled.unwrap_or(!action.continue_steps.contains(&step)) {
+                action.continue_steps.insert(step);
+            } else {
+                action.continue_steps.remove(&step);
+            }
+        }
+        None => action.continue_on_error = enabled.unwrap_or(!action.continue_on_error),
+    }
+    let result = json!({"action": action.name, "continueOnError": action.continue_on_error, "continueSteps": action.continue_steps});
+    s.actions.touch();
+    Ok(result)
+}
+
 fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.assignSet";
     not_playing(s, cmd)?;
@@ -271,6 +306,16 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: false,
         },
         CommandSpec {
+            id: "actions.continueOnError",
+            label: "Continue on Error",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index, "step":index?, "enabled":bool?} → {action, continueOnError, continueSteps:[step…]}. Without step, the action's Continue on Error: every step that fails is passed over and playback goes on with the next (listed in actions.play's skipped). With step, only that step is. Omitted enabled flips it. A step refused by Session::authorize or past the playback step limit still stops playback."##,
+            enabled: always,
+            run: continue_on_error,
+            journal: false,
+        },
+        CommandSpec {
             id: "actions.conditional",
             label: "Conditional",
             menu: &[],
@@ -303,6 +348,75 @@ mod tests {
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         s.actions.list.push(Action::new("A", steps.iter().map(|id| (id.to_string(), json!({}))).collect()));
         s
+    }
+
+    /// An action whose middle step fails: it changes a layer that doesn't exist.
+    fn session_with_failing_step() -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let steps = vec![
+            ("layer.new.layer".to_string(), json!({"name": "One"})),
+            ("layer.setProps".to_string(), json!({"layer": 987654, "opacity": 50})),
+            ("layer.new.layer".to_string(), json!({"name": "Two"})),
+        ];
+        s.actions.list.push(Action::new("A", steps));
+        s
+    }
+
+    fn layer_names(s: &Session) -> Vec<String> {
+        s.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect()
+    }
+
+    /// User request: Continue on Error, for a whole action (its right-click menu) or one step,
+    /// passes over a step that fails and plays the next.
+    #[test]
+    fn continue_on_error_passes_over_a_failed_step() {
+        // Off: playback stops at the failed step.
+        let mut s = session_with_failing_step();
+        let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!((r["ran"].as_u64(), r["failed"]["step"].as_u64()), (Some(1), Some(1)), "{r}");
+        assert!(!layer_names(&s).contains(&"Two".to_string()));
+        // The whole action.
+        let mut s = session_with_failing_step();
+        assert_eq!(s.execute("actions.continueOnError", json!({"action": "A"})).unwrap()["continueOnError"], true);
+        let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert_eq!(r["ran"], 2);
+        assert_eq!(r["skipped"][0]["step"], 1);
+        assert!(r["skipped"][0]["error"].as_str().is_some_and(|e| !e.is_empty()));
+        assert!(layer_names(&s).contains(&"Two".to_string()), "the step after it ran");
+        // One step: that one is passed over, another failing step still stops playback.
+        let mut s = session_with_failing_step();
+        assert_eq!(s.execute("actions.continueOnError", json!({"action": "A", "step": 1})).unwrap()["continueSteps"], json!([1]));
+        let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!((r["ran"].as_u64(), r.get("failed")), (Some(2), None), "{r}");
+        let mut s = session_with_failing_step();
+        s.execute("actions.continueOnError", json!({"action": "A", "step": 0, "enabled": true})).unwrap();
+        let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!(r["failed"]["step"], 1, "only the marked step is passed over: {r}");
+    }
+
+    #[test]
+    fn continue_on_error_is_kept_toggled_moved_and_saved() {
+        let mut s = session_with(&["select.all", "select.inverse", "select.deselect"]);
+        s.execute("actions.continueOnError", json!({"action": "A", "step": 2})).unwrap();
+        assert_eq!(s.execute("actions.continueOnError", json!({"action": "A", "step": 0})).unwrap()["continueSteps"], json!([0, 2]));
+        assert_eq!(s.execute("actions.continueOnError", json!({"action": "A", "step": 0})).unwrap()["continueSteps"], json!([2]), "flips");
+        assert_eq!(s.execute("actions.continueOnError", json!({"action": "A", "enabled": false})).unwrap()["continueOnError"], false);
+        // The flag follows its step when steps move.
+        s.execute("actions.move", json!({"action": "A", "step": 2, "to": 0})).unwrap();
+        assert_eq!(s.actions.list[0].continue_steps.iter().copied().collect::<Vec<_>>(), [0]);
+        let got = s.execute("actions.get", json!({"action": "A"})).unwrap();
+        assert_eq!((got["continueOnError"].clone(), got["continueSteps"].clone()), (json!(false), json!([0])));
+        // Saved with the list, and an older list without it loads as off.
+        let a = &s.actions.list[0];
+        let back: Action = serde_json::from_value(serde_json::to_value(a).unwrap()).unwrap();
+        assert_eq!(&back, a);
+        let old: Action = serde_json::from_value(json!({"name": "Old", "steps": []})).unwrap();
+        assert!(!old.continue_on_error && old.continue_steps.is_empty());
+        for p in [json!({}), json!({"action": "A", "step": 3}), json!({"action": "A", "enabled": "yes"}), json!({"action": "A", "step": -1})] {
+            assert!(s.execute("actions.continueOnError", p.clone()).is_err(), "{p}");
+        }
     }
 
     #[test]

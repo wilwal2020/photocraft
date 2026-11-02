@@ -301,6 +301,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         .or(suspended);
     let mut ran = 0u64;
     let mut failed = None;
+    let mut skipped = Vec::new();
     let mut paused = None;
     for (i, (id, p)) in action.enabled_steps().skip_while(|(i, _)| *i < from).take(limit.unwrap_or(usize::MAX)) {
         if !actions_cmds::consume_playback_step(&mut app.session) {
@@ -309,6 +310,11 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         }
         let resolved = match actions_cmds::playback_params(&app.session, id, p) {
             Ok(p) => p,
+            // Continue on Error passes over a step whose layer or document isn't there.
+            Err(e) if action.continues_past(i) => {
+                skipped.push(json!({"step": i, "id": id, "error": e.to_string()}));
+                continue;
+            }
             Err(e) => {
                 failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
                 break;
@@ -362,6 +368,10 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         match result {
             Ok(value) => {
                 if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
+                    if action.continues_past(i) {
+                        skipped.push(json!({"step": i, "id": id, "error": error}));
+                        continue;
+                    }
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
                 }
@@ -372,6 +382,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
                 }
                 ran += 1;
             }
+            Err(error) if action.continues_past(i) => skipped.push(json!({"step": i, "id": id, "error": error})),
             Err(error) => {
                 failed = Some(json!({"step": i, "id": id, "error": error}));
                 break;
@@ -394,11 +405,13 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     if top {
         show_played(app, &action.name);
     }
-    Ok(match (failed, paused) {
-        (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
-        (None, Some(p)) => json!({"action": action.name, "ran": ran, "paused": p}),
-        (None, None) => json!({"action": action.name, "ran": ran}),
-    })
+    let mut out = actions_cmds::played_result(&action.name, ran, failed, skipped);
+    if out.get("failed").is_none()
+        && let Some(p) = paused
+    {
+        out["paused"] = p;
+    }
+    Ok(out)
 }
 
 /// The action that just played is selected (its set opened and the row scrolled to), so the
@@ -486,6 +499,15 @@ pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
     let Some(failed) = v.get("failed").filter(|f| f.is_object()) else {
         let ran = v.get("ran").and_then(Value::as_u64).unwrap_or(0);
         app.ui.status = crate::i18n::trn(crate::i18n::current(), ran, "Played {n} step", "Played {n} steps");
+        // Continue on Error: say which steps failed and were passed over.
+        if let Some(first) = v.get("skipped").and_then(Value::as_array).and_then(|s| s.first().map(|f| (f, s.len()))) {
+            let (f, n) = first;
+            let step = f.get("step").and_then(Value::as_u64).unwrap_or(0);
+            let error = f.get("error").and_then(Value::as_str).unwrap_or("");
+            let template = "{n} failed and passed over (step {step}: {error})";
+            let note = crate::i18n::fmt(tl!(template), &[("n", &n.to_string()), ("step", &(step + 1).to_string()), ("error", error)]);
+            app.ui.status = format!("{} · {note}", app.ui.status);
+        }
         app.ui.status_error = false;
         return;
     };
@@ -1435,6 +1457,9 @@ struct Row {
     steps: Vec<(String, Value)>,
     disabled: std::collections::BTreeSet<usize>,
     dialogs: std::collections::BTreeSet<usize>,
+    /// Continue on Error: the whole action, and the steps marked on their own.
+    continue_on_error: bool,
+    continue_steps: std::collections::BTreeSet<usize>,
     set: Option<String>,
     color: String,
     check: Tri,
@@ -1458,6 +1483,8 @@ impl Row {
             steps: if shown { visible_steps(app, i) } else { Vec::new() },
             disabled: a.disabled.clone(),
             dialogs: a.dialogs.clone(),
+            continue_on_error: a.continue_on_error,
+            continue_steps: a.continue_steps.clone(),
             set: a.set.clone(),
             color: a.color.clone(),
             check,
@@ -1497,6 +1524,8 @@ enum Click {
     DialogStep(usize, usize),
     PlayStep(usize, usize),
     RecordAgain(usize, usize),
+    ContinueAction(usize),
+    ContinueStep(usize, usize),
 }
 
 fn apply(app: &mut PhotocraftApp, click: Click) {
@@ -1585,6 +1614,12 @@ fn apply(app: &mut PhotocraftApp, click: Click) {
         }
         Click::DialogStep(action, step) => {
             let _ = app.run("actions.dialog", json!({"action": action, "step": step}));
+        }
+        Click::ContinueAction(action) => {
+            let _ = app.run("actions.continueOnError", json!({"action": action}));
+        }
+        Click::ContinueStep(action, step) => {
+            let _ = app.run("actions.continueOnError", json!({"action": action, "step": step}));
         }
         Click::PlayStep(action, step) => {
             if let Some(name) = app.session.actions.list.get(action).map(|a| a.name.clone()) {
@@ -1766,7 +1801,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             for i in members {
                 let Some(row) = rows.get(i) else { continue };
-                let Row { name, count, steps, disabled, dialogs, color: swatch, .. } = row;
+                let Row { name, count, steps, disabled, dialogs, color: swatch, continue_on_error, continue_steps, .. } = row;
                 let indent = if set.is_some() && !button_mode { 14.0 } else { 0.0 };
                 let row_h = if button_mode { BUTTON_H } else { ROW_H };
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
@@ -1848,6 +1883,15 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 resp.context_menu(|ui| {
                     if ui.button(tl!("Action Options…")).clicked() {
                         clicks.push(Click::ActionOptions(i));
+                        ui.close();
+                    }
+                    let mut keep_going = *continue_on_error;
+                    if ui
+                        .checkbox(&mut keep_going, tl!("Continue on Error"))
+                        .on_hover_text(tl!("A step that fails is passed over and playback goes on with the next one"))
+                        .clicked()
+                    {
+                        clicks.push(Click::ContinueAction(i));
                         ui.close();
                     }
                     ui.separator();
@@ -1934,6 +1978,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     let color = if on { t.text_dim } else { t.text_faint };
                     ui.painter().text(pos2(sx + 18.0, r.center().y), Align2::LEFT_CENTER, &label, egui::FontId::proportional(11.5), color);
+                    // Continue on Error: a step playback passes over when it fails.
+                    let continues = *continue_on_error || continue_steps.contains(&step);
+                    if continues {
+                        ui.painter().text(pos2(r.right() - 8.0, r.center().y), Align2::RIGHT_CENTER, "»", egui::FontId::proportional(12.0), t.text_faint);
+                    }
                     // Photoshop's check column: unchecked steps are skipped by playback, Batch and droplets.
                     let check = ui.interact(
                         Rect::from_center_size(pos2(x0 + CHECK_X, r.center().y), vec2(18.0, 18.0)),
@@ -1973,6 +2022,17 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             clicks.push(Click::Step { action: i, step, ctrl, shift });
                         }
                     }
+                    response.context_menu(|ui| {
+                        let mut keep_going = continues;
+                        let item = ui
+                            .add_enabled(!*continue_on_error, egui::Checkbox::new(&mut keep_going, tl!("Continue If This Step Fails")))
+                            .on_hover_text(tl!("Playback passes over this step when it fails and goes on with the next one"))
+                            .on_disabled_hover_text(tl!("The whole action continues on error (its own right-click menu)"));
+                        if item.clicked() {
+                            clicks.push(Click::ContinueStep(i, step));
+                            ui.close();
+                        }
+                    });
                     if open {
                         for line in lines {
                             let (pr, _) = ui.allocate_exact_size(vec2(ui.available_width(), PARAM_H), Sense::hover());
@@ -2473,6 +2533,31 @@ pub(crate) mod tests {
         assert_eq!(h.state().session.actions.list[0].name, "Second");
         assert_eq!(h.state().ui.actions.expanded, [false, true]);
         assert_eq!(h.state().ui.actions.selected, Some(0));
+    }
+
+    /// User request: Continue on Error in the app's own playback (the right-click items), and the
+    /// status line names the step it passed over.
+    #[test]
+    fn the_panel_plays_past_a_failed_step_with_continue_on_error() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":40,"height":40})).unwrap();
+        app.session.actions.list.push(Action::new(
+            "A",
+            vec![("layer.setProps".into(), json!({"layer": 987654, "opacity": 50})), ("layer.new.layer".into(), json!({"name": "After"}))],
+        ));
+        let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layers.iter().filter(|l| l.name == "After").count();
+        let r = app.run("actions.play", json!({"action": "A"})).unwrap();
+        assert!(r.get("failed").is_some() && layers(&app) == 0, "{r}");
+        apply(&mut app, Click::ContinueStep(0, 0));
+        let r = app.run("actions.play", json!({"action": "A"})).unwrap();
+        assert!(r.get("failed").is_none() && layers(&app) == 1, "{r}");
+        report_play(&mut app, &r);
+        assert!(app.ui.status.contains("passed over") && !app.ui.status_error, "{}", app.ui.status);
+        // The action's own item covers every step.
+        apply(&mut app, Click::ContinueStep(0, 0));
+        apply(&mut app, Click::ContinueAction(0));
+        let r = app.run("actions.play", json!({"action": "A"})).unwrap();
+        assert!(r.get("failed").is_none() && layers(&app) == 2, "{r}");
     }
 
     #[test]

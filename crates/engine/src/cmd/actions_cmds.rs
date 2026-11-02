@@ -8,7 +8,9 @@
 //! entries of the commands it ran on its own behalf, so they are recorded once (#3067). Playback
 //! runs those steps with [`Session::execute`] and stops at the first error, leaving one history
 //! step per step that ran. Steps switched off with `actions.toggle` (the Actions panel check
-//! marks) are skipped by playback, Batch and droplets.
+//! marks) are skipped by playback, Batch and droplets. A step that fails in an action with
+//! Continue on Error, or marked to continue itself (`actions.continueOnError`), is passed over
+//! instead and listed in the result's `skipped`.
 //!
 //! What is recorded follows Photoshop ([`recordable`]): tool options, the presets panels,
 //! preferences and the View menu are not (Insert Menu Item adds a menu step), and painting and
@@ -59,6 +61,13 @@ pub struct Action {
     /// selected, Play runs the action once per layer, each time with that layer alone selected.
     #[serde(default, rename = "eachLayer", skip_serializing_if = "std::ops::Not::not")]
     pub each_layer: bool,
+    /// Continue on Error (user request): a step that fails is passed over and playback goes on
+    /// with the next one, for every step of the action.
+    #[serde(default, rename = "continueOnError", skip_serializing_if = "std::ops::Not::not")]
+    pub continue_on_error: bool,
+    /// Indices of steps passed over when they fail, as [`Action::continue_on_error`] does for all.
+    #[serde(default, rename = "continueSteps", skip_serializing_if = "BTreeSet::is_empty")]
+    pub continue_steps: BTreeSet<usize>,
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
@@ -66,13 +75,30 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new(), each_layer: false }
+        Self {
+            name: name.into(),
+            steps,
+            disabled: BTreeSet::new(),
+            dialogs: BTreeSet::new(),
+            set: None,
+            color: String::new(),
+            each_layer: false,
+            continue_on_error: false,
+            continue_steps: BTreeSet::new(),
+        }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
     pub(crate) fn remap_steps(&mut self, f: impl Fn(usize) -> Option<usize>) {
         self.disabled = self.disabled.iter().filter_map(|&i| f(i)).collect();
         self.dialogs = self.dialogs.iter().filter_map(|&i| f(i)).collect();
+        self.continue_steps = self.continue_steps.iter().filter_map(|&i| f(i)).collect();
+    }
+
+    /// Whether playback goes on past `step` when it fails: the whole action continues on error,
+    /// or the step does.
+    pub fn continues_past(&self, step: usize) -> bool {
+        self.continue_on_error || self.continue_steps.contains(&step)
     }
 
     pub fn step_enabled(&self, step: usize) -> bool {
@@ -492,7 +518,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let action = &s.actions.list[idx];
     let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
     Ok(
-        json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color, "eachLayer": action.each_layer}),
+        json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color, "eachLayer": action.each_layer, "continueOnError": action.continue_on_error, "continueSteps": action.continue_steps}),
     )
 }
 
@@ -617,39 +643,65 @@ pub fn saves_smart_contents(s: &Session, id: &str) -> bool {
     id == "file.save" && s.is_enabled(SAVE_CONTENTS)
 }
 
-fn run_recorded(s: &mut Session, action: &Action, from: usize, limit: Option<usize>) -> (u64, Option<Value>) {
-    let mut ran = 0u64;
-    let mut failed = None;
+/// What a playback did: the steps that ran, the failure it stopped at, and the failures it passed
+/// over (Continue on Error).
+#[derive(Default)]
+struct Played {
+    ran: u64,
+    failed: Option<Value>,
+    skipped: Vec<Value>,
+}
+
+/// The result of a playback of `action`: `{action, ran, failed?, skipped?}`.
+pub fn played_result(action: &str, ran: u64, failed: Option<Value>, skipped: Vec<Value>) -> Value {
+    let mut out = json!({"action": action, "ran": ran});
+    if let Some(f) = failed {
+        out["failed"] = f;
+    }
+    if !skipped.is_empty() {
+        out["skipped"] = json!(skipped);
+    }
+    out
+}
+
+fn run_recorded(s: &mut Session, action: &Action, from: usize, limit: Option<usize>) -> Played {
+    let mut played = Played::default();
+    let Played { ran, failed, .. } = &mut played;
+    let mut skipped = Vec::new();
     for (i, (id, params)) in action.enabled_steps().skip_while(|(i, _)| *i < from).take(limit.unwrap_or(usize::MAX)) {
+        // Over the step limit or refused by the gate: never passed over.
         if !consume_playback_step(s) {
-            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
+            *failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
             break;
         }
         if let Some(auth) = s.authorize
             && let Err(e) = auth(id, params)
         {
-            failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+            *failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
         }
         if noop_step(s, id, params) {
-            ran += 1;
+            *ran += 1;
             continue;
         }
-        match playback_params(s, id, params).and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) }) {
-            Ok(value) => {
-                if let Some(error) = nested_failure(id, &value) {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
-                    break;
-                }
-                ran += 1;
-            }
-            Err(e) => {
-                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+        let error = match playback_params(s, id, params)
+            .and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) })
+        {
+            Ok(value) => nested_failure(id, &value),
+            Err(e) => Some(e.to_string()),
+        };
+        match error {
+            None => *ran += 1,
+            // Continue on Error passes over the failed step and plays the next.
+            Some(error) if action.continues_past(i) => skipped.push(json!({"step": i, "id": id, "error": error})),
+            Some(error) => {
+                *failed = Some(json!({"step": i, "id": id, "error": error}));
                 break;
             }
         }
     }
-    (ran, failed)
+    played.skipped = skipped;
+    played
 }
 
 /// Suspend recording while a called action executes. Keep its commands in the journal
@@ -769,12 +821,9 @@ fn play_once(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let limit = step_limit(p)?;
     let recording = begin_playback(s, &action)?;
-    let (ran, failed) = run_recorded(s, &action, from, limit);
+    let played = run_recorded(s, &action, from, limit);
     finish_playback(s, recording, &action, from, limit);
-    Ok(match failed {
-        Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
-        None => json!({"action": action.name, "ran": ran}),
-    })
+    Ok(played_result(&action.name, played.ran, played.failed, played.skipped))
 }
 
 pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {
