@@ -60,8 +60,8 @@ pub(crate) fn upright_angle(xf: &crate::canvas::ViewXform, angle: f32) -> f32 {
     if a.is_finite() { a } else { angle }
 }
 
-/// Whether `tool` paints with the tip kept upright on screen in view `xf` (the Brush with Turn Tip
-/// with View off, in a rotated or flipped view).
+/// Whether `tool`'s cursor shows the tip upright on screen in view `xf` (the Brush with Turn Tip
+/// with View off, in a rotated or flipped view). Strokes paint with the brush's own angle.
 pub(crate) fn keeps_screen_angle(app: &crate::PhotocraftApp, tool: crate::state::Tool, xf: &crate::canvas::ViewXform) -> bool {
     tool == crate::state::Tool::Brush && !app.ui.tool_options.brush_tip_turns_with_view && (xf.rotation != 0.0 || xf.flip)
 }

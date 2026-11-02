@@ -1,9 +1,9 @@
 use super::{
     PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, file_open,
     gpu_canvas, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices, palette, panels,
-    prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, targa_options_ui, text_field_menu, theme, tiff_options_ui,
-    timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds, wide_angle_ui, work_area,
-    workspace_ui,
+    prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui, text_field_menu, theme,
+    tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds,
+    wide_angle_ui, work_area, workspace_ui,
 };
 
 impl PhotocraftApp {
@@ -24,6 +24,7 @@ impl PhotocraftApp {
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
+        crate::layer_row_ui::frame_began(ctx);
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
@@ -83,6 +84,10 @@ impl PhotocraftApp {
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);
         discard_ui::guard_window_close(self, ctx);
+        // A zoom field being typed in: plays its alert, and notes a click on the pasteboard.
+        crate::zoom_field::tick(self, ctx);
+        // A colour swatch's Color Picker OK hands its colour back to the swatch widget.
+        crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
@@ -186,6 +191,8 @@ impl PhotocraftApp {
         // Every frame that started its stage record closes it, whichever way `ui_body` returns.
         let drawn = self.ui_body(ui);
         let ui_ms = gpu_canvas::now_ms() - t0;
+        // Logic and UI passes alike, for when a click queued behind them was made.
+        crate::layer_row_ui::frame_ended(&ctx, gpu_canvas::now_ms() - self.last_frame_start_ms);
         // A GPU measurement lands a frame or two after the refresh it belongs to. Refreshes
         // carry them out, but the last refresh before the app settles has none following it, so
         // drain the timer here too or its number is never reported. Drain it either way: a
@@ -377,6 +384,9 @@ impl PhotocraftApp {
         targa_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
+        crate::preset_panels::persist_sizes(self);
+        smart_svg_ui::poll(self, &ctx);
+        smart_svg_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);

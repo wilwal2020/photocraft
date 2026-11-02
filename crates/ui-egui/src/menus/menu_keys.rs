@@ -300,8 +300,10 @@ impl Keys {
         let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
         if open {
             // A letter runs the row with that mnemonic in the level the arrows are in, unless it is
-            // typed into a field in the menu: Help › Search took "S" for System Info (#5996).
-            let typing = ctx.text_edit_focused();
+            // typed into a field in the menu: Help › Search took "S" for System Info (#5996). A zoom
+            // field that kept the keyboard through the click on the menu title is not in the menu,
+            // but while Help › Search is open the letters are still typing.
+            let typing = ctx.text_edit_focused() && !(crate::zoom_field::is_focused(ctx) && !super::search::shown(ctx));
             let letter = events.iter().filter(|_| !typing).find_map(|e| match e {
                 Event::Key { key, pressed: true, modifiers, .. } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
                     key_char(*key).map(|c| (*key, c))
@@ -312,6 +314,7 @@ impl Keys {
                 && let Some(row) = nav.row_with_mnemonic(c)
             {
                 consume(Modifiers::NONE, key);
+                crate::zoom_field::drop_text(ctx, c);
                 self.underline = true;
                 if let Some(cmd) = row.command.clone() {
                     *clicked = Some(cmd);

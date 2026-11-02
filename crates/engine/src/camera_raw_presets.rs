@@ -131,6 +131,50 @@ pub fn favorites(_: &str) -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
 }
 
+/// The file in PhotoCraft's presets folder `dir` that keeps the presets starred in PhotoCraft (a
+/// dot file, so the folder's listing passes it by).
+const OWN_FAVORITES: &str = ".favorites.json";
+
+/// The presets starred in PhotoCraft (by UUID, else path), kept in its presets folder `dir`. Camera
+/// Raw's own favourites file names presets by ids no preset file carries, so it can't always be
+/// matched (user report: Photoshop's favourites were missing).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn own_favorites(dir: &str) -> std::collections::HashSet<String> {
+    let path = std::path::Path::new(dir.trim()).join(OWN_FAVORITES);
+    std::fs::metadata(&path)
+        .ok()
+        .filter(|m| m.is_file() && m.len() <= MAX_PRESET_BYTES)
+        .and_then(|_| std::fs::read(&path).ok())
+        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+        .map(|v| v.into_iter().take(MAX_PRESETS).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn own_favorites(_: &str) -> std::collections::HashSet<String> {
+    std::collections::HashSet::new()
+}
+
+/// Saves the presets starred in PhotoCraft (see [`own_favorites`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_own_favorites(dir: &str, stars: &std::collections::HashSet<String>) -> Result<(), String> {
+    if dir.trim().is_empty() {
+        return Err("no presets folder".into());
+    }
+    let folder = std::path::PathBuf::from(dir.trim());
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let mut list: Vec<&String> = stars.iter().collect();
+    list.sort();
+    let text = serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?;
+    let path = folder.join(OWN_FAVORITES);
+    photocraft_format::atomic_write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn set_own_favorites(_: &str, _: &std::collections::HashSet<String>) -> Result<(), String> {
+    Err("presets can't be saved here".into())
+}
+
 /// `name` as a file or folder name: characters file systems refuse replaced, at most 100
 /// characters, never empty or only dots.
 pub fn file_name(name: &str) -> String {
@@ -230,6 +274,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// User report: Photoshop's favourites didn't show (Camera Raw names them by ids no preset
+    /// carries). Presets starred in PhotoCraft are kept in its own folder, which still lists only
+    /// its presets.
+    #[test]
+    fn presets_starred_here_are_kept_beside_the_presets() {
+        let own = temp("stars");
+        let dir = own.to_str().unwrap();
+        assert!(own_favorites(dir).is_empty());
+        let stars: std::collections::HashSet<String> = ["2079B84DDC2CD044840499688E5102CB".to_string(), "C:/x/preset.xmp".to_string()].into();
+        set_own_favorites(dir, &stars).unwrap();
+        assert_eq!(own_favorites(dir), stars);
+        assert!(scan(&[(dir.to_string(), Source::Own)]).is_empty(), "the favourites file is no preset");
+        std::fs::write(own.join(OWN_FAVORITES), b"not json").unwrap();
+        assert!(own_favorites(dir).is_empty(), "a damaged file is no favourites, not an error");
+        assert!(set_own_favorites("  ", &stars).is_err());
+        let _ = std::fs::remove_dir_all(&own);
     }
 
     #[test]

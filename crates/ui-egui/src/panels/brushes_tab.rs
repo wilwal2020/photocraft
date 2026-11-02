@@ -1209,6 +1209,11 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
     let t = Tokens::get(ui.ctx());
     let well = (!layout.cards).then(|| list_colors(&t).well);
     egui::Frame::new().fill(well.unwrap_or(Color32::TRANSPARENT)).show(ui, |ui| {
+        // The list's scroll bar stays in view, not only while the pointer is over it (user
+        // request): the long list needs it to show where it is.
+        let scroll = &mut ui.spacing_mut().scroll;
+        scroll.dormant_handle_opacity = scroll.active_handle_opacity.max(0.6);
+        scroll.dormant_background_opacity = scroll.active_background_opacity;
         // The pinned group, under the search field: at most about half the list's height (it
         // scrolls on its own beyond that), with the rest of the list scrolling underneath.
         let mut list_h = layout.max_height;

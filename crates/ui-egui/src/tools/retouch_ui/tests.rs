@@ -728,6 +728,25 @@ fn remove_strokes_waiting_are_dropped_when_the_tool_changes() {
 }
 
 #[test]
+fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_option() {
+    let mut app = app();
+    app.ui.tool = Tool::Remove;
+    app.ui.tool_options.remove_lama.new_layer = true;
+    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+    let layers = app.session.active().unwrap().doc.walk().len();
+    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 18.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 42.0 }, egui::Modifiers::NONE);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let (id, params) = app.session.journal.last().unwrap();
+    assert_eq!(id, "paint.remove");
+    assert_eq!(params["newLayer"], json!(false));
+    assert_eq!(app.session.active().unwrap().doc.walk().len(), layers);
+    assert!(app.ui.tool_options.remove_lama.new_layer);
+    app.run("channel.target", json!({"channel":"composite"})).unwrap();
+    assert_eq!(remove_params(&app.ui.tool_options, true)["newLayer"], json!(true));
+}
+
+#[test]
 fn create_a_new_layer_sends_new_layer_to_the_command() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
@@ -877,7 +896,7 @@ fn ai_remove_always_uses_nano_banana_and_its_settings() {
     assert_eq!((&p["model"], &p["generative"], &p["selection"]), (&json!("nanoBanana"), &json!("on"), &json!(true)));
     assert_eq!((&p["newLayer"], &p["prompt"], &p["area"]), (&json!(true), &json!("grass"), &json!("page")), "{p}");
     // The strokes keep the options bar's model and its settings.
-    let s = remove_params(&app.ui.tool_options);
+    let s = remove_params(&app.ui.tool_options, true);
     assert_eq!((&s["model"], &s["generative"], &s["newLayer"]), (&json!("lama"), &json!("off"), &json!(false)));
     assert!(s.get("prompt").is_none());
     // AI Outpaint: the same request, carried on into the selection instead of removed.
@@ -896,15 +915,15 @@ fn each_remove_model_keeps_its_own_settings() {
         remove_model: "diffusion".into(),
         ..Default::default()
     };
-    let p = remove_params(&o);
+    let p = remove_params(&o, true);
     assert_eq!((&p["prompt"], &p["newLayer"]), (&json!("a wall"), &json!(true)));
     assert!(!remove_options(&o, remove_model(&o)).after_each_stroke);
     o.remove_model = "lama".into();
-    let p = remove_params(&o);
+    let p = remove_params(&o, true);
     assert_eq!(&p["newLayer"], &json!(false));
     assert!(remove_options(&o, remove_model(&o)).after_each_stroke);
     o.remove_model = "nanoBanana".into();
-    assert!(remove_params(&o).get("prompt").is_none(), "Nano Banana's prompt is its own");
+    assert!(remove_params(&o, true).get("prompt").is_none(), "Nano Banana's prompt is its own");
     // Older preferences (one shared set) load with each model's defaults.
     let old: crate::state::ToolOptions = serde_json::from_value(json!({"remove_new_layer": true, "remove_prompt": "x"})).unwrap();
     assert_eq!(old.remove_lama, crate::state::RemoveModelOptions::default());
@@ -915,19 +934,19 @@ fn nano_banana_is_a_model_with_a_prompt() {
     assert!(generative_models().iter().any(|(k, _)| k == "nanoBanana"));
     let mut o = crate::state::ToolOptions { remove_model: "nanoBanana".into(), ..Default::default() };
     o.remove_nano.prompt = " a window ".into();
-    let p = remove_params(&o);
+    let p = remove_params(&o, true);
     assert_eq!((&p["model"], &p["prompt"], &p["mark"]), (&json!("nanoBanana"), &json!("a window"), &json!("paint")));
     assert_eq!((&p["area"], &p["creative"]), (&json!("near"), &json!(false)), "close up, only the area removed");
     assert_eq!((&p["maskExpand"], &p["maskFeather"]), (&json!(4.0), &json!(2.0)), "the mask is grown and softened by default");
     (o.remove_mask_expand, o.remove_mask_feather) = (7.0, 1e9);
-    assert_eq!((&remove_params(&o)["maskExpand"], &remove_params(&o)["maskFeather"]), (&json!(7.0), &json!(MASK_EDGE_MAX)));
+    assert_eq!((&remove_params(&o, true)["maskExpand"], &remove_params(&o, true)["maskFeather"]), (&json!(7.0), &json!(MASK_EDGE_MAX)));
     o.remove_nano_mark = "mask".into();
-    assert_eq!(remove_params(&o)["mark"], "mask");
+    assert_eq!(remove_params(&o, true)["mark"], "mask");
     (o.remove_area, o.remove_creative) = ("page".into(), true);
-    assert_eq!((&remove_params(&o)["area"], &remove_params(&o)["creative"]), (&json!("page"), &json!(true)));
-    assert!(remove_params(&o).get("maskExpand").is_none(), "creative shows everything: no mask settings");
+    assert_eq!((&remove_params(&o, true)["area"], &remove_params(&o, true)["creative"]), (&json!("page"), &json!(true)));
+    assert!(remove_params(&o, true).get("maskExpand").is_none(), "creative shows everything: no mask settings");
     o.remove_model = "unknown".into();
-    assert_eq!(remove_params(&o)["model"], "lama");
+    assert_eq!(remove_params(&o, true)["model"], "lama");
 }
 
 #[test]

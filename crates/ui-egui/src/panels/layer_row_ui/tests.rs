@@ -795,3 +795,118 @@ fn a_hidden_layers_eye_box_paints_nothing() {
         assert_eq!(in_eye_box(hidden), 0, "{theme}: a hidden layer's eye box is left empty");
     }
 }
+
+/// #10218: an artboard's row is set apart from layers and groups, as in Photoshop: shorter, with no
+/// thumbnail (a board isn't a folder), while a plain group keeps its folder thumbnail.
+#[test]
+fn artboard_rows_have_no_thumbnail_and_a_shorter_row() {
+    // A board holding a layer, and a plain group beside it; returns their ids.
+    let make = || {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.new.layer", json!({"name": "Loose"})).unwrap();
+        let group = s.execute("layer.groupLayers", json!({"name": "Folder"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+        (s, board, layer, group)
+    };
+    for theme in ["pro", "studio"] {
+        let (s, board, layer, group) = make();
+        let h = harness(s, 1.0, theme, 320.0);
+        let rows = recorded(&h.ctx);
+        let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("{theme}: row for {id}"));
+        let (b, l, g) = (row(board), row(layer), row(group));
+        assert!(b.thumbnail.is_none(), "{theme}: the artboard has no thumbnail");
+        assert!(g.thumbnail.is_some(), "{theme}: a plain group keeps its folder thumbnail");
+        assert!(l.thumbnail.is_some(), "{theme}: a layer keeps its thumbnail");
+        assert!(b.row.height() < l.row.height(), "{theme}: the artboard row is shorter ({} vs {})", b.row.height(), l.row.height());
+        assert!(b.name.is_some(), "{theme}: the board's name is shown");
+    }
+}
+
+/// A board with a mask keeps its usual row, thumbnail and all, so the mask thumbnail and
+/// everything the board's thumbnail does on a masked layer still work there (#10218).
+#[test]
+fn a_masked_artboard_row_keeps_its_thumbnail_and_mask_thumbnail() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    let h = harness(s, 1.0, "pro", 320.0);
+    let rows = recorded(&h.ctx);
+    let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("row for {id}"));
+    let (b, l) = (row(board), row(layer));
+    assert!(b.thumbnail.is_some(), "a masked board keeps its thumbnail");
+    let (thumbs, chains) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("the board's mask thumbnail is drawn");
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a pixel mask thumbnail").1;
+    assert!(b.row.contains_rect(mask), "the mask thumbnail sits in the board's row");
+    assert_eq!(b.row.height(), l.row.height(), "a layer's height");
+    // The triangle's widget is its whole hit area; the chain sits clear of it.
+    let hit = h.get_by_label("Collapse group Board").rect();
+    let chain = chains.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a mask chain").1;
+    assert!(chain.left() >= hit.right(), "the chain ({chain:?}) is clear of the triangle's hit area ({hit:?})");
+}
+
+/// On a masked board, as on any masked layer: ⌥-clicking the mask thumbnail shows the mask, and
+/// clicking the board's thumbnail ends the mask view and targets the board.
+#[test]
+fn a_masked_artboards_thumbnail_retargets_it_and_ends_the_mask_view() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    s.execute("layer.select", json!({"layer": board})).unwrap();
+    let mut h = harness(s, 1.0, "pro", 320.0);
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("mask thumbnail drawn");
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1;
+    let viewing = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().and_then(photocraft_engine::mask_view_cmds::current).is_some();
+    // ⌥-click the mask thumbnail: the mask is shown.
+    h.hover_at(mask.center());
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    assert!(viewing(&h), "⌥-click shows the mask");
+    let thumb = recorded(&h.ctx).iter().find(|r| r.layer == board).and_then(|r| r.thumbnail).expect("the board's thumbnail");
+    click(&mut h, thumb.center());
+    assert!(!h.state().ui.mask_target, "the board is targeted again");
+    assert!(!viewing(&h), "and the mask view ends");
+}
+
+/// User report (again): a double-click on a Solid Color thumbnail on a big document sometimes
+/// didn't open the Color Picker. The first click selects the layer, and that frame can take more
+/// than the double-click time; the second click, made while it worked, is handled by the next
+/// frame. It counts from when the slow frame began, so it still completes the double-click; after
+/// an idle wait the clicks are timed as before.
+#[test]
+fn a_second_click_queued_behind_a_slow_frame_still_double_clicks() {
+    let ctx = egui::Context::default();
+    let frame = |t: f64, work_ms: f64, click: bool| {
+        let mut double = false;
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(t), ..Default::default() }, |ui| {
+            super::frame_began(ui.ctx());
+            if click {
+                double = super::second_click(ui.ctx(), true, 7, 5);
+            }
+            super::frame_ended(ui.ctx(), work_ms);
+        });
+        out.textures_delta.clear();
+        double
+    };
+    assert!(!frame(1.0, 1500.0, true), "the first click");
+    assert!(frame(2.55, 10.0, true), "made while the 1.5 s frame worked: a double-click");
+    frame(5.0, 10.0, false);
+    assert!(!frame(10.0, 10.0, true));
+    frame(10.2, 10.0, false);
+    assert!(!frame(10.7, 10.0, true), "0.7 s apart, frames idle between: two clicks");
+}

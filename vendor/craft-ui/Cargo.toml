@@ -1,4 +1,4 @@
-# craft-ui from storytold/craft-libs at 92d392cff132eaf53e13afff77f38b5c11b73aa0, vendored for the
+# craft-ui from storytold/craft-libs at c5a1cbfb5f9049f9270955caffb5bee5997aebf7, vendored for the
 # Photoshop-parity fork's docking changes (see PATCHES.md). Standalone: not a workspace member, so
 # the workspace's stricter lints don't apply to upstream's code.
 [package]
@@ -11,8 +11,8 @@ rust-version = "1.95"
 description = "Reusable egui controls and icon catalogs for Craft frontends"
 
 [dependencies]
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 egui = { version = "0.37", default-features = false }
 epaint = { version = "0.37", default-features = false }
 log = "0.4"

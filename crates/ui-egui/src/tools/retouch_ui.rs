@@ -133,7 +133,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 return true;
             }
             remove_running_show(app, points);
-            ("paint.remove", remove_params(&o))
+            ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels")))
         }
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
@@ -199,8 +199,14 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 }
 
 /// `paint.remove` params from the options bar (without the strokes).
-fn remove_params(o: &crate::state::ToolOptions) -> Value {
-    model_params(o, remove_model(o), &o.remove_generative)
+/// `composite`: the strokes edit the layer's own pixels; a new layer is made only then (not on a
+/// mask or a channel).
+fn remove_params(o: &crate::state::ToolOptions, composite: bool) -> Value {
+    let mut p = model_params(o, remove_model(o), &o.remove_generative);
+    if !composite {
+        p["newLayer"] = json!(false);
+    }
+    p
 }
 
 /// The settings the Remove tool's `model` keeps for itself ([`crate::state::RemoveModelOptions`]).
@@ -591,7 +597,7 @@ pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
     let strokes = std::mem::take(&mut app.remove_pending);
     // The tint stays while the removal runs.
     app.remove_running_doc = app.remove_pending_target.take().map(|t| t.doc);
-    let mut p = remove_params(&app.ui.tool_options);
+    let mut p = remove_params(&app.ui.tool_options, crate::canvas::paint_target(app).as_str() == Some("pixels"));
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
     app.ui.status.clear();
@@ -859,6 +865,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     {
         return false;
     }
+    let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -927,7 +934,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
             let model = remove_model(o);
             let own = remove_options_mut(o, model);
-            crate::widgets::checkbox(ui, &mut own.new_layer, tl!("Create a new layer"));
+            ui.add_enabled_ui(composite, |ui| crate::widgets::checkbox(ui, &mut own.new_layer, tl!("Create a new layer")));
             crate::widgets::checkbox(ui, &mut own.after_each_stroke, tl!("Remove after each stroke"));
             let selected = app.session.active().is_some_and(|st| st.doc.selection.is_some());
             if app.remove_pending.is_empty() && selected && !cfg!(target_arch = "wasm32") {

@@ -439,6 +439,58 @@ pub(crate) fn slid_tap(ctx: &egui::Context, resp: &egui::Response) -> bool {
     pressed.zip(resp.interact_pointer_pos()).is_some_and(|((w, origin), up)| w == resp.id && origin.distance(up) <= TAP_SLIDE)
 }
 
+/// When this frame and the one before it ran, in egui's time (s): the previous frame's start and
+/// the end of its work, and this frame's start.
+#[derive(Clone, Copy, Default)]
+struct FrameClock {
+    prev_start: f64,
+    prev_end: f64,
+    start: f64,
+    end: f64,
+}
+
+fn clock_id() -> egui::Id {
+    egui::Id::unique("pc-frame-clock")
+}
+
+/// A frame starts (the app's logic pass).
+pub(crate) fn frame_began(ctx: &egui::Context) {
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| {
+        let c = d.get_temp::<FrameClock>(clock_id()).unwrap_or_default();
+        d.insert_temp(clock_id(), FrameClock { prev_start: c.start, prev_end: c.end, start: now, end: now });
+    });
+}
+
+/// The frame's own work took `ms` (wall clock), commands it ran included.
+pub(crate) fn frame_ended(ctx: &egui::Context, ms: f64) {
+    if !ms.is_finite() || ms < 0.0 {
+        return;
+    }
+    ctx.data_mut(|d| {
+        let mut c = d.get_temp::<FrameClock>(clock_id()).unwrap_or_default();
+        c.end = c.start + ms / 1000.0;
+        d.insert_temp(clock_id(), c);
+    });
+}
+
+/// When a click this frame handles was made: (the earliest it can have been, this frame's
+/// start). A frame that starts right as the one before it finished was waiting on it: what it
+/// handles came in while that frame worked, which can be long after the frame began (a click
+/// that runs a heavy command on a big document). Counting from this frame's start then would
+/// make a quick double-click look slow (user report: double-clicking a Solid Color thumbnail
+/// still sometimes didn't open the Color Picker).
+fn click_time(ctx: &egui::Context) -> (f64, f64) {
+    let now = ctx.input(|i| i.time);
+    let Some(c) = ctx.data(|d| d.get_temp::<FrameClock>(clock_id())).filter(|c| c.start == now) else { return (now, now) };
+    let waited = c.start - c.prev_end < QUEUED_S && c.prev_end > c.prev_start;
+    (if waited { c.prev_start.min(now) } else { now }, now)
+}
+
+/// How soon after a frame's work a frame may start for its input to count as queued meanwhile
+/// (presenting the frame takes some of it).
+const QUEUED_S: f64 = 0.1;
+
 /// Whether this click on the row of layer `layer` completes a double-click: a second click on the
 /// same `part` of that layer's row (its name, thumbnail, a mask…) within Windows' double-click
 /// time. Counted by layer and part, not by where on the screen the clicks land: the first click
@@ -452,13 +504,13 @@ pub(crate) fn second_click(ctx: &egui::Context, tapped: bool, layer: u64, part: 
         return false;
     }
     let id = egui::Id::unique("pc-layer-row-click");
-    let now = ctx.input(|i| i.time);
+    let (earliest, now) = click_time(ctx);
     let last: Option<(f64, u64, u8)> = ctx.data(|d| d.get_temp(id));
     let same_frame = ctx.input(|i| {
         i.pointer.button_clicked(egui::PointerButton::Primary)
             && i.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count() >= 2
     });
-    let double = same_frame || last.is_some_and(|(t, l, p)| l == layer && p == part && (0.0..DOUBLE_CLICK_S).contains(&(now - t)));
+    let double = same_frame || last.is_some_and(|(t, l, p)| l == layer && p == part && now >= t && earliest - t < DOUBLE_CLICK_S);
     ctx.data_mut(|d| {
         if double {
             d.remove::<(f64, u64, u8)>(id);

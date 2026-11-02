@@ -57,6 +57,34 @@ pub struct PresetUi {
     pub renaming: Option<(String, String, String)>,
 }
 
+const SIZES_PREF: &str = "ui.presetThumbnailSizes";
+
+/// Saves the panels' thumbnail sizes with the preferences when one changed, so a size set with a
+/// panel's slider (Libraries, Swatches, Patterns…) is there after a restart whether or not the
+/// workspace remembers its changes (user report: the Libraries size didn't survive a restart).
+pub fn persist_sizes(app: &mut PhotocraftApp) {
+    let sizes = &app.ui.presets_ui.sizes;
+    let saved = app.session.prefs().dialogs.get(SIZES_PREF).and_then(|v| serde_json::from_value::<BTreeMap<String, f32>>(v.clone()).ok());
+    if saved.as_ref() == Some(sizes) || (saved.is_none() && sizes.is_empty()) {
+        return;
+    }
+    if let Ok(value) = serde_json::to_value(sizes) {
+        app.session.prefs.edit(|p| {
+            p.dialogs.insert(SIZES_PREF.into(), value);
+        });
+    }
+}
+
+/// Restores the saved thumbnail sizes over the workspace's (a bad entry is skipped).
+pub fn restore_sizes(app: &mut PhotocraftApp) {
+    let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(SIZES_PREF).cloned() else { return };
+    for (panel, v) in saved {
+        if let Some(s) = v.as_f64().map(|s| s as f32).filter(|s| s.is_finite()) {
+            app.ui.presets_ui.sizes.insert(panel, s.clamp(1.0, 512.0));
+        }
+    }
+}
+
 /// Read `groupOrder` keeping what makes sense: non-object values, non-list entries and non-string
 /// names are dropped instead of failing the whole saved UI state.
 const MAX_GROUP_ORDER: usize = 10_000;
@@ -601,7 +629,7 @@ pub(crate) fn browser(
             ev.push(Ev::Drop(key, pos));
         }
     }
-    // Footer: thumbnail size | New Group, New, Delete.
+    // Footer: thumbnail size | New Group, New, Delete (same glyphs and size as the Layers footer).
     let footer_top = ui.min_rect().bottom();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -614,15 +642,15 @@ pub(crate) fn browser(
             st.sizes.insert(panel.to_string(), s);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
+            if crate::icons::button(ui, crate::icons::FOOTER_DELETE, crate::icons::FOOTER_SIZE, false, tl!("Delete")).clicked()
                 && let Some(k) = selected.clone()
             {
                 ev.push(Ev::Delete(k));
             }
-            if crate::icons::button(ui, "plus", 24.0, false, new_tip).clicked() {
+            if crate::icons::button(ui, crate::icons::FOOTER_NEW, crate::icons::FOOTER_SIZE, false, new_tip).clicked() {
                 ev.push(Ev::New);
             }
-            if crate::icons::button(ui, "folder-plus", 24.0, false, tl!("Create new group")).clicked() {
+            if crate::icons::button(ui, crate::icons::FOOTER_NEW_GROUP, crate::icons::FOOTER_SIZE, false, tl!("Create new group")).clicked() {
                 ev.push(Ev::NewGroup);
             }
         });
@@ -715,6 +743,20 @@ mod tests {
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.sync_views();
         (app, ctx)
+    }
+
+    /// User report: the Libraries panel's size slider was back at its default after a restart.
+    /// The sizes go with the preferences and come back in a new app reading them.
+    #[test]
+    fn thumbnail_sizes_survive_a_restart() {
+        let (mut app, _) = app();
+        app.ui.presets_ui.sizes.insert(crate::libraries_ui::PANEL.into(), 72.0);
+        persist_sizes(&mut app);
+        let prefs = app.session.prefs().clone();
+        let mut session = photocraft_engine::Session::new();
+        session.prefs.edit(|p| *p = prefs);
+        let restarted = PhotocraftApp::new(session, Default::default());
+        assert_eq!(restarted.ui.presets_ui.sizes.get(crate::libraries_ui::PANEL), Some(&72.0));
     }
 
     /// User report: the Gradients panel kept one size however tall the panel was. Each preset

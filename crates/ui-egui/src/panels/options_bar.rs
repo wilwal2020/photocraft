@@ -151,7 +151,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 fn tip_turns_with_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::vline(ui, 22.0);
     widgets::checkbox(ui, &mut app.ui.tool_options.brush_tip_turns_with_view, tl!("Turn Tip with View"))
-        .on_hover_text(tl!("Off: the brush tip keeps its angle on screen when the view is rotated"));
+        .on_hover_text(tl!("Off: the brush cursor keeps the tip's angle on screen when the view is rotated (strokes still turn with the view)"));
 }
 
 /// Brush family options share the same per-tool settings model.

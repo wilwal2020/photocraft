@@ -1,7 +1,7 @@
 # craft-ui, patched for the Photoshop-parity fork
 
 A copy of `crates/ui` from [storytold/craft-libs](https://github.com/storytold/craft-libs) at
-`92d392cff132eaf53e13afff77f38b5c11b73aa0` (the rev PhotoCraft 0.17.0 pins), with these changes.
+`c5a1cbfb5f9049f9270955caffb5bee5997aebf7` (the rev PhotoCraft 0.19.0 pins; first copied at 0.17.0's 92d392c), with these changes.
 Every change is marked `PhotoCraft fork` in the source. When upstream PhotoCraft moves to a newer
 craft-libs rev, take that rev's `crates/ui` and apply these again (or drop the vendored copy and
 go back to the git dependency in the root `Cargo.toml` if upstream has them).

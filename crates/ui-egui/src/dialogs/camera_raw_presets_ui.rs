@@ -30,6 +30,10 @@ pub(crate) struct Presets {
     /// names, read with each new list.
     favorites_path: Option<String>,
     pub(crate) favorites: Arc<std::collections::HashSet<String>>,
+    /// The presets starred in PhotoCraft ([`store::own_favorites`]): Camera Raw's favourites file
+    /// names its presets by ids nothing else on disk carries, so it can't always be read.
+    pub(crate) own_favorites: std::collections::HashSet<String>,
+    own_dir: Option<String>,
     /// The preset applied last, while its Amount can still change.
     pub(crate) applied: Option<Applied>,
     create: Option<CreateForm>,
@@ -63,6 +67,45 @@ impl Default for CreateForm {
     }
 }
 
+/// The last list scanned and the folders it is from, kept for the whole session: a Camera Raw
+/// window shows it at once instead of reading every preset again (user report: after a restart
+/// the presets took a while to come). The app fills it at startup ([`prefetch`]).
+static SCANNED: std::sync::Mutex<Option<Scanned>> = std::sync::Mutex::new(None);
+
+/// A list of presets and the folders it is from.
+type Scanned = (Vec<(String, Source)>, Arc<Vec<PresetFile>>);
+
+fn cached(folders: &[(String, Source)]) -> Option<Arc<Vec<PresetFile>>> {
+    let g = SCANNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    g.as_ref().filter(|(f, _)| f.as_slice() == folders).map(|(_, l)| l.clone())
+}
+
+fn keep(folders: Vec<(String, Source)>, list: Arc<Vec<PresetFile>>) {
+    *SCANNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((folders, list));
+}
+
+/// Lists the presets in the background at startup, so the first Camera Raw window has them.
+pub(crate) fn prefetch(dirs: &CameraRawPresetDirs) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let folders = folders(dirs, false);
+        if folders.is_empty() || cached(&folders).is_some() {
+            return;
+        }
+        let _ = std::thread::Builder::new().name("camera-raw-presets".into()).spawn(move || {
+            let list = Arc::new(store::scan(&folders));
+            keep(folders, list);
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = dirs;
+}
+
+/// The key a preset is starred by in PhotoCraft: its UUID, else its path.
+fn star_key(p: &PresetFile) -> &str {
+    if p.uuid.is_empty() { &p.path } else { &p.uuid }
+}
+
 /// The folders to list for `dirs`: Adobe's when asked for, or when Camera Raw has favourites
 /// (Adobe's presets among them show in Favorites with the Adobe section hidden).
 pub(super) fn folders(dirs: &CameraRawPresetDirs, adobe: bool) -> Vec<(String, Source)> {
@@ -81,12 +124,21 @@ impl Presets {
             return;
         }
         self.scanned = Some(folders.clone());
+        // Listed already this session (or at startup): shown at once.
+        if self.list.is_empty()
+            && let Some(list) = cached(&folders)
+        {
+            self.set_list_arc(list);
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-presets".into()).spawn(move || {
-                if tx.send(store::scan(&folders)).is_ok() {
+                let list = store::scan(&folders);
+                keep(folders, Arc::new(list.clone()));
+                if tx.send(list).is_ok() {
                     ctx.request_repaint();
                 }
             });
@@ -104,8 +156,26 @@ impl Presets {
 
     /// A finished scan's list, with Camera Raw's favourites as they are now.
     fn set_list(&mut self, list: Vec<PresetFile>) {
-        self.list = Arc::new(list);
+        self.set_list_arc(Arc::new(list));
+    }
+
+    fn set_list_arc(&mut self, list: Arc<Vec<PresetFile>>) {
+        self.list = list;
         self.favorites = Arc::new(self.favorites_path.as_deref().map(store::favorites).unwrap_or_default());
+        self.own_favorites = self.own_dir.as_deref().map(store::own_favorites).unwrap_or_default();
+    }
+
+    /// Stars (or unstars) `p` in PhotoCraft's favourites, saved in PhotoCraft's presets folder.
+    fn toggle_star(&mut self, p: &PresetFile) -> Result<(), String> {
+        let dir = self.own_dir.clone().ok_or_else(|| tl!("Presets can't be saved here").to_string())?;
+        let key = star_key(p).to_string();
+        let mut stars = self.own_favorites.clone();
+        if !stars.remove(&key) {
+            stars.insert(key);
+        }
+        store::set_own_favorites(&dir, &stars)?;
+        self.own_favorites = stars;
+        Ok(())
     }
 
     /// Takes a finished scan's list.
@@ -263,6 +333,7 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
     let t = Tokens::get(ui.ctx());
     let mut status: Status = None;
     d.presets.favorites_path.clone_from(&dirs.favorites);
+    d.presets.own_dir.clone_from(&dirs.own);
     d.presets.poll();
     d.presets.refresh(folders(dirs, d.presets.show_adobe), ui.ctx());
     let width = ui.available_width();
@@ -320,12 +391,14 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
     let mut clicked: Option<PresetFile> = None;
     let mut action: Option<(&'static str, PresetFile)> = None;
     let applied_path = d.presets.applied.as_ref().filter(|a| a.current == d.params).map(|a| a.path.clone());
-    // Camera Raw's Favorites first, as its Presets panel lists them (user report: Photoshop's
-    // favourites, Adobe's among them, were missing): each preset once, by name.
+    // The Favorites first, as Camera Raw's Presets panel lists them: the ones Camera Raw's
+    // favourites file names, and the ones starred here (user report: Photoshop's favourites were
+    // missing). Each preset once, by name.
     let favorites = d.presets.favorites.clone();
+    let stars = d.presets.own_favorites.clone();
     let mut fav: Vec<&PresetFile> = Vec::new();
-    for p in shown.iter().filter(|p| !p.uuid.is_empty() && favorites.contains(&p.uuid)) {
-        if !fav.iter().any(|f| f.uuid == p.uuid) {
+    for p in shown.iter().filter(|p| (!p.uuid.is_empty() && favorites.contains(&p.uuid)) || stars.contains(star_key(p))) {
+        if !fav.iter().any(|f| f.path == p.path || (!f.uuid.is_empty() && f.uuid == p.uuid)) {
             fav.push(p);
         }
     }
@@ -375,6 +448,13 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
                         if ui.button(tl!("Apply")).clicked() {
                             clicked = Some(p.clone());
                             ui.close();
+                        }
+                        if dirs.own.is_some() {
+                            let starred = stars.contains(star_key(p));
+                            if ui.button(if starred { tl!("Remove from Favorites") } else { tl!("Add to Favorites") }).clicked() {
+                                action = Some(("star", p.clone()));
+                                ui.close();
+                            }
                         }
                         if p.source == Source::Own {
                             if ui.button(tl!("Rename…")).clicked() {
@@ -431,6 +511,7 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
                 Ok(())
             }
             "delete" => delete(d, dirs.own.as_deref(), &p.path),
+            "star" => d.presets.toggle_star(&p),
             "update" => {
                 // The same groups of settings the preset held, now from the current settings.
                 let held = held_sections(&p.bytes);

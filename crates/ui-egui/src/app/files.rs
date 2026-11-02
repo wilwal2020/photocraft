@@ -163,6 +163,9 @@ impl PhotocraftApp {
     /// (a flat file): confirming the document's own file is recorded as a `file.save` step,
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
     pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
@@ -223,6 +226,9 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         // An RGB Targa asks for its bits per pixel, a DDS texture for its compression, and a JPEG
         // for its quality and format, unless the caller chose them; the save continues from the
         // prompt (still a copy when it would be one without the prompt), which records the step
@@ -522,7 +528,10 @@ impl PhotocraftApp {
         }
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
-        notices::io_warnings(self, &what, warnings);
+        // A flat format (PNG, JPEG…) is saved to get one flattened picture: saying the layers were
+        // flattened tells nothing (user report). It stays in what the save returns to agents.
+        let shown: Vec<String> = warnings.iter().filter(|w| !w.contains("layer(s) flattened")).cloned().collect();
+        notices::io_warnings(self, &what, &shown);
         self.sync_views();
     }
 

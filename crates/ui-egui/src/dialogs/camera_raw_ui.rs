@@ -43,6 +43,12 @@ mod edit;
 #[path = "camera_raw_presets_ui.rs"]
 mod presets;
 
+/// Starts listing Camera Raw's presets in the background, so the first Camera Raw window has them
+/// (user report: after a restart the presets took a while to come).
+pub(crate) fn prefetch_presets(app: &PhotocraftApp) {
+    presets::prefetch(&app.services.camera_raw_presets);
+}
+
 /// The proxy's long side lies within these, as large as the monitor (see [`proxy_side`]).
 const PROXY_SIDE: std::ops::RangeInclusive<usize> = 1024..=2560;
 /// Smallest run of proxy pixels one rayon task takes in the per-pixel passes: below it the
@@ -847,6 +853,9 @@ enum Coverage {
 }
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
+        return Err("Camera Raw requires the composite or one colour channel".into());
+    }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)

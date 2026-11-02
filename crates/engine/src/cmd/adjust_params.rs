@@ -19,10 +19,20 @@ pub(super) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &
     Ok(json!({ "layer": id.0 }))
 }
 
-/// A layer made above `active` joins its clipping group: `active` is clipped, and the new layer
-/// goes above it rather than inside it (an open group takes it in).
+/// A layer made above `active` joins its clipping group: `active` is clipped below the top of the
+/// group (a clipped layer right above it), and the new layer goes above it rather than inside it
+/// (an open group takes it in). Made on the group's top layer it goes on top, unclipped (user
+/// request): there it would only lengthen the group.
 pub(crate) fn joins_clipping_group(doc: &photocraft_doc::Document, active: Option<photocraft_doc::LayerId>) -> bool {
-    active.and_then(|a| doc.layer(a)).is_some_and(|a| a.clipped && !matches!(&a.content, LayerContent::Group(g) if g.expanded))
+    let Some(a) = active.and_then(|a| doc.layer(a)) else { return false };
+    if !a.clipped || matches!(&a.content, LayerContent::Group(g) if g.expanded) {
+        return false;
+    }
+    let Some(path) = active.and_then(|a| doc.path_of(a)) else { return false };
+    let Some((&last, parent)) = path.split_last() else { return false };
+    let mut above = parent.to_vec();
+    above.push(last + 1);
+    doc.layer_at(&above).is_some_and(|l| l.clipped)
 }
 
 /// The active layer a new Solid Color fill takes the place of (user request): an empty pixel
@@ -37,9 +47,21 @@ pub(super) fn empty_layer_to_replace(doc: &photocraft_doc::Document, active: Opt
 
 /// Apply `adj` in place to the targeted layer mask, the targeted alpha channel or Quick Mask, or else the active layer's pixels, as one history step named `label`.
 pub(super) fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) -> Result<Value> {
+    if let Some(colors) = crate::color_channels::target(s, p)? {
+        let id = layer_param(s, p)?;
+        return s.edit(label, |doc, _| {
+            let bounds = doc.bounds();
+            let selection = doc.selection.clone();
+            let surf = paint_surface(doc, id, p)?;
+            let extent = bounds.union(&surf.content_bounds());
+            crate::color_channels::adjust(surf, colors, &adj, selection.as_ref(), extent)?;
+            Ok(Value::Null)
+        });
+    }
+
     if is_mask_target(p) {
         // The targeted layer mask (#780): ⌘I inverts it, as in Photoshop.
-        let id = layer_param(s, &Value::Null)?;
+        let id = layer_param(s, p)?;
         return s.edit(label, |doc, _| {
             check_all_unlocked(doc, id)?;
             let sel = doc.selection.clone();
@@ -58,11 +80,11 @@ pub(super) fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, 
             Ok(Value::Null)
         });
     }
-    let id = layer_param(s, &Value::Null)?;
+    let id = layer_param(s, p)?;
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let mode = doc.mode;
-        let surf = paint_surface(doc, id, &Value::Null)?;
+        let surf = paint_surface(doc, id, p)?;
         pixels::adjust_surface(surf, &adj, sel.as_ref(), mode).map_err(EngineError::Other)?;
         Ok(())
     })?;

@@ -8,32 +8,47 @@ fn new_session() -> (Session, Vec<LayerId>) {
     (s, ids)
 }
 
-/// User request: an adjustment layer made on a clipped layer is clipped too, joining its
-/// clipping group; made on a layer that isn't clipped, it isn't.
+/// User request: an adjustment layer made on a clipped layer below the top of its clipping group
+/// is clipped too, joining the group; made on the group's top layer, or on a layer that isn't
+/// clipped, it isn't.
 #[test]
 fn an_adjustment_made_on_a_clipped_layer_is_clipped() {
     let (mut s, ids) = new_session();
-    s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
-    s.execute("layer.createClippingMask", json!({})).unwrap();
+    for id in [ids[1], ids[2]] {
+        s.execute("layer.select", json!({"layer": id.0})).unwrap();
+        s.execute("layer.createClippingMask", json!({})).unwrap();
+    }
     assert!(s.active().unwrap().doc.layer(ids[1]).unwrap().clipped);
+    // The top of the group: the new layer goes above it, not clipped.
+    s.execute("layer.select", json!({"layer": ids[2].0})).unwrap();
+    let top = LayerId(s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert!(!s.active().unwrap().doc.layer(top).unwrap().clipped, "on the group's top layer");
+    s.execute("layer.delete", json!({"layer": top.0})).unwrap();
     for kind in ["curves", "hueSaturation", "grain"] {
         s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
         let adj = LayerId(s.execute(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap()["layer"].as_u64().unwrap());
         assert!(s.active().unwrap().doc.layer(adj).unwrap().clipped, "{kind} on a clipped layer");
     }
-    s.execute("layer.select", json!({"layer": ids[2].0})).unwrap();
+    s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
     let adj = LayerId(s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap());
     assert!(!s.active().unwrap().doc.layer(adj).unwrap().clipped, "on a layer that isn't clipped");
 }
 
-/// User request: a fill layer made on a clipped layer (with pixels, so it goes above) is
-/// clipped too; on a layer that isn't clipped, it isn't.
+/// User request: a fill layer made on a clipped layer below the top of its group (with pixels,
+/// so it goes above) is clipped too; on the group's top layer, or a layer that isn't clipped, it
+/// isn't.
 #[test]
 fn a_fill_layer_made_on_a_clipped_layer_is_clipped() {
     let (mut s, ids) = new_session();
-    s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
-    s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-    s.execute("layer.createClippingMask", json!({})).unwrap();
+    for id in [ids[1], ids[2]] {
+        s.execute("layer.select", json!({"layer": id.0})).unwrap();
+        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+        s.execute("layer.createClippingMask", json!({})).unwrap();
+    }
+    s.execute("layer.select", json!({"layer": ids[2].0})).unwrap();
+    let top = LayerId(s.execute("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})).unwrap()["layer"].as_u64().unwrap());
+    assert!(!s.active().unwrap().doc.layer(top).unwrap().clipped, "on the group's top layer");
+    s.execute("layer.delete", json!({"layer": top.0})).unwrap();
     for (cmd, p) in [
         ("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})),
         ("layer.newFillLayer.gradient", json!({})),
@@ -45,7 +60,7 @@ fn a_fill_layer_made_on_a_clipped_layer_is_clipped() {
         assert!(doc.layer(ids[1]).is_some(), "{cmd}: a layer with pixels stays");
         assert!(doc.layer(fill).unwrap().clipped, "{cmd} on a clipped layer");
     }
-    s.execute("layer.select", json!({"layer": ids[2].0})).unwrap();
+    s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
     s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
     let fill = LayerId(s.execute("layer.newFillLayer.solidColor", json!({})).unwrap()["layer"].as_u64().unwrap());
     assert!(!s.active().unwrap().doc.layer(fill).unwrap().clipped, "on a layer that isn't clipped");

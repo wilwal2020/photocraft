@@ -439,9 +439,28 @@ pub(crate) fn insert_fill_layer(
     let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
     crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern", default_mask)?;
     l.clipped = crate::commands::joins_clipping_group(doc, *active);
+    // Like Photoshop, an empty pixel layer selected becomes the fill layer instead of getting one
+    // above it; it keeps its place, opacity and blending, and a name the user gave it.
+    if let Some(id) = *active
+        && crate::stamp_cmds::is_empty_pixel_layer(doc, id)
+    {
+        let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        if is_default_layer_name(&target.name) {
+            target.name = l.name;
+        }
+        target.content = l.content;
+        target.mask = l.mask;
+        target.vector_mask = l.vector_mask;
+        return Ok(id);
+    }
     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
     *active = Some(id);
     Ok(id)
+}
+
+/// A name new layers get ("Layer 3"), so not one the user chose.
+fn is_default_layer_name(name: &str) -> bool {
+    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `layer.newFillLayer.pattern`: a Pattern Fill layer above the active one, masked as the Layers panel's Use Default Masks on Fill Layers option says.

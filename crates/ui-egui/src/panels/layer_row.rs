@@ -201,6 +201,11 @@ fn darken(c: Color32, k: f32) -> Color32 {
     Color32::from_rgba_premultiplied(f(c.r()), f(c.g()), f(c.b()), c.a())
 }
 
+/// Height of an artboard's row. Photoshop sets artboards apart from layers and groups in the
+/// Layers panel: a shorter row with the name in bold and no thumbnail (a board is a canvas, not a
+/// folder), so the boards read as headings over their layers (#10218).
+pub(super) const ARTBOARD_ROW_H: f32 = 26.0;
+
 /// One row of the Layers panel for `l`, `depth` levels inside groups or artboards: it paints the
 /// row, queues what a click or drag on it asks for in `actions`, and returns the row's rect.
 #[allow(clippy::too_many_arguments)]
@@ -218,7 +223,14 @@ pub(super) fn layer_row(
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size sets the row and the layer and mask thumbnails;
     // group rows are much shorter in the Pro themes.
-    let (base, row_h) = layer_row_metrics(l, t.pro, app.ui.layers_panel_options.thumbnail_size);
+    // Photoshop's rows in every theme (user request): the theme sets only colours and corners.
+    let (base, row_h) = layer_row_metrics(l, true, app.ui.layers_panel_options.thumbnail_size);
+    // A board's row is a compact heading with no thumbnail, never taller than a layer's (with
+    // thumbnails off every row is already compact). A board with a mask keeps its usual row,
+    // thumbnail and all: the thumbnail is what clicks go back to from the mask, what ends the mask
+    // view, what carries the target brackets, and what spaces the mask's chain from the triangle.
+    let compact = l.artboard().is_some() && l.mask.is_none() && l.vector_mask.is_none();
+    let (base, row_h) = if compact { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
@@ -250,7 +262,7 @@ pub(super) fn layer_row(
     if resp.hovered() {
         app.hover_layer = Some(l.id);
     }
-    paint_row_background(&painter, &t, shown_label(l.label, row.inherited_label), rect, selected, is_hovered);
+    paint_row_background(&painter, &t, shown_label(l.label, row.inherited_label), l.artboard().is_some(), rect, selected, is_hovered);
     let mut x = rect.left() + 6.0;
     let eye_resp = eye_column(app, ui, l, row, rect, actions);
     // Everything but the thumbnails, the indentation and the name, so a narrow panel squeezes
@@ -273,7 +285,7 @@ pub(super) fn layer_row(
         paint_clipping_indicator(&painter, pos2(x, rect.center().y), t.text_faint);
         x += 12.0;
     }
-    let thumb = if t.pro && l.is_group() {
+    let thumb = if l.is_group() {
         // Photoshop's group rows: a small folder glyph instead of a thumbnail.
         let folder = Rect::from_min_size(pos2(x.round(), (rect.center().y - 5.5).round()), vec2(15.0, 11.0));
         crate::layer_row_ui::paint_folder(&painter, folder, t.text_dim);
@@ -281,10 +293,10 @@ pub(super) fn layer_row(
         folder
     } else if ts > 0.0 {
         let cell = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
-        let thumb = layer_thumb_rect(app, ctx, doc, l, cell, t.pro);
+        let thumb = layer_thumb_rect(app, ctx, doc, l, cell, true);
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
         // The name follows the thumbnail as drawn, so a narrow one leaves it further left.
-        x = thumb.right() + if t.pro { PRO_THUMB_GAP } else { 6.0 };
+        x = thumb.right() + PRO_THUMB_GAP;
         thumb
     } else {
         Rect::from_min_size(pos2(x, rect.center().y), vec2(0.0, 0.0))
@@ -399,7 +411,7 @@ fn eye_cell(rect: Rect) -> Rect {
 }
 
 /// The row's fill (selection / hover), the label colour behind the eye column and the pro dividers.
-fn paint_row_background(painter: &egui::Painter, t: &Tokens, shown: photocraft_doc::LabelColor, rect: Rect, selected: bool, is_hovered: bool) {
+fn paint_row_background(painter: &egui::Painter, t: &Tokens, shown: photocraft_doc::LabelColor, artboard: bool, rect: Rect, selected: bool, is_hovered: bool) {
     if t.pro {
         if selected {
             painter.rect_filled(rect, 0.0, t.row_selected);
@@ -414,12 +426,17 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, shown: photocraft_d
         painter.rect_filled(rect, t.radius, t.hover.gamma_multiply(0.5));
         painter.rect_filled(rect, t.radius, t.accent.gamma_multiply(0.12));
     }
+    if artboard && !selected && !is_hovered {
+        // A faint band behind a board's row, so where each board starts stands out in a long
+        // list. Under the label colour and the dividers, which keep their look on every row.
+        painter.rect_filled(rect, if t.pro { 0.0 } else { t.radius }, t.hover.gamma_multiply(0.35));
+    }
     let eye_cell = eye_cell(rect);
     let label = t.layer_label_colors(shown);
     if let Some((_, background)) = label {
         painter.rect_filled(eye_cell, 0.0, background);
     }
-    if t.pro {
+    {
         // Dividers inside the row, so rows sit flush with no gap between them (Photoshop): the
         // theme's separator under the row and beside the eye column, and a darker shade of a
         // label colour between coloured eye cells.
@@ -450,11 +467,7 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     if l.visible {
         let color = t.layer_label_icon(l.label);
         let color = if row.parent_hidden { color.gamma_multiply(0.35) } else { color };
-        if t.pro {
-            crate::layer_row_ui::paint_eye(ui.painter(), eye_cell.center() - vec2(0.5, 0.0), color);
-        } else {
-            icons::paint(ui, eye_cell, "eye", 15.0, color);
-        }
+        crate::layer_row_ui::paint_eye(ui.painter(), eye_cell.center() - vec2(0.5, 0.0), color);
     }
     eye_sweep(ctx, l, rect, &eye_resp, actions);
     if eye_resp.clicked() {
@@ -493,37 +506,26 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
             Some(thumb)
         };
         // A group's folder glyph is no thumbnail: Photoshop frames nothing there.
-        let target = target.filter(|r| !(t.pro && l.is_group() && *r == thumb));
+        let target = target.filter(|r| !(l.is_group() && *r == thumb));
         if let Some(r) = target {
             crate::mask_thumbs_ui::paint_brackets(painter, r, t.text);
         }
     }
 }
 
-/// The layer name (and the kind sub-label of non-pixel rows); returns the name's rect.
+/// The layer name, as Photoshop shows it in every theme (no kind sub-label, the Background upright);
+/// returns the name's rect.
 fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, name_right: f32) -> Option<Rect> {
-    let (l, doc, rect, ts, selected) = (rc.l, rc.doc, rc.rect, rc.ts, rc.row.selected);
+    let (l, rect) = (rc.l, rc.rect);
     let name_color = if l.visible { t.text } else { t.text_faint };
-    let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { PRO_NAME_SIZE } else { 13.0 }) };
-    // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
-    let italic = !t.pro && doc.is_background(l.id);
-    // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
-    let is_pixel = t.pro || ts == 0.0 || matches!(l.content, LayerContent::Raster(_));
-    let name_rect = crate::layer_row_ui::truncated(painter, &l.name, font, name_color, italic, name_right - x).map(|galley| {
-        let text_pos = pos2(x, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
+    // Artboards are named in bold, as in Photoshop.
+    let font = if l.artboard().is_some() { theme::semibold(PRO_NAME_SIZE) } else { egui::FontId::proportional(PRO_NAME_SIZE) };
+    crate::layer_row_ui::truncated(painter, &l.name, font, name_color, false, name_right - x).map(|galley| {
+        let text_pos = pos2(x, rect.center().y - galley.size().y / 2.0);
         let r = Rect::from_min_size(text_pos, galley.size());
         painter.galley(text_pos, galley, name_color);
         r
-    });
-    if !is_pixel {
-        let sub = match &l.content {
-            LayerContent::Adjustment(a) => tl!(a.label()).to_string(),
-            LayerContent::Group(g) => crate::i18n::trn(crate::i18n::current(), g.children.len() as u64, "Group · {n} layer", "Group · {n} layers"),
-            other => tl!(other.kind_name()).to_string(),
-        };
-        crate::layer_row_ui::label(painter, x, rect.center().y + 8.0, name_right, &sub, egui::FontId::proportional(11.0), t.text_faint);
-    }
-    name_rect
+    })
 }
 
 /// A plain click on the row: select the layer and retarget pixels / mask / vector mask.
@@ -747,7 +749,7 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
             if ui.is_rect_visible(rect) {
                 if app.session.prefs().interface.clip_thumbnails_to_layer_bounds {
                     // `rect` already has the layer bounds' shape (`layer_thumb_rect`).
-                    widgets::checker(p, rect, if t.pro { 4.0 } else { 5.0 });
+                    widgets::checker(p, rect, 4.0);
                     let (tex, _) = app.layer_bounds_thumb(ctx, doc, l);
                     p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
                 } else {

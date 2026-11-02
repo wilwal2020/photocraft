@@ -248,8 +248,9 @@ pub struct ToolOptions {
     #[serde(default)]
     pub pencil_auto_erase: bool,
     /// Brush › Turn Tip with View (a PhotoCraft addition, user request): on, as in Photoshop, the
-    /// tip's angle is the document's and a rotated view turns it on screen; off, the tip keeps its
-    /// angle on screen (cursor and strokes alike, `brush_cursor::upright_angle`).
+    /// tip's angle is the document's and a rotated view turns it on screen; off, the cursor shows
+    /// the tip at its angle on screen (`brush_cursor::upright_angle`), and strokes still paint
+    /// with the document's angle (user request: the option only changes the preview).
     #[serde(default = "yes")]
     pub brush_tip_turns_with_view: bool,
     /// Brush › Mode: Clear, which erases with the Brush (Photoshop's painting-only mode, #3439).

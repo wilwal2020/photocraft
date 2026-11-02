@@ -300,10 +300,8 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
     if d.clear {
         p["mode"] = json!("clear");
     }
-    // Turn Tip with View off: the tip keeps its angle on screen.
-    if let Some(xf) = crate::canvas::ViewXform::active(app).filter(|xf| crate::brush_cursor::keeps_screen_angle(app, tool, xf)) {
-        p["brush"] = json!({"angle": crate::brush_cursor::upright_angle(&xf, app.session.tools.brush.angle)});
-    }
+    // Turn Tip with View off changes only how the cursor shows the tip: strokes paint with the
+    // brush's own angle either way (user request).
     if tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
@@ -750,6 +748,18 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => return json!({ "channel": i }),
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => return json!("quickMask"),
         ChannelTarget::LayerMask => return json!(app.mask_target_name()),
+        ChannelTarget::Color(_) => {
+            if let Some(view) = photocraft_engine::mask_view_cmds::current(st) {
+                return json!(if view.filter { "filterMask" } else { "mask" });
+            }
+            // A colour set edits a raster layer's own pixels. The rows stay selected across layer
+            // switches, so an adjustment layer's mask and a layer that needs rasterizing first
+            // keep the layer's own target below.
+            let raster = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
+            if raster && let Some(colors) = photocraft_engine::color_channels::selected(&app.session) {
+                return colors.params();
+            }
+        }
         _ => {}
     }
     // A smart object's targeted (or shown) filter mask takes the paint (FILE-215-3).
@@ -763,14 +773,23 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     json!(if mask && has_mask { app.mask_target_name() } else { "pixels" })
 }
 
+/// Colour rows can remain selected behind a viewed mask; restrictions follow what is edited.
+/// Several rows stop Move and transforms on any layer, which the engine refuses there too.
+pub(crate) fn multiple_color_target(app: &PhotocraftApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
+        && photocraft_engine::mask_view_cmds::current(st).is_none()
+        && photocraft_engine::color_channels::selected(&app.session).is_some_and(|colors| colors.len() > 1)
+}
+
 #[cfg(test)]
 mod tip_angle_tests {
     use super::*;
 
-    /// Brush › Turn Tip with View off: the stroke paints with the angle that keeps the tip's angle
-    /// on screen in the rotated view, the Brush only; on (the default) the brush's own angle.
+    /// Brush › Turn Tip with View only changes the cursor (user request): on or off, in a rotated
+    /// view or not, a stroke paints with the brush's own angle.
     #[test]
-    fn strokes_keep_the_tips_screen_angle_when_it_doesnt_turn_with_the_view() {
+    fn turn_tip_with_view_leaves_the_strokes_angle_alone() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
         app.sync_views();
@@ -780,13 +799,8 @@ mod tip_angle_tests {
         let drag = |tool| Drag::new(tool, [10.0, 10.0], vec![[10.0, 10.0, 1.0]], egui::Modifiers::NONE, false);
         assert!(stroke_params(&app, &drag(Tool::Brush), &[]).get("brush").is_none(), "turns with the view by default");
         app.ui.tool_options.brush_tip_turns_with_view = false;
-        let p = stroke_params(&app, &drag(Tool::Brush), &[]);
         let xf = crate::canvas::ViewXform::active(&app).unwrap();
-        let want = crate::brush_cursor::upright_angle(&xf, 20.0);
-        assert!((p["brush"]["angle"].as_f64().unwrap() as f32 - want).abs() < 1e-3, "{p}");
-        assert!((want - 20.0).abs() > 10.0, "the view's turn is taken out: {want}");
-        assert!(stroke_params(&app, &drag(Tool::Eraser), &[]).get("brush").is_none(), "the Brush only");
-        app.ui.views[0].rotation = 0.0;
-        assert!(stroke_params(&app, &drag(Tool::Brush), &[]).get("brush").is_none(), "an upright view changes nothing");
+        assert!(crate::brush_cursor::keeps_screen_angle(&app, Tool::Brush, &xf), "the cursor keeps the tip upright");
+        assert!(stroke_params(&app, &drag(Tool::Brush), &[]).get("brush").is_none(), "the stroke still turns with the view");
     }
 }

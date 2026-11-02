@@ -52,10 +52,11 @@ rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 
-# Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`): the safe binding the
-# desktop app already uses, pinned to the same version.
+# Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`) and the user's decimal
+# symbol (`i18n::decimal_separator`, a registry read): the safe binding the desktop app already
+# uses, pinned to the same version.
 [target.'cfg(target_os = "windows")'.dependencies]
-winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "user"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "user", "advapi"] }
 # The Eyedropper samples anywhere on screen, outside the window too (Photoshop): one pixel read
 # from the desktop through a safe screen-capture API (Apache-2.0). Released 2026-08-01, pinned.
 xcap = { version = "=0.9.8", default-features = false }

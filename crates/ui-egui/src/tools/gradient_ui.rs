@@ -91,6 +91,11 @@ pub fn drawing(app: &PhotocraftApp) -> bool {
     matches!(app.gradient.drag, Some(Drag::Draw { .. }))
 }
 
+/// Whether an uncommitted gradient gesture must finish before applying a saved vector.
+pub(crate) fn editing(app: &PhotocraftApp) -> bool {
+    app.gradient.drag.is_some() || app.gradient.panel.is_some() || app.gradient.preset_stop.is_some()
+}
+
 /// Whether the Gradient tool is in its live (Gradient Fill layer) mode.
 /// Painting into a layer mask, an alpha channel or the Quick Mask stays classic (pixels), except
 /// that a selected gradient fill layer is always edited live (selecting it targets its mask).
