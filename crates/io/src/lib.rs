@@ -349,8 +349,8 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
-    /// PSD layer/mask/merged pixel allowance, including conversion workspace. May lower the
-    /// default cap; does not cover metadata or smart-filter caches.
+    /// PSD layer/mask/merged pixel allowance, including conversion workspace: the shell raises
+    /// the default to the user's Memory Usage. Does not cover metadata or smart-filter caches.
     pub psd_max_pixel_bytes: u64,
 }
 
@@ -470,7 +470,7 @@ pub fn import_file_for_open_with(
         let bytes = photocraft_format::read_file(path).map_err(read_failed)?;
         return import_for_open_with(name, &bytes, opts, ctl);
     }
-    import_source_with_limit(name, photocraft_psd::Source::new(source), ctl, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    import_source_with_limit(name, photocraft_psd::Source::new(source), ctl, opts.psd_max_pixel_bytes)
 }
 
 /// [`import_file_for_open_with`] for a PSD/PSB in any [`photocraft_psd::ReadAt`] source.
@@ -509,9 +509,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
-            PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
-        });
+        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
@@ -544,11 +542,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
-            PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
-        });
+        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
     }
-    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

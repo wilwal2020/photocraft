@@ -37,9 +37,9 @@ fn the_layers_panel_locks_every_selected_layer() {
     assert!(!locked(ids[0]), "the unselected Background doesn't");
 }
 
-/// The Basic layout's single lock toggle also locks every selected layer.
+/// The other themes have Photoshop's lock icons too: Lock All locks every selected layer there.
 #[test]
-fn the_basic_lock_toggle_locks_every_selected_layer() {
+fn lock_all_locks_every_selected_layer_in_the_studio_theme_too() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Studio);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -52,7 +52,7 @@ fn the_basic_lock_toggle_locks_every_selected_layer() {
     let b = h.state_mut().run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().run("layer.select", json!({"layer": a, "mode": "add"})).unwrap();
     h.run_steps(4);
-    h.get_by_label("Lock layer").click();
+    h.query_by_label_contains("Lock all").expect("the Lock all button").click();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let locked = |id: u64| st.doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.all;

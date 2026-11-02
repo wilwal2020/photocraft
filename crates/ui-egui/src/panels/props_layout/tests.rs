@@ -268,7 +268,7 @@ fn layers_opacity_and_fill_share_one_right_column() {
         // The popup-slider arrow is named after the field; its label is the text left of it on its row.
         let row = |name: &str| {
             let arrow = h.query_all_by_label(name).find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).unwrap().rect();
-            let text = if theme == "pro" { format!("{name}:") } else { name.to_string() };
+            let text = format!("{name}:");
             let label = h
                 .query_all_by_label(&text)
                 .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)

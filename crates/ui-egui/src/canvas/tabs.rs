@@ -72,9 +72,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Flat Spectrum tabs sit directly against the canvas. The parent's default vertical
         // item spacing would otherwise leave a visible gap below the tab strip (#2188).
         let spacing = ui.spacing().item_spacing.y;
-        if crate::theme::Tokens::get(ui.ctx()).pro {
-            ui.spacing_mut().item_spacing.y = 0.0;
-        }
+        ui.spacing_mut().item_spacing.y = 0.0;
         app.tab_strip = Some(tabs(app, ui));
         ui.spacing_mut().item_spacing.y = spacing;
         drop_slot_line(app, ui);
@@ -152,7 +150,9 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
     let large_tabs = app.session.prefs().workspace.large_tabs;
-    let tab_h = if large_tabs { 34.0 } else { 26.0 };
+    // The strip is as tall as the Pro themes' (26, or 34 with Large Tabs): the tabs and the
+    // 2-point margins above and below them.
+    let tab_h = if large_tabs { 30.0 } else { 22.0 };
     let font = crate::theme::medium(if large_tabs { 14.0 } else { 12.5 });
     let meta_font = egui::FontId::proportional(if large_tabs { 12.0 } else { 10.5 });
     // Files opening in the background (#210) are tabs too; they share the fit's index space,
@@ -179,7 +179,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .focus
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
         .map_or_else(|| app.session.active_index().and_then(|doc| documents.iter().position(|&d| d == doc)).unwrap_or(0), |p| tab_count + p);
-    let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
+    let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 2, bottom: 2 }).show(ui, |ui| {
         let (row, row_resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::click());
         row_resp.context_menu(|ui| {
             tab_action = tab_context_menu(ui, None, tab_count, false);

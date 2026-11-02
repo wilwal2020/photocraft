@@ -294,7 +294,7 @@ pub(super) fn layer_row(
     } else if ts > 0.0 {
         let cell = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
         let thumb = layer_thumb_rect(app, ctx, doc, l, cell, true);
-        draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
+        draw_layer_thumb(app, ctx, ui, doc, l, thumb);
         // The name follows the thumbnail as drawn, so a narrow one leaves it further left.
         x = thumb.right() + PRO_THUMB_GAP;
         thumb
@@ -412,24 +412,20 @@ fn eye_cell(rect: Rect) -> Rect {
 
 /// The row's fill (selection / hover), the label colour behind the eye column and the pro dividers.
 fn paint_row_background(painter: &egui::Painter, t: &Tokens, shown: photocraft_doc::LabelColor, artboard: bool, rect: Rect, selected: bool, is_hovered: bool) {
-    if t.pro {
-        if selected {
-            painter.rect_filled(rect, 0.0, t.row_selected);
-        } else if is_hovered {
-            painter.rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
-            painter.rect_filled(rect, 0.0, t.accent.gamma_multiply(0.12));
-        }
+    if selected && t.row_selected.a() > 0 {
+        painter.rect_filled(rect, 0.0, t.row_selected);
     } else if selected {
-        painter.rect_filled(rect, t.radius, t.hover);
-        painter.rect_stroke(rect, t.radius, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+        // The themes without a selected-row colour keep their own highlight, squared like the rows.
+        painter.rect_filled(rect, 0.0, t.hover);
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     } else if is_hovered {
-        painter.rect_filled(rect, t.radius, t.hover.gamma_multiply(0.5));
-        painter.rect_filled(rect, t.radius, t.accent.gamma_multiply(0.12));
+        painter.rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
+        painter.rect_filled(rect, 0.0, t.accent.gamma_multiply(0.12));
     }
     if artboard && !selected && !is_hovered {
         // A faint band behind a board's row, so where each board starts stands out in a long
         // list. Under the label colour and the dividers, which keep their look on every row.
-        painter.rect_filled(rect, if t.pro { 0.0 } else { t.radius }, t.hover.gamma_multiply(0.35));
+        painter.rect_filled(rect, 0.0, t.hover.gamma_multiply(0.35));
     }
     let eye_cell = eye_cell(rect);
     let label = t.layer_label_colors(shown);
@@ -718,7 +714,7 @@ pub(super) fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
     crate::channels_panel::fit_thumb(cell, w, h)
 }
 
-fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
+fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
     match &l.content {
@@ -732,7 +728,7 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         }
         LayerContent::Text(_) => {
             // Photoshop: type layers show a "T" tile rather than a pixel thumbnail.
-            p.rect_filled(rect, if t.pro { 0.0 } else { 6.0 }, Color32::from_gray(if t.pro { 222 } else { 236 }));
+            p.rect_filled(rect, 0.0, Color32::from_gray(222));
             icons::paint(ui, rect, "type", 20.0, Color32::from_gray(40));
         }
         // Gradient fills show the gradient itself (Photoshop); solid ones their colour.
@@ -763,13 +759,6 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
             }
         }
     }
-    let stroke = if t.pro {
-        Stroke::new(1.0, pro_thumb_border(&t))
-    } else if selected {
-        Stroke::new(1.5, t.text)
-    } else {
-        Stroke::new(1.0, t.field_border)
-    };
-    p.rect_stroke(rect, CornerRadius::same(if t.pro { 0 } else { 5 }), stroke, StrokeKind::Outside);
+    p.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, pro_thumb_border(&t)), StrokeKind::Outside);
     crate::smart_ui::thumb_badge(ui, l, rect);
 }

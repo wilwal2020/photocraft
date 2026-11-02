@@ -30,21 +30,16 @@ pub(super) fn reveal_focused_control(ui: &egui::Ui) {
 // ----------------------------------------------------------------------------- options bar
 
 /// Options bar height: Preferences ▸ Workspace ▸ Enable Narrow Options Bar trims it, as in
-/// Photoshop, leaving the document more room.
-pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
-    match (pro, narrow) {
-        (true, false) => 36.0,
-        (true, true) => 30.0,
-        (false, false) => 42.0,
-        (false, true) => 34.0,
-    }
+/// Photoshop, leaving the document more room. Photoshop's heights in every theme.
+pub(super) fn options_bar_height(narrow: bool) -> f32 {
+    if narrow { 30.0 } else { 36.0 }
 }
 
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
     egui::Panel::top("options_bar")
-        .exact_size(options_bar_height(t.pro, narrow))
+        .exact_size(options_bar_height(narrow))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
             ui.style_mut().spacing.scroll = egui::style::ScrollStyle { bar_width: 4.0, ..egui::style::ScrollStyle::floating() };

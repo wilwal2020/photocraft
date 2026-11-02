@@ -13,7 +13,8 @@ use photocraft_psd::{
 use crate::IoError;
 
 /// Default allowance for PSD layer, mask and merged-image pixels, including conversion
-/// workspace and tile padding. Other format/parser limits still apply. Callers may lower it.
+/// workspace and tile padding. Other format/parser limits still apply. Callers may lower or raise it
+/// ([`crate::ImportOptions::psd_max_pixel_bytes`]).
 pub const DEFAULT_PSD_IMPORT_PIXEL_BYTES: u64 = if cfg!(target_arch = "wasm32") { 1 << 30 } else { 2 << 30 };
 
 #[derive(Default)]

@@ -59,26 +59,15 @@ pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions:
     let resp = ui.interact(hit, ui.scope_id().with(("disclosure", l.id.0)), Sense::click());
     let t = Tokens::get(ui.ctx());
     let c = pos2(*x + TRIANGLE_W / 2.0 - 1.0, row.center().y);
-    if t.pro {
-        // Photoshop's thin chevron: ˅ open, › closed.
-        let s = 3.5;
-        let pts = if g.expanded {
-            vec![pos2(c.x - s, c.y - s * 0.5), pos2(c.x, c.y + s * 0.5), pos2(c.x + s, c.y - s * 0.5)]
-        } else {
-            vec![pos2(c.x - s * 0.5, c.y - s), pos2(c.x + s * 0.5, c.y), pos2(c.x - s * 0.5, c.y + s)]
-        };
-        let color = if resp.hovered() { t.text } else { t.text_faint };
-        ui.painter().add(Shape::line(pts, Stroke::new(1.2, color)));
+    // Photoshop's thin chevron: ˅ open, › closed.
+    let s = 3.5;
+    let pts = if g.expanded {
+        vec![pos2(c.x - s, c.y - s * 0.5), pos2(c.x, c.y + s * 0.5), pos2(c.x + s, c.y - s * 0.5)]
     } else {
-        let s = 3.5;
-        let pts = if g.expanded {
-            vec![pos2(c.x - s, c.y - s * 0.6), pos2(c.x + s, c.y - s * 0.6), pos2(c.x, c.y + s * 0.6)]
-        } else {
-            vec![pos2(c.x - s * 0.6, c.y - s), pos2(c.x + s * 0.6, c.y), pos2(c.x - s * 0.6, c.y + s)]
-        };
-        let color = if resp.hovered() { t.text } else { t.icon };
-        ui.painter().add(Shape::convex_polygon(pts, color, Stroke::NONE));
-    }
+        vec![pos2(c.x - s * 0.5, c.y - s), pos2(c.x + s * 0.5, c.y), pos2(c.x - s * 0.5, c.y + s)]
+    };
+    let color = if resp.hovered() { t.text } else { t.text_faint };
+    ui.painter().add(Shape::line(pts, Stroke::new(1.2, color)));
     *x += TRIANGLE_W;
     let clicked = resp.clicked();
     if clicked {

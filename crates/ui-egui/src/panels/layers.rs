@@ -53,13 +53,13 @@ pub(super) fn opacity_row_layout(available: f32, label_width: f32, gap: f32) -> 
 /// Blend mode, Opacity, the locks and Fill with no layer selected: Photoshop keeps them in place,
 /// greyed out at Normal, 100% and unlocked, instead of removing them (#8880). Same layout as the
 /// active layer's rows in `layers`.
-fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
+fn inactive_blend_rows(ui: &mut egui::Ui) {
     // Each row is disabled on its own and laid out as the active layer's rows are: a disabled
     // wrapper around both added an item gap under the Fill row, which pushed the layer list down
     // in the themes whose docks keep item spacing (#9546).
     ui.horizontal(|ui| {
         ui.disable();
-        let opacity_label = if pro { tl!("Opacity:") } else { tl!("Opacity") };
+        let opacity_label = tl!("Opacity:");
         let (blend_width, show_opacity_label) = opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
         let mut m = BlendMode::Normal;
         let options = blend_options(false, m);
@@ -75,31 +75,27 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
     ui.add_space((theme::ROW_GAP - ui.spacing().item_spacing.y).max(0.0));
     ui.horizontal(|ui| {
         ui.disable();
-        let lock_label = if pro { tl!("Lock:") } else { tl!("Lock") };
+        let lock_label = tl!("Lock:");
         let lang = crate::i18n::current();
-        let fill_label = if pro { crate::i18n::tr_ctx(lang, "layers", "Fill:") } else { crate::i18n::tr_ctx(lang, "layers", "Fill") };
+        let fill_label = crate::i18n::tr_ctx(lang, "layers", "Fill:");
         let gap = ui.spacing().item_spacing.x;
-        let icons_w = if pro { 5.0 * 20.0 + gap } else { 22.0 + gap };
+        let icons_w = 5.0 * 20.0 + gap;
         let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
         if fits {
             label(ui, lock_label);
         }
-        if pro {
-            ui.scope(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for (icon, tip) in [
-                    ("grid-3x3", tl!("Lock transparent pixels")),
-                    ("brush", tl!("Lock image pixels")),
-                    ("move", tl!("Lock position")),
-                    ("scan", tl!("Prevent auto-nesting in and out of Artboards and Frames")),
-                    ("lock", tl!("Lock all")),
-                ] {
-                    icons::button(ui, icon, 20.0, false, tip);
-                }
-            });
-        } else {
-            icons::button(ui, "lock-open", 22.0, false, tl!("Lock layer"));
-        }
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for (icon, tip) in [
+                ("grid-3x3", tl!("Lock transparent pixels")),
+                ("brush", tl!("Lock image pixels")),
+                ("move", tl!("Lock position")),
+                ("scan", tl!("Prevent auto-nesting in and out of Artboards and Frames")),
+                ("lock", tl!("Lock all")),
+            ] {
+                icons::button(ui, icon, 20.0, false, tip);
+            }
+        });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut f = 100.0;
             widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
@@ -123,12 +119,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let isolated = st.isolated_layers.clone();
     let mut actions: Vec<(String, Value)> = Vec::new();
 
-    let t = Tokens::get(ui.ctx());
     app.reorder_preview_hit = false;
     if !ui.input(|i| i.pointer.primary_down()) || !app.ui.layers_panel_options.preview_on_canvas_when_reordering_layers {
         app.reorder_preview = None;
     }
-    if t.pro && app.ui.layers_panel_options.show_filters {
+    if app.ui.layers_panel_options.show_filters {
         crate::layer_filter_ui::bar(app, ui);
         ui.add_space(4.0);
     }
@@ -154,7 +149,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // Reserve space for the numeric field first. On a narrow dock, hide the
                 // redundant visible Opacity label rather than force the dropdown beyond
                 // the panel's right edge (#2309). The numeric field keeps its name.
-                let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
+                let opacity_label = tl!("Opacity:");
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
                 let (chosen, hovered) =
@@ -185,53 +180,45 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Docks zero the item spacing: keep the Opacity and Fill fields apart (#155).
         ui.add_space((theme::ROW_GAP - ui.spacing().item_spacing.y).max(0.0));
         ui.horizontal(|ui| {
-            let lock_label = if t.pro { tl!("Lock:") } else { tl!("Lock") };
+            let lock_label = tl!("Lock:");
             // Layer fill opacity (≠ Edit › Fill / path fill → Tô).
             let lang = crate::i18n::current();
-            let fill_label = if t.pro { crate::i18n::tr_ctx(lang, "layers", "Fill:") } else { crate::i18n::tr_ctx(lang, "layers", "Fill") };
+            let fill_label = crate::i18n::tr_ctx(lang, "layers", "Fill:");
             // In a narrow panel with long translated labels, drop the "Lock:" text (the icons keep
             // their tooltips) rather than let the Fill label run over the lock icons.
             let gap = ui.spacing().item_spacing.x;
-            let icons_w = if t.pro { 6.0 * 20.0 + gap } else { 22.0 + gap };
+            let icons_w = 6.0 * 20.0 + gap;
             let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
             if fits {
                 label(ui, lock_label);
             }
-            if t.pro {
-                // The lock icons touch, but only they: the Fill label keeps the same gap before its
-                // field as Opacity's, so both stack in one right-aligned column (#2085).
-                ui.scope(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let lk = l.locks;
-                    for (key, icon, tip, on) in [
-                        ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
-                        ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
-                        ("position", "move", tl!("Lock position"), lk.position),
-                        ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
-                        ("all", "lock", tl!("Lock all"), lk.all),
-                        (
-                            "selection",
-                            "square-dashed-mouse-pointer",
-                            tl!("Lock selection: clicks on the canvas pass through (the Layers panel still selects)"),
-                            lk.selection,
-                        ),
-                    ] {
-                        // Lock Image Pixels includes Lock Transparent Pixels, which waits for it (#4892).
-                        let enabled = key != "transparency" || !lk.pixels;
-                        if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 20.0, on, tip)).inner.clicked() {
-                            let mut p = targets.clone();
-                            p["locks"] = json!({ key: !on });
-                            actions.push(("layer.setProps".into(), p));
-                        }
+            // The lock icons touch, but only they: the Fill label keeps the same gap before its
+            // field as Opacity's, so both stack in one right-aligned column (#2085).
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let lk = l.locks;
+                for (key, icon, tip, on) in [
+                    ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
+                    ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
+                    ("position", "move", tl!("Lock position"), lk.position),
+                    ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
+                    ("all", "lock", tl!("Lock all"), lk.all),
+                    (
+                        "selection",
+                        "square-dashed-mouse-pointer",
+                        tl!("Lock selection: clicks on the canvas pass through (the Layers panel still selects)"),
+                        lk.selection,
+                    ),
+                ] {
+                    // Lock Image Pixels includes Lock Transparent Pixels, which waits for it (#4892).
+                    let enabled = key != "transparency" || !lk.pixels;
+                    if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 20.0, on, tip)).inner.clicked() {
+                        let mut p = targets.clone();
+                        p["locks"] = json!({ key: !on });
+                        actions.push(("layer.setProps".into(), p));
                     }
-                });
-            }
-            if !t.pro {
-                let locked = l.locks.any();
-                if icons::button(ui, if locked { "lock" } else { "lock-open" }, 22.0, locked, tl!("Lock layer")).clicked() {
-                    actions.push(simple_lock_toggle(crate::doc_props_ui::is_background(&doc, l), l, &targets));
                 }
-            }
+            });
             ui.add_enabled_ui(!bg, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut f = l.fill_opacity * 100.0;
@@ -245,7 +232,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
         ui.add_space(2.0);
     } else {
-        inactive_blend_rows(ui, t.pro);
+        inactive_blend_rows(ui);
     }
 
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
@@ -264,9 +251,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Rows sit flush, as in Photoshop: a dock or floating panel may come with the
             // default item spacing, which left a gap between rows (very visible between rows
             // with colour labels).
-            if Tokens::get(&ctx).pro {
-                ui.spacing_mut().item_spacing.y = 0.0;
-            }
+            ui.spacing_mut().item_spacing.y = 0.0;
             // The drag keys are set only by actual layer-row and fx drags, not clicks or
             // ordinary scrolling. The ScrollArea applies this to its own content.
             // An fx drag that never saw its release (the panel was hidden) must not outlive the button.

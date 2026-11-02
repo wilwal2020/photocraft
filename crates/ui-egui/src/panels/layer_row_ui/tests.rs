@@ -673,16 +673,22 @@ fn every_lock_shows_the_lock_icon_on_the_row() {
 }
 
 #[test]
-fn the_studio_lock_button_shows_every_lock() {
-    // #4158: the simple themes' lock button drew "unlocked" for a pixels or artboard lock, though
-    // clicking it then unlocked the layer.
-    for key in ["transparency", "pixels", "position", "artboard", "all"] {
+fn the_studio_lock_icons_show_every_lock() {
+    // #4158: the simple themes' lock button drew "unlocked" for a pixels or artboard lock. They have
+    // Photoshop's lock icons now, each showing its own lock.
+    for (key, tip) in [
+        ("transparency", "Lock transparent pixels"),
+        ("pixels", "Lock image pixels"),
+        ("position", "Lock position"),
+        ("artboard", "Prevent auto-nesting in and out of Artboards and Frames"),
+        ("all", "Lock all"),
+    ] {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         s.execute("layer.new.layer", json!({"name": key})).unwrap();
         s.execute("layer.setProps", json!({"locks": {key: true}})).unwrap();
         let h = harness(s, 1.0, "studio", 290.0);
-        assert_eq!(h.get_by_label("Lock layer").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "{key}");
+        assert_eq!(h.get_by_label(tip).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "{key}");
     }
 }
 

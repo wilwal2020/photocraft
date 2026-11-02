@@ -436,10 +436,8 @@ fn a_typed_crop_ratio_fits_from_the_frame_the_edit_started_with() {
 
 #[test]
 fn the_narrow_options_bar_preference_shortens_the_bar() {
-    assert_eq!(options_bar_height(true, false), 36.0);
-    assert_eq!(options_bar_height(true, true), 30.0);
-    assert_eq!(options_bar_height(false, false), 42.0);
-    assert_eq!(options_bar_height(false, true), 34.0);
+    assert_eq!(options_bar_height(false), 36.0);
+    assert_eq!(options_bar_height(true), 30.0);
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
     crate::theme::apply(&ctx, crate::theme::ThemeKind::ALL[0]);
@@ -455,10 +453,10 @@ fn the_narrow_options_bar_preference_shortens_the_bar() {
         top
     };
     let normal = run(&mut app);
-    assert_eq!(normal, options_bar_height(Tokens::get(&ctx).pro, false));
+    assert_eq!(normal, options_bar_height(false));
     app.session.execute("prefs.set", json!({"path": "workspace.enableNarrowOptionsBar", "value": true})).unwrap();
     let narrow = run(&mut app);
-    assert_eq!(narrow, options_bar_height(Tokens::get(&ctx).pro, true));
+    assert_eq!(narrow, options_bar_height(true));
     assert!(narrow < normal, "narrow {narrow} must trim the bar under {normal}");
 }
 
@@ -482,9 +480,9 @@ fn narrow_tool_options_can_scroll_to_the_last_control() {
                         egui::RawInput {
                             time: Some(f64::from(frame) * 0.1),
                             events: vec![
-                                // Studio: above the controls, clear of the Brush's Mode dropdown, which takes the wheel
-                                // to step through blend modes (#4512).
-                                egui::Event::PointerMoved(if Tokens::get(&ctx).pro { pos2(width * 0.5, 20.0) } else { pos2(width * 0.5, 2.0) }),
+                                // Studio: over the tool icon, clear of the Brush's Mode dropdown, which takes the
+                                // wheel to step through blend modes (#4512).
+                                egui::Event::PointerMoved(if Tokens::get(&ctx).pro { pos2(width * 0.5, 20.0) } else { pos2(24.0, 18.0) }),
                                 egui::Event::MouseWheel {
                                     source: egui::MouseWheelSource::Unknown,
                                     unit: egui::MouseWheelUnit::Point,
@@ -506,7 +504,7 @@ fn narrow_tool_options_can_scroll_to_the_last_control() {
                         egui::Shape::Text(text) if text.galley.job.text.contains(last_label) => Some((shape.clip_rect, text)),
                         _ => None,
                     })
-                    .expect("scrolling reaches the final tool control");
+                    .unwrap_or_else(|| panic!("{kind:?} at {width} x{scale}: scrolling reaches the final tool control"));
                 assert!(
                     clip.contains_rect(label.visual_bounding_rect()),
                     "{kind:?} at {width}: final control is clipped: {:?} / {clip:?}",

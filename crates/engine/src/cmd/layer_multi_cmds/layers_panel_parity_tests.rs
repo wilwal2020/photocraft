@@ -9,8 +9,8 @@ fn new_session() -> (Session, Vec<LayerId>) {
 }
 
 /// User request: an adjustment layer made on a clipped layer below the top of its clipping group
-/// is clipped too, joining the group; made on the group's top layer, or on a layer that isn't
-/// clipped, it isn't.
+/// is clipped too, joining the group; made on the group's top layer it isn't. Made on the base,
+/// it lands between the base and its clipped layers, so it joins the mask (Photoshop, #2203).
 #[test]
 fn an_adjustment_made_on_a_clipped_layer_is_clipped() {
     let (mut s, ids) = new_session();
@@ -31,12 +31,12 @@ fn an_adjustment_made_on_a_clipped_layer_is_clipped() {
     }
     s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
     let adj = LayerId(s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap());
-    assert!(!s.active().unwrap().doc.layer(adj).unwrap().clipped, "on a layer that isn't clipped");
+    assert!(s.active().unwrap().doc.layer(adj).unwrap().clipped, "on the base, inside the mask");
 }
 
 /// User request: a fill layer made on a clipped layer below the top of its group (with pixels,
-/// so it goes above) is clipped too; on the group's top layer, or a layer that isn't clipped, it
-/// isn't.
+/// so it goes above) is clipped too; on the group's top layer it isn't. On the base it lands
+/// inside the mask and joins it (Photoshop, #2203).
 #[test]
 fn a_fill_layer_made_on_a_clipped_layer_is_clipped() {
     let (mut s, ids) = new_session();
@@ -63,7 +63,7 @@ fn a_fill_layer_made_on_a_clipped_layer_is_clipped() {
     s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
     s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
     let fill = LayerId(s.execute("layer.newFillLayer.solidColor", json!({})).unwrap()["layer"].as_u64().unwrap());
-    assert!(!s.active().unwrap().doc.layer(fill).unwrap().clipped, "on a layer that isn't clipped");
+    assert!(s.active().unwrap().doc.layer(fill).unwrap().clipped, "on the base, inside the mask");
 }
 
 /// User request: Solid Color on an empty layer takes its place (one step, undone whole); on a

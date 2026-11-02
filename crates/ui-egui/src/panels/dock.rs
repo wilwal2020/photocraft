@@ -9,12 +9,9 @@ use egui::{Sense, vec2};
 // ----------------------------------------------------------------------------- dock
 
 /// The panels and the canvas in the space left by the menus, bars and toolbar: craft-ui's
-/// docking layout, with the icon rail at the window's end edge in the Studio themes.
+/// docking layout. Only the Pro themes have the icon rail (beside the canvas): the other themes
+/// share their layout and have no rail at the window's edge.
 pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    if app.ui.panels.rail && !t.pro {
-        rail(app, ui, &t);
-    }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui));
     crate::dock::persist(app, ui.ctx());
     crate::color_panel_ui::persist(app);

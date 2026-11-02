@@ -154,7 +154,7 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &app.session.prefs().units_and_rulers,
     );
     let mut pct = app.ui.views[i].zoom * 100.0;
-    let control_h = crate::panels::status_bar_heights(&t).1;
+    let control_h = crate::panels::status_bar_heights().1;
     let field = widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", vec2(64.0, control_h))
         .accessible_name(tl!("Zoom"));
     if field.changed() {

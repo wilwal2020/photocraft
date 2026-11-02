@@ -782,3 +782,13 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
         assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
     }
 }
+
+#[test]
+fn a_psd_may_use_the_memory_usage_allowance() {
+    let mut prefs = crate::prefs::Preferences::default();
+    prefs.performance.memory_usage_mb = 8192;
+    assert_eq!(import_options(&prefs).psd_max_pixel_bytes, 8192 << 20);
+    // A small Memory Usage never makes PSDs harder to open than before.
+    prefs.performance.memory_usage_mb = 256;
+    assert_eq!(import_options(&prefs).psd_max_pixel_bytes, photocraft_io::DEFAULT_PSD_IMPORT_PIXEL_BYTES);
+}

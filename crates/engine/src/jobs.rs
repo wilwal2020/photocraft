@@ -534,8 +534,14 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
-        ..Default::default()
+        psd_max_pixel_bytes: psd_pixel_allowance(prefs.performance.effective_memory_usage_mb()),
     }
+}
+
+/// A PSD may decode into as much pixel memory as Memory Usage allows, never less than the
+/// import's own default: a big file the machine can hold opens instead of being refused at 2 GB.
+fn psd_pixel_allowance(memory_usage_mb: u32) -> u64 {
+    (u64::from(memory_usage_mb) << 20).max(photocraft_io::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
 }
 
 impl Session {

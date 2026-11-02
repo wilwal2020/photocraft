@@ -1,4 +1,4 @@
-//! The status bar's zoom field and Fit button sit inside the bar with an even margin above and
+//! The status bar's zoom field sits inside the bar with an even margin above and
 //! below, in every theme (#2823).
 
 use egui::{Rect, pos2, vec2};
@@ -39,8 +39,7 @@ fn harness(kind: ThemeKind) -> Harness<'static, PhotocraftApp> {
 fn status_bar_controls_sit_inside_the_bar_with_even_margins() {
     for kind in ThemeKind::ALL {
         let h = harness(kind);
-        let t = Tokens::for_kind(kind);
-        let (bar_h, control_h) = crate::panels::status_bar_heights(&t);
+        let (bar_h, control_h) = crate::panels::status_bar_heights();
         let margin = (bar_h - control_h) / 2.0;
         assert!(margin >= 3.0, "{kind:?}: margin {margin}");
         let bottom = h.ctx.data(|d| d.get_temp::<f32>(bottom_id())).unwrap();
@@ -50,15 +49,8 @@ fn status_bar_controls_sit_inside_the_bar_with_even_margins() {
         // The zoom number (its box is painted around it, `control_h` tall and centred).
         let number = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
         assert!(inner.contains_rect(number), "{kind:?}: bar {bar:?}, number {number:?}");
-        // Pro (Photoshop) has no Fit button in the status bar.
-        if t.pro {
-            assert!(h.query_by_label("Fit").is_none(), "{kind:?}");
-            continue;
-        }
-        let fit = h.get_by_label("Fit").rect();
-        assert!(inner.contains_rect(fit), "{kind:?}: bar {bar:?}, Fit {fit:?}");
-        assert!((fit.center().y - bar.center().y).abs() < 0.51, "{kind:?}: bar {bar:?}, Fit {fit:?}");
-        assert!((fit.height() - control_h).abs() < 0.01, "{kind:?}: Fit {fit:?}");
+        // Every theme has Photoshop's bar, which has no Fit button.
+        assert!(h.query_by_label("Fit").is_none(), "{kind:?}");
     }
 }
 
