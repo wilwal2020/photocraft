@@ -193,6 +193,35 @@ fn the_editing_layers_paint_blocks_the_fill_and_the_fill_goes_behind_it() {
     }
 }
 
+/// A Solid Color layer has no pixels: the fill paints its mask, and what the mask shows is its
+/// paint, which then blocks the fill (user report: the option did nothing there).
+#[test]
+fn a_solid_color_layers_mask_blocks_the_fill() {
+    let (mut s, _, _) = inked(8);
+    let fill = LayerId(s.execute("layer.newFillLayer.solidColor", json!({"color": "#f2f2ff"})).unwrap()["layer"].as_u64().unwrap());
+    // A pale colour whose mask hides it all but a stroke across the 3 px gap, with a faint edge
+    // inside the box.
+    s.edit("mask", |doc, _| {
+        let m = &mut doc.layer_mut(fill).unwrap().mask.as_mut().unwrap().surface;
+        m.fill_rect(Rect::new(0, 0, 40, 40), &[0.0]);
+        m.fill_rect(Rect::new(16, 5, 23, 6), &[1.0]);
+        m.fill_rect(Rect::new(16, 6, 23, 7), &[0.3]);
+        Ok(())
+    })
+    .unwrap();
+    let mask = |s: &Session, x: i32, y: i32| s.active().unwrap().doc.layer(fill).unwrap().mask.as_ref().unwrap().surface.rgba(x, y)[0];
+    let p = json!({"x": 20, "y": 20, "reference": "all", "tolerance": 60, "antiAlias": false, "target": "mask", "color": "#ffffff"});
+    s.execute(FILL_ID, p.clone()).unwrap();
+    assert!(mask(&s, 0, 0) > 0.99, "a pale stroke doesn't stop a fill at a high tolerance");
+    s.execute("edit.undo", json!({})).unwrap();
+    let mut blocked = p;
+    blocked["layerBlocks"] = json!(true);
+    s.execute(FILL_ID, blocked).unwrap();
+    assert!(mask(&s, 20, 20) > 0.99);
+    assert!(mask(&s, 0, 0) < 0.01, "the mask's stroke holds");
+    assert!(mask(&s, 20, 6) > 0.99, "the faint edge is filled under, not left as a line");
+}
+
 #[test]
 fn transparent_contents_erase_and_blend_modes_apply() {
     let (mut s, lines, colour) = inked(8);

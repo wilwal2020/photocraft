@@ -488,19 +488,29 @@ pub(crate) fn region(s: &Session, p: &Value) -> Result<Option<Region>> {
     Ok(region_blocked(s, p)?.0)
 }
 
-/// The editing layer's alpha over the canvas when `layerBlocks` asks its paint to stop the fill
-/// (a multi-layer reference only: with Editing Layer alone that paint is what the fill reads).
+/// The editing layer's paint over the canvas when `layerBlocks` asks it to stop the fill (a
+/// multi-layer reference only: with Editing Layer alone that paint is what the fill reads): its
+/// pixels' alpha or, on a fill layer (Solid Color, Gradient, Pattern), which has no pixels and
+/// takes the fill in its mask, that mask (user report: the option did nothing there).
 fn layer_block(s: &Session, p: &Value, r: Reference) -> Result<Option<Vec<u8>>> {
+    use crate::channel_cmds::Target as Edits;
     let on = flag(p, "layerBlocks", false)?;
     if r == Reference::Layer || !on {
         return Ok(None);
     }
-    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
-        return Ok(None);
-    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let Some(surf) = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface()) else { return Ok(None) };
-    Ok(Some(rgba8_image(surf, d.doc.bounds()).iter().map(|px| px[3]).collect()))
+    let Some(l) = d.active_layer.and_then(|id| d.doc.layer(id)) else { return Ok(None) };
+    match crate::channel_cmds::target_of(p) {
+        Edits::Pixels => {
+            let Some(surf) = l.surface() else { return Ok(None) };
+            Ok(Some(rgba8_image(surf, d.doc.bounds()).iter().map(|px| px[3]).collect()))
+        }
+        Edits::Mask if matches!(l.content, LayerContent::Fill(_)) => {
+            let Some(m) = l.pixel_mask(crate::commands::is_second_mask_target(p)).filter(|m| m.enabled) else { return Ok(None) };
+            Ok(Some(rgba8_image(&m.surface, d.doc.bounds()).iter().map(|px| px[0]).collect()))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// [`region`], and whether the editing layer's paint stopped it (the fill then goes behind that
@@ -592,8 +602,10 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let (region, blocked) = region_blocked(s, p)?;
     let Some(region) = region else { return Ok(json!({ "filled": false })) };
     // Stopped by the layer's own paint, the fill reaches in under its soft edges: behind it, so
-    // the strokes stay as they are.
-    let paint = if blocked && paint == FillMode::Blend(BlendMode::Normal) { FillMode::Behind } else { paint };
+    // the strokes stay as they are. A fill layer's paint is its mask, which has no alpha to go
+    // behind: Screen adds to it as Behind adds to the alpha.
+    let behind = if crate::commands::is_mask_target(p) { FillMode::Blend(BlendMode::Screen) } else { FillMode::Behind };
+    let paint = if blocked && paint == FillMode::Blend(BlendMode::Normal) { behind } else { paint };
     // A colour picked as CMYK fills a CMYK document with the picked inks (#4196).
     let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && paint == FillMode::Blend(BlendMode::Normal));
     s.edit("Fill Tool", |doc, active| {
