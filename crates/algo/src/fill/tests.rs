@@ -363,17 +363,9 @@ fn click_region_whole_page(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &Fi
     let gap = finite(o.close_gap, MAX_GAP);
     let mut spot = vec![false; free.len()];
     flood(&free, &mut spot, w, h, si, true)?;
-    let mut fill = if gap < 1.0 {
-        spot
-    } else {
-        let (labels, seed_label) = areas(&spot, w, h, gap, [o.image_border; 4], Some(si), None);
-        let l = seed_label?;
-        let mut fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
-        cover_seams(&mut fill, &labels, &spot, w, h);
-        fill
-    };
+    let mut fill = if gap < 1.0 { spot } else { seed_fill(&spot, &free, w, h, gap, [o.image_border; 4], si, None, 0.0)? };
     scale(&mut fill, &strength, &free, w, h, o);
-    to_region(&fill, w, h, area, o.anti_alias)
+    to_region(&fill, w, h, area, o.anti_alias, Some(&free))
 }
 
 /// Random line art: thick strokes (2–4 px, so no area touches another one corner to corner),
@@ -762,7 +754,7 @@ fn a_real_page_click_stage_timings() {
         scale(&mut fill, &cs, &free, cw, ch, &o);
         lap(5, &mut t);
         let carea = Rect::new(cx0 as i32, cy0 as i32, cx1 as i32, cy1 as i32);
-        let r = to_region(&fill, cw, ch, carea, true);
+        let r = to_region(&fill, cw, ch, carea, true, Some(&free));
         lap(6, &mut t);
         let whole = Instant::now();
         let r2 = click_region(&px, area, ((si % w) as i32, (si / w) as i32), &o);
@@ -788,4 +780,118 @@ fn a_real_page_click_stage_timings() {
         total[6] / n,
         total[7] / n
     );
+}
+
+/// White paper with a bold band on the left, a thin line at x = 14 broken at y 21..24, and two
+/// lines from the right ending at it, the upper one just above the break.
+fn broken_line() -> Img {
+    let mut img = Img::new(40, 40, [255, 255, 255, 255]);
+    for y in 0..40 {
+        for x in 0..6 {
+            img.set(x, y, INK);
+        }
+        if !(21..24).contains(&y) {
+            img.set(14, y, INK);
+        }
+    }
+    for x in 15..40 {
+        img.set(x, 20, INK);
+        img.set(x, 30, INK);
+    }
+    img
+}
+
+/// User report: a closed gap let a fill take a notch of the next area (or leave one of its own):
+/// the seam ran across a corner. The gap now closes along the line it breaks.
+#[test]
+fn a_closed_gap_follows_the_line_it_breaks() {
+    let img = broken_line();
+    let o = FillOptions { close_gap: 4.0, scale: 1.0, anti_alias: false, ..FillOptions::default() };
+    let r = img.click(25, 25, o).unwrap();
+    for y in 21..30 {
+        for x in 14..40 {
+            assert!(filled(&r, x, y), "({x}, {y}) inside the box");
+        }
+        for x in 6..14 {
+            assert!(!filled(&r, x, y), "({x}, {y}) is the next area's");
+        }
+    }
+    // The band beside it fills right up to the same closure.
+    let band = img.click(10, 10, o).unwrap();
+    for y in 21..24 {
+        assert!(filled(&band, 13, y) && !filled(&band, 15, y), "y {y}");
+    }
+}
+
+/// User report: refilling beside a closed gap left a faint line where the two fills met, and a
+/// speck where the seam met a line. With Anti-alias on, the edge at a closed gap is hard and
+/// whole: the two fills cover every pixel between them.
+#[test]
+fn two_fills_meeting_at_a_closed_gap_leave_no_line() {
+    let img = open_box(3);
+    let o = FillOptions { close_gap: 4.0, ..FillOptions::default() };
+    let (inside, outside) = (img.click(20, 20, o).unwrap(), img.click(1, 1, o).unwrap());
+    // The paper round the gap (beside the lines a fill's edge is soft: the line covers it).
+    let ink = |x: usize, y: usize| (y.saturating_sub(1)..=y + 1).any(|yy| (x - 1..=x + 1).any(|xx| img.px[yy * 40 + xx] == INK));
+    for y in 0..9 {
+        for x in 14..26 {
+            if img.px[y * 40 + x] == CLEAR && !ink(x, y) {
+                let (a, b) = (inside.at(x as i32, y as i32), outside.at(x as i32, y as i32));
+                // Painted one over the other: the coverage left is (1 - a)(1 - b).
+                assert!((1.0 - a) * (1.0 - b) < 0.01, "({x}, {y}): {a} and {b} leave a line");
+            }
+        }
+    }
+}
+
+/// User report: the tip of a narrow wedge, touching the fill only across a corner, stayed
+/// unfilled.
+#[test]
+fn a_wedge_fills_to_its_tip() {
+    // Ink all over but a wedge narrowing to a pixel at x = 20, and its tip beyond, at (21, 16),
+    // beside it only across a corner.
+    let mut img = Img::new(30, 30, INK);
+    for x in 2..=20usize {
+        let half = (20 - x) / 3;
+        for y in 15 - half..=15 + half {
+            img.set(x, y, [255, 255, 255, 255]);
+        }
+    }
+    img.set(21, 16, [255, 255, 255, 255]);
+    let r = img.click(5, 15, FillOptions { close_gap: 4.0, anti_alias: false, ..FillOptions::default() }).unwrap();
+    assert!(filled(&r, 20, 15));
+    assert!(filled(&r, 21, 16), "the tip");
+}
+
+/// User report: the paper between hatching strokes, shut in by them, stayed unfilled. Small and
+/// narrow pockets beside nothing but the fill now fill; a wider one (a highlight) and one beside
+/// another area stay.
+#[test]
+fn pockets_the_hatching_shuts_in_fill() {
+    let mut img = Img::new(60, 40, [255, 255, 255, 255]);
+    img.outline(1, 1, 58, 38);
+    // Hatching: a closed 1 px box with a 2 px slit of paper inside, twice.
+    for (x0, y0) in [(10usize, 10usize), (20, 10)] {
+        img.outline(x0, y0, x0 + 5, y0 + 3);
+    }
+    // A highlight: a 5×5 hole in a blob.
+    for y in 22..33 {
+        for x in 10..21 {
+            img.set(x, y, INK);
+        }
+    }
+    for y in 25..30 {
+        for x in 13..18 {
+            img.set(x, y, [255, 255, 255, 255]);
+        }
+    }
+    // A slit beside the next area: a 1 px wall splits off the right part, and a pocket sits in it.
+    for y in 1..39 {
+        img.set(40, y, INK);
+    }
+    img.outline(38, 20, 42, 23);
+    let r = img.click(5, 5, FillOptions { close_gap: 4.0, anti_alias: false, ..FillOptions::default() }).unwrap();
+    assert!(filled(&r, 12, 11) && filled(&r, 22, 12), "the slits between the strokes");
+    assert!(!filled(&r, 15, 27), "the highlight stays");
+    assert!(!filled(&r, 39, 21), "the pocket beside the next area stays");
 }

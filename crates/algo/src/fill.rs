@@ -166,7 +166,7 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
         if let Some(b) = block {
             tuck(&mut fill, b, w, h);
         }
-        return to_region(&fill, w, h, area, o.anti_alias);
+        return to_region(&fill, w, h, area, o.anti_alias, Some(&free));
     }
     // The seed's area before any gap is closed. Closing gaps only splits it, and Area Scaling
     // reaches a few pixels past it, so the rest works on its box and a margin: a click on a page
@@ -178,7 +178,9 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     drop(passable);
     let amount = if o.scale.is_finite() { o.scale.clamp(-MAX_SCALE, MAX_SCALE).abs() } else { 0.0 };
     let tucks = if block.is_some() { TUCK as usize } else { 0 };
-    let pad = (gap / 2.0).ceil() as usize + amount.ceil() as usize + tucks + 4;
+    // The pockets the fill shuts in ([`fill_pockets`]) and what lies round them are inside the box too.
+    let pockets = POCKET / 2 + 2 * pocket_reach(gap, finite(o.thin_lines, MAX_THIN)) + 2;
+    let pad = (gap / 2.0).ceil() as usize + amount.ceil() as usize + tucks + 4 + pockets;
     let (cx0, cy0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
     let (cx1, cy1) = ((x1 + pad + 1).min(w), (y1 + pad + 1).min(h));
     let (cw, ch) = (cx1 - cx0, cy1 - cy0);
@@ -213,17 +215,56 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
         // the whole page, and the narrow-spot climb can't step across a thin diagonal line into
         // the next spot.
         let soft = thin.as_deref().map(|t| (t, thin_rise(o.thin_lines)));
-        let (labels, seed_label) = areas(&spot, cw, ch, gap, [o.image_border; 4], Some(csi), soft);
-        let l = seed_label?;
-        let mut fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
-        cover_seams(&mut fill, &labels, &spot, cw, ch);
-        fill
+        seed_fill(&spot, &free, cw, ch, gap, [o.image_border; 4], csi, soft, finite(o.thin_lines, MAX_THIN))?
     };
     scale(&mut fill, &strength, &free, cw, ch, o);
     if let Some(b) = &block {
         tuck(&mut fill, b, cw, ch);
     }
-    to_region(&fill, cw, ch, carea, o.anti_alias)
+    to_region(&fill, cw, ch, carea, o.anti_alias, Some(&free))
+}
+
+/// The seed's area of `spot` (the pixels a fill may cover around `seed`, `free` all the pixels
+/// within the margin) with gaps up to `gap` closed: [`areas`], then each seam beside the area
+/// straightened into a closure from line to line and the areas found again with those as walls
+/// (a gap then closes along the line it breaks), the seams beside it and the pockets it shuts in
+/// added. `None` when the seed is in no area.
+#[allow(clippy::too_many_arguments)]
+fn seed_fill(
+    spot: &[bool],
+    free: &[bool],
+    w: usize,
+    h: usize,
+    gap: f32,
+    border: [bool; 4],
+    seed: usize,
+    soft: Option<(&[bool], f32)>,
+    thin: f32,
+) -> Option<Vec<bool>> {
+    let (labels, seed_label) = areas(spot, w, h, gap, border, Some(seed), soft);
+    let l = seed_label?;
+    let fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
+    let walls = closures(&fill, &labels, spot, w, h, gap);
+    let (labels, mut fill) = if walls.is_empty() {
+        (labels, fill)
+    } else {
+        let mut walled = spot.to_vec();
+        for &i in &walls {
+            if let Some(v) = walled.get_mut(i) {
+                *v = false;
+            }
+        }
+        match areas(&walled, w, h, gap, border, Some(seed), soft) {
+            (relabelled, Some(l)) => {
+                let fill = relabelled.iter().map(|v| *v == l).collect();
+                (relabelled, fill)
+            }
+            _ => (labels, fill),
+        }
+    };
+    cover_seams(&mut fill, &labels, spot, w, h);
+    fill_pockets(&mut fill, free, w, h, gap, thin);
+    Some(fill)
 }
 
 /// Ignore Thin Lines: the ink (pixels past the colour margin, not the editing layer's blocking
@@ -397,7 +438,7 @@ fn enclosed_in(
     if let Some(b) = block {
         tuck(&mut fill, b, w, h);
     }
-    to_region(&fill, w, h, area, o.anti_alias)
+    to_region(&fill, w, h, area, o.anti_alias, Some(&free))
 }
 
 /// The pixels of `area` inside the polygon `points` (even-odd, pixel centres): a lasso.
@@ -535,6 +576,15 @@ fn strengths(img: &[[u8; 4]], f: impl Fn([u8; 4]) -> u8 + Sync + Send) -> Vec<u8
 fn neighbours(i: usize, w: usize, h: usize) -> [Option<usize>; 4] {
     let (x, y) = (i % w, i / w);
     [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)]
+}
+
+/// The 8-neighbours of pixel `i` of a `w` × `h` plane.
+fn neighbours8(i: usize, w: usize, h: usize) -> impl Iterator<Item = usize> {
+    let (x, y) = ((i % w) as i64, (i / w) as i64);
+    [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].into_iter().filter_map(move |(dx, dy)| {
+        let (nx, ny) = (x + dx, y + dy);
+        (nx >= 0 && ny >= 0 && nx < w as i64 && ny < h as i64).then(|| ny as usize * w + nx as usize)
+    })
 }
 
 /// Span flood of the 4-connected `open` pixels around `start` that have no label yet (the
@@ -832,13 +882,263 @@ fn find(parent: &mut [u32], mut l: u32) -> u32 {
 }
 
 /// Adds to `fill` the seams beside it: the pixels within the margin that no area got (see
-/// [`areas`]), which close a gap the way a line would.
+/// [`areas`]), which close a gap the way a line would. Diagonal neighbours count, and a seam
+/// pixel beside one just covered is covered too: where a seam meets a line at a corner, its last
+/// pixel touches the fill only across a corner (a speck was left there).
 fn cover_seams(fill: &mut [bool], labels: &[u32], free: &[bool], w: usize, h: usize) {
-    let seams: Vec<usize> = (0..fill.len())
-        .filter(|&i| free.get(i) == Some(&true) && labels.get(i) == Some(&0) && neighbours(i, w, h).into_iter().flatten().any(|j| fill.get(j) == Some(&true)))
-        .collect();
-    for i in seams {
-        if let Some(f) = fill.get_mut(i) {
+    let seam = |i: usize| free.get(i) == Some(&true) && labels.get(i) == Some(&0);
+    for _ in 0..2 {
+        let next: Vec<usize> =
+            (0..fill.len()).filter(|&i| fill.get(i) == Some(&false) && seam(i) && neighbours8(i, w, h).any(|j| fill.get(j) == Some(&true))).collect();
+        if next.is_empty() {
+            break;
+        }
+        for i in next {
+            if let Some(f) = fill.get_mut(i) {
+                *f = true;
+            }
+        }
+    }
+}
+
+/// A pixel's position, (x, y).
+type Point = (i64, i64);
+
+/// The longest seam [`closures`] straightens, in pixels per pixel of gap: a longer one runs along
+/// a passage rather than across a gap.
+const SEAM_LENGTH: f32 = 3.0;
+
+/// Straight closures for the gaps the watershed closed beside `fill`: for each seam (free pixels
+/// no area got, see [`areas`]) touching it, the shortest segment between line pixels of two
+/// different strokes near the seam, no longer than the gap. The free pixels on those segments are
+/// returned: walls that close the gap along the line it breaks, where the seam ran wherever the
+/// two areas met (across a corner of one of them, so a fill took a notch of the next area or
+/// left one of its own).
+fn closures(fill: &[bool], labels: &[u32], free: &[bool], w: usize, h: usize, gap: f32) -> Vec<usize> {
+    let seam = |i: usize| free.get(i) == Some(&true) && labels.get(i) == Some(&0);
+    let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < w as i64 && y < h as i64;
+    let line = |x: i64, y: i64| inside(x, y) && free.get(y as usize * w + x as usize) == Some(&false);
+    let mut seen = vec![false; fill.len()];
+    let mut walls = Vec::new();
+    let longest = (SEAM_LENGTH * (gap + 2.0)).ceil() as usize;
+    let reach = (gap / 2.0).ceil() as i64 + 2;
+    for start in 0..fill.len() {
+        if seen.get(start) != Some(&false) || !seam(start) || !neighbours8(start, w, h).any(|j| fill.get(j) == Some(&true)) {
+            continue;
+        }
+        // The seam: its 8-connected pixels.
+        let mut pixels = vec![start];
+        if let Some(v) = seen.get_mut(start) {
+            *v = true;
+        }
+        let mut k = 0;
+        while let Some(&i) = pixels.get(k) {
+            k += 1;
+            for j in neighbours8(i, w, h) {
+                if seam(j) && seen.get(j) == Some(&false) {
+                    if let Some(v) = seen.get_mut(j) {
+                        *v = true;
+                    }
+                    pixels.push(j);
+                }
+            }
+        }
+        if pixels.len() > longest {
+            continue;
+        }
+        // The line pixels near it, as strokes: 8-connected within the window round the seam (two
+        // strokes joined only further away, as a gap's two sides often are, are two here).
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for &i in &pixels {
+            let (x, y) = ((i % w) as i64, (i / w) as i64);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        let (x0, y0, x1, y1) = (x0 - reach, y0 - reach, x1 + reach, y1 + reach);
+        let ww = (x1 - x0 + 1) as usize;
+        let mut stroke = vec![0u32; ww * (y1 - y0 + 1) as usize];
+        // Only a stroke's pixels beside free ones can end a closure.
+        let mut edges: Vec<(i64, i64, u32)> = Vec::new();
+        let mut strokes = 0u32;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let at = (y - y0) as usize * ww + (x - x0) as usize;
+                if !line(x, y) || stroke.get(at) != Some(&0) {
+                    continue;
+                }
+                strokes += 1;
+                let mut stack = vec![(x, y)];
+                if let Some(v) = stroke.get_mut(at) {
+                    *v = strokes;
+                }
+                while let Some((px, py)) = stack.pop() {
+                    let mut edge = false;
+                    for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                        let (nx, ny) = (px + dx, py + dy);
+                        if dx * dy == 0 && inside(nx, ny) && !line(nx, ny) {
+                            edge = true;
+                        }
+                        if nx < x0 || ny < y0 || nx > x1 || ny > y1 || !line(nx, ny) {
+                            continue;
+                        }
+                        let a = (ny - y0) as usize * ww + (nx - x0) as usize;
+                        if stroke.get(a) == Some(&0) {
+                            if let Some(v) = stroke.get_mut(a) {
+                                *v = strokes;
+                            }
+                            stack.push((nx, ny));
+                        }
+                    }
+                    if edge {
+                        edges.push((px, py, strokes));
+                    }
+                }
+            }
+        }
+        if strokes < 2 {
+            continue;
+        }
+        // The closest two pixels of different strokes, no further apart than the gap (and a pixel).
+        let most = (gap + 1.5) * (gap + 1.5);
+        let mut best: Option<(f32, Point, Point)> = None;
+        for (a, &(ax, ay, sa)) in edges.iter().enumerate() {
+            for &(bx, by, sb) in edges.iter().skip(a + 1) {
+                if sa == sb {
+                    continue;
+                }
+                let d = ((ax - bx).pow(2) + (ay - by).pow(2)) as f32;
+                if d <= most && best.is_none_or(|(b, _, _)| d < b) {
+                    best = Some((d, (ax, ay), (bx, by)));
+                }
+            }
+        }
+        let Some((_, (ax, ay), (bx, by))) = best else { continue };
+        // The free pixels on the segment (8-connected, which a 4-connected fill can't cross).
+        let steps = (bx - ax).abs().max((by - ay).abs());
+        for t in 1..steps {
+            let x = ax + ((bx - ax) * t * 2 + steps).div_euclid(2 * steps);
+            let y = ay + ((by - ay) * t * 2 + steps).div_euclid(2 * steps);
+            if inside(x, y) && free.get(y as usize * w + x as usize) == Some(&true) {
+                walls.push(y as usize * w + x as usize);
+            }
+        }
+    }
+    walls
+}
+
+/// The most pixels a pocket [`fill_pockets`] fills holds.
+const POCKET: usize = 64;
+
+/// How far across the lines [`fill_pockets`] looks round a pocket, in steps.
+fn pocket_reach(gap: f32, thin: f32) -> usize {
+    thin.max(gap / 2.0).max(2.0).ceil() as usize + 1
+}
+
+/// Fills the pockets of free pixels the lines shut in the fill: small spots no wider than the gap
+/// (and 4 px at least), whose free surroundings across the lines (within `thin`, Ignore Thin
+/// Lines, or half the gap of them, and 2 px at least) are this fill or other such pockets only:
+/// the paper between hatching strokes, the tip of a narrow wedge that touches the fill only across
+/// a corner. A spot that also lies beside another area, or is wider (a highlight), stays.
+fn fill_pockets(fill: &mut [bool], free: &[bool], w: usize, h: usize, gap: f32, thin: f32) {
+    let open: Vec<bool> = free.iter().zip(fill.iter()).map(|(f, filled)| *f && !filled).collect();
+    let labels = components(&open, w, h);
+    drop(open);
+    let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
+    if count < 2 {
+        return;
+    }
+    let mut size = vec![0usize; count];
+    let mut edge = vec![false; count];
+    for (i, l) in labels.iter().enumerate() {
+        if *l == 0 {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        if let Some(n) = size.get_mut(*l as usize) {
+            *n += 1;
+        }
+        if (x == 0 || y == 0 || x + 1 == w || y + 1 == h)
+            && let Some(e) = edge.get_mut(*l as usize)
+        {
+            *e = true;
+        }
+    }
+    let small = |l: u32| l != 0 && size.get(l as usize).is_some_and(|n| *n <= POCKET) && edge.get(l as usize) == Some(&false);
+    if !(1..count as u32).any(small) {
+        return;
+    }
+    let lines: Vec<bool> = free.iter().map(|f| !f).collect();
+    let depth = edt(&lines, w, h);
+    drop(lines);
+    let widest = ((gap + 2.0) / 2.0).max(2.0);
+    let mut deep = vec![0f32; count];
+    for (l, d) in labels.iter().zip(&depth) {
+        if let Some(v) = deep.get_mut(*l as usize) {
+            *v = v.max(*d);
+        }
+    }
+    let pocket = |l: u32| small(l) && deep.get(l as usize).is_some_and(|d| *d <= widest);
+    let reach = pocket_reach(gap, thin);
+    let mut pixels: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (i, l) in labels.iter().enumerate() {
+        if pocket(*l)
+            && let Some(p) = pixels.get_mut(*l as usize)
+        {
+            p.push(i);
+        }
+    }
+    let mut take = vec![false; count];
+    let mut reached = vec![false; fill.len()];
+    for (l, own) in pixels.iter().enumerate() {
+        if own.is_empty() {
+            continue;
+        }
+        // Outwards through the lines, up to `reach` steps: what free pixels lie there.
+        let (mut ours, mut other) = (0usize, 0usize);
+        let mut ring: Vec<usize> = own.clone();
+        let mut touched: Vec<usize> = own.clone();
+        for &i in own {
+            if let Some(r) = reached.get_mut(i) {
+                *r = true;
+            }
+        }
+        for _ in 0..reach {
+            let mut next = Vec::new();
+            for &i in &ring {
+                for j in neighbours8(i, w, h) {
+                    if reached.get(j) != Some(&false) {
+                        continue;
+                    }
+                    if let Some(r) = reached.get_mut(j) {
+                        *r = true;
+                    }
+                    touched.push(j);
+                    if fill.get(j) == Some(&true) {
+                        ours += 1;
+                    } else if free.get(j) == Some(&true) {
+                        if !pocket(labels.get(j).copied().unwrap_or(0)) {
+                            other += 1;
+                        }
+                    } else {
+                        next.push(j);
+                    }
+                }
+            }
+            ring = next;
+        }
+        for i in touched {
+            if let Some(r) = reached.get_mut(i) {
+                *r = false;
+            }
+        }
+        if ours > 0
+            && other == 0
+            && let Some(t) = take.get_mut(l)
+        {
+            *t = true;
+        }
+    }
+    for (f, l) in fill.iter_mut().zip(&labels) {
+        if take.get(*l as usize) == Some(&true) {
             *f = true;
         }
     }
@@ -987,7 +1287,11 @@ fn square_grow(mask: &[bool], w: usize, h: usize, reach: usize) -> Vec<bool> {
     near
 }
 
-fn to_region(fill: &[bool], w: usize, h: usize, area: Rect, anti_alias: bool) -> Option<Region> {
+/// The [`Region`] of `fill`. With `anti_alias`, its edges against the lines (pixels not `free`)
+/// are soft, but where it meets free pixels it doesn't take (a closed gap, the next area) the edge
+/// is hard: the fill there is whole and nothing of it reaches over. Two fills meeting at a closed
+/// gap then cover it between them, where two soft edges left a faint line.
+fn to_region(fill: &[bool], w: usize, h: usize, area: Rect, anti_alias: bool, free: Option<&[bool]>) -> Option<Region> {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for (y, row) in fill.chunks_exact(w).enumerate().take(h) {
         if let (Some(a), Some(b)) = (row.iter().position(|f| *f), row.iter().rposition(|f| *f)) {
@@ -998,7 +1302,20 @@ fn to_region(fill: &[bool], w: usize, h: usize, area: Rect, anti_alias: bool) ->
         return None;
     }
     let marks: Vec<u8> = fill.iter().map(|f| if *f { 255 } else { 0 }).collect();
-    Some(region_from_marks(&marks, w, h, area, (x0, y0, x1, y1), anti_alias))
+    let mut region = region_from_marks(&marks, w, h, area, (x0, y0, x1, y1), anti_alias);
+    let Some(free) = free.filter(|f| anti_alias && f.len() == fill.len()) else { return Some(region) };
+    let open = |i: usize| free.get(i) == Some(&true) && fill.get(i) == Some(&false);
+    let (bx, by) = ((region.bbox.x0 - area.x0) as usize, (region.bbox.y0 - area.y0) as usize);
+    let bw = (region.bbox.width() as usize).max(1);
+    for (k, m) in region.mask.iter_mut().enumerate() {
+        let i = (by + k / bw) * w + bx + k % bw;
+        if open(i) {
+            *m = 0;
+        } else if fill.get(i) == Some(&true) && neighbours8(i, w, h).any(open) {
+            *m = 255;
+        }
+    }
+    Some(region)
 }
 
 #[cfg(test)]

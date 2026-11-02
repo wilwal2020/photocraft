@@ -1051,3 +1051,44 @@ fn art_history_stroke_runs_the_command() {
     drag(&mut app, Tool::ArtHistoryBrush);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
 }
+
+/// User report: with Remove After Each Stroke the tint changed on release (from where the dabs
+/// reach to a soft-edged band of the nominal size), and a circle's filled inside showed a faint
+/// ring inside the stroke, so it didn't look as if all of it went. The released tint is the drag's,
+/// solid from the stroke to the middle.
+#[test]
+fn the_released_remove_tint_is_the_drags_and_fills_a_circle_solid() {
+    let mut app = app();
+    app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
+    app.ui.tool = Tool::Remove;
+    app.ui.tool_options.remove_lama.after_each_stroke = true;
+    app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 0.0}})).unwrap();
+    let ring: Vec<[f64; 2]> = (0..=48)
+        .map(|i| {
+            let a = f64::from(i) / 48.0 * std::f64::consts::TAU;
+            [50.0 + 20.0 * a.cos(), 30.0 + 20.0 * a.sin()]
+        })
+        .collect();
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: ring[0][0], y: ring[0][1], pressure: 1.0 }, m);
+    for p in &ring[1..] {
+        tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, m);
+    }
+    // The drag's trail, as the canvas draws it.
+    let points: Vec<[f64; 3]> = ring.iter().map(|p| [p[0], p[1], 1.0]).collect();
+    let mut drag = crate::stroke_trail::Trail::new([100, 60]);
+    drag.feed_reach(&points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
+    let dragged: Vec<u8> = (0..100).map(|x| drag.coverage(x, 30)).collect();
+    let last = ring[ring.len() - 1];
+    tool_event(&mut app, ToolEvent::Up { x: last[0], y: last[1] }, m);
+    let t = app.remove_trail.as_ref().expect("the released stroke is tinted");
+    // From the middle out to the stroke's far edge, solid: no fainter ring inside the stroke.
+    let outer = (50..100).rev().find(|&x| dragged[x] > 0).expect("the drag reached the row");
+    for x in 50..=outer {
+        assert_eq!(t.coverage(x, 30), 255, "x {x}: the inside and the stroke are tinted alike");
+    }
+    // Where the drag's tint reached, the released one does, and no further.
+    for (x, d) in dragged.iter().enumerate().skip(50) {
+        assert_eq!(t.coverage(x, 30) > 0, *d > 0 || x < outer, "x {x}");
+    }
+}

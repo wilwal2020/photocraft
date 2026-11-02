@@ -576,11 +576,13 @@ fn remove_trail_new(size: [u32; 2], sel: Option<&photocraft_raster::Surface>) ->
 }
 
 /// Remove after each stroke on: the released stroke, with what it encloses, stays tinted while
-/// its removal runs (a user report: circling an object showed nothing of its inside going).
+/// its removal runs (a user report: circling an object showed nothing of its inside going). The
+/// tint is the drag's own, where the brush's dabs reach (user report: it changed on release to a
+/// band of the nominal size with soft edges, which also left a faint ring inside a circle).
 fn remove_running_show(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
     let Some(st) = app.session.active() else { return };
     let mut trail = remove_trail_new([st.doc.size.width, st.doc.size.height], st.doc.selection.as_ref());
-    trail.feed(points, app.session.tools.brush.size);
+    trail.feed_reach(points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
     trail.fill_enclosed();
     app.remove_running_doc = Some(st.doc.id);
     app.remove_pending.clear();
