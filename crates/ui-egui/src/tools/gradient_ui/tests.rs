@@ -124,6 +124,26 @@ fn short_drags_draw_thin_gradients_and_space_moves_the_line() {
     ev(&mut app, ToolEvent::Up { x: 80.0, y: 50.0 });
     let g = get(&mut app);
     assert!(near(pt(&g, "from"), [20.0, 50.0]) && near(pt(&g, "to"), [80.0, 50.0]), "{g}");
+    // Dragging the end point, Space moves the whole line too (user request), then the point
+    // goes on from where the line was put.
+    ev(&mut app, ToolEvent::Down { x: 80.0, y: 50.0, pressure: 1.0 });
+    ev(&mut app, ToolEvent::Move { x: 90.0, y: 50.0, pressure: 1.0 });
+    assert!(drawing(&app), "Space repositions rather than taking the Hand");
+    set_space(&mut app, true);
+    ev(&mut app, ToolEvent::Move { x: 90.0, y: 80.0, pressure: 1.0 });
+    set_space(&mut app, false);
+    ev(&mut app, ToolEvent::Up { x: 100.0, y: 80.0 });
+    let g = get(&mut app);
+    assert!(near(pt(&g, "from"), [20.0, 80.0]) && near(pt(&g, "to"), [100.0, 80.0]), "{g}");
+    // The start point likewise.
+    ev(&mut app, ToolEvent::Down { x: 20.0, y: 80.0, pressure: 1.0 });
+    ev(&mut app, ToolEvent::Move { x: 20.0, y: 70.0, pressure: 1.0 });
+    set_space(&mut app, true);
+    ev(&mut app, ToolEvent::Move { x: 30.0, y: 70.0, pressure: 1.0 });
+    set_space(&mut app, false);
+    ev(&mut app, ToolEvent::Up { x: 30.0, y: 70.0 });
+    let g = get(&mut app);
+    assert!(near(pt(&g, "from"), [30.0, 70.0]) && near(pt(&g, "to"), [110.0, 80.0]), "{g}");
 }
 
 #[test]

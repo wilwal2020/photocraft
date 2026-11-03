@@ -60,8 +60,10 @@ enum Drag {
     /// Drawing a new gradient, or redrawing the selected one. `last` is the pointer at the last
     /// move: with Space held the whole line follows it (Photoshop's reposition).
     Draw { from: [f32; 2], to: [f32; 2], redraw: Option<LayerId>, last: [f32; 2] },
-    /// Editing the selected gradient: the command (and params) to commit on release.
-    Edit { layer: LayerId, grab: Grab, down: [f32; 2], moved: bool, commit: Option<(&'static str, Value)> },
+    /// Editing the selected gradient: the command (and params) to commit on release. `last` is the
+    /// pointer at the last move and `line` the start and end a dragged start or end point has
+    /// made so far: with Space held the whole line follows the pointer, as while drawing.
+    Edit { layer: LayerId, grab: Grab, down: [f32; 2], last: [f32; 2], line: Option<([f32; 2], [f32; 2])>, moved: bool, commit: Option<(&'static str, Value)> },
 }
 
 /// Live-gradient interaction state (not saved).
@@ -86,9 +88,10 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) {
     app.gradient.space = down;
 }
 
-/// Is a gradient being drawn (Space then repositions it rather than taking the Hand tool)?
+/// Is a gradient being drawn, or its start or end point dragged (Space then repositions it
+/// rather than taking the Hand tool)?
 pub fn drawing(app: &PhotocraftApp) -> bool {
-    matches!(app.gradient.drag, Some(Drag::Draw { .. }))
+    matches!(app.gradient.drag, Some(Drag::Draw { .. } | Drag::Edit { grab: Grab::Start | Grab::End, .. }))
 }
 
 /// Whether an uncommitted gradient gesture must finish before applying a saved vector.
@@ -250,7 +253,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             let active = active_gradient(app);
             let grab = active.as_ref().and_then(|(l, frame, _)| Widget::new(fill_of(l)?, *frame)?.hit(p, GRAB / zoom));
             app.gradient.drag = Some(match (grab, active) {
-                (Some(grab), Some((l, ..))) => Drag::Edit { layer: l.id, grab, down: p, moved: false, commit: None },
+                (Some(grab), Some((l, ..))) => Drag::Edit { layer: l.id, grab, down: p, last: p, line: None, moved: false, commit: None },
                 (_, active) => Drag::Draw { from: p, to: p, redraw: active.map(|a| a.0.id), last: p },
             });
         }
@@ -290,7 +293,9 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
             }
             *last = p;
         }
-        Drag::Edit { layer, grab, down, moved, commit } => {
+        Drag::Edit { layer, grab, down, last, line, moved, commit } => {
+            let (dx, dy) = (p[0] - last[0], p[1] - last[1]);
+            *last = p;
             if dist(*down, p) * zoom >= 2.0 {
                 *moved = true;
             }
@@ -300,8 +305,21 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
             let Some(w) = active.as_ref().filter(|a| a.0.id == *layer).and_then(|(l, frame, _)| Widget::new(fill_of(l)?, *frame)) else { return };
             let id = layer.0;
             *commit = match *grab {
-                Grab::Start => Some((cmds::SET, json!({"layer": id, "from": snap(w.end, p)}))),
-                Grab::End => Some((cmds::SET, json!({"layer": id, "to": snap(w.start, p)}))),
+                Grab::Start | Grab::End => {
+                    let (mut from, mut to) = line.unwrap_or((w.start, w.end));
+                    if space {
+                        // Space: the line moves with the pointer, both points.
+                        if dx.is_finite() && dy.is_finite() {
+                            (from, to) = ([from[0] + dx, from[1] + dy], [to[0] + dx, to[1] + dy]);
+                        }
+                    } else if *grab == Grab::Start {
+                        from = snap(to, p);
+                    } else {
+                        to = snap(from, p);
+                    }
+                    *line = Some((from, to));
+                    Some((cmds::SET, json!({"layer": id, "from": from, "to": to})))
+                }
                 Grab::Line(_) => {
                     let (dx, dy) = (p[0] - down[0], p[1] - down[1]);
                     Some((cmds::SET, json!({"layer": id, "from": [w.start[0] + dx, w.start[1] + dy], "to": [w.end[0] + dx, w.end[1] + dy]})))
