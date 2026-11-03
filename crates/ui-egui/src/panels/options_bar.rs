@@ -435,7 +435,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             // both paint with the same engine-owned preset (#1651), and either swatch
             // click opens the Gradient Editor window, as in Photoshop.
             if crate::gradient_ui::preset_swatch(app, ui) {
-                app.ui.panels.gradient_editor = true;
+                crate::gradient_ui::toggle_editor(app, ui.ctx(), crate::gradient_ui::EditorMode::Full);
             }
             widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;

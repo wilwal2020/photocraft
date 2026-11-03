@@ -37,7 +37,7 @@ fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, Photocraf
 
 /// [`app_harness`] advancing `step_dt` seconds per frame (double-clicks need real frame times).
 fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harness<'static, PhotocraftApp> {
-    let (kind, mode) = (kind.to_string(), mode.to_string());
+    let (kind, mode, map) = (kind.to_string(), mode.to_string(), kind == "gradientMap");
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(step_dt).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
@@ -54,6 +54,12 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
         app
     });
     h.run_steps(8);
+    if map {
+        // The Properties swatch opens the Gradient Editor window on the map's whole editor.
+        h.get_by_label("Edit gradient").click();
+        h.run_steps(4);
+        assert!(h.state().ui.panels.gradient_editor, "the swatch opened the editor");
+    }
     h
 }
 
@@ -542,6 +548,43 @@ fn color_balance_properties_history_and_reset_like_photoshop() {
     clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
     assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "third Reset: still the defaults");
     assert_eq!(steps(&h), before, "the edit and the Resets share one history step");
+}
+
+/// User request: a Gradient Map layer's Properties are Photoshop's simpler ones, the gradient
+/// (which opens the Gradient Editor window on the map's stops), Dither, Reverse and Method, each
+/// one history step; a click outside the window closes it, and the swatch opens it again.
+#[test]
+fn the_gradient_map_panel_is_the_swatch_dither_reverse_and_method() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    assert_eq!(h.state().gradient.editor, crate::gradient_ui::EditorMode::Map(layer(&h).0));
+    assert_eq!(h.get_all_by_label("Gradient stops").count(), 1, "the stops are in the editor window only");
+    // A click outside the window (on the status bar) closes it.
+    click(&mut h, Pos2::new(700.0, 893.0));
+    assert!(!h.state().ui.panels.gradient_editor, "a click outside closed the editor");
+    assert!(h.query_by_label("Gradient stops").is_none(), "the panel shows no stops of its own");
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    for (name, check) in [("Dither", 0usize), ("Reverse", 1)] {
+        let before = steps(&h);
+        h.get_by_label(name).click();
+        h.run_steps(4);
+        let Adjustment::GradientMap { reverse, dither, .. } = layer(&h).1 else { panic!() };
+        assert!(if check == 0 { dither } else { reverse }, "{name} set");
+        assert_eq!(steps(&h), before + 1, "{name}: one history step");
+    }
+    h.get_by_label("Edit gradient").click();
+    h.run_steps(4);
+    assert!(h.state().ui.panels.gradient_editor, "the swatch opens it again");
+}
+
+/// A picture of the app with a Gradient Map layer and its editor (PHOTOCRAFT_SHOTS=<dir>).
+#[test]
+#[ignore = "pictures"]
+fn render_the_gradient_map_panel() {
+    let Ok(dir) = std::env::var("PHOTOCRAFT_SHOTS") else { return };
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    h.render().unwrap().save(format!("{dir}/map_editor.png")).unwrap();
+    click(&mut h, Pos2::new(700.0, 893.0));
+    h.render().unwrap().save(format!("{dir}/map_panel.png")).unwrap();
 }
 
 fn map_stops(a: &Adjustment) -> Vec<(f32, [u8; 3])> {

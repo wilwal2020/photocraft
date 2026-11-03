@@ -148,6 +148,48 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
     edit
 }
 
+/// A Gradient Map layer's Properties, as Photoshop's (user request): the gradient, whose click
+/// opens the Gradient Editor window on it ([`gradient_map`] there), Dither, Reverse and the
+/// Method its colours blend with.
+pub(super) fn gradient_map_compact(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let t = Tokens::get(ui.ctx());
+    let mut e = Edit::default();
+    let stops = read_stops(v);
+    let w = ui.available_width().clamp(120.0, 320.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    let bar = Rect::from_min_max(r.min, pos2(r.right() - 20.0, r.bottom()));
+    // Markers address un-reversed locations, so the swatch shows the stops as they are set.
+    let cols: Vec<Color32> = (0..=48).map(|i| color32(sample_stops(&stops, i as f32 / 48.0))).collect();
+    spectrum_bar(ui.painter(), bar, &cols);
+    let arrow = Rect::from_min_max(pos2(bar.right(), r.top()), r.max);
+    ui.painter().rect_filled(arrow, 0.0, if resp.hovered() { t.hover } else { t.field });
+    widgets::chevron_icon(ui, arrow, &ui.style().visuals.widgets.inactive, false);
+    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, if resp.hovered() { t.text_dim } else { t.field_border }), StrokeKind::Inside);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Edit gradient")));
+    if resp.on_hover_text(tl!("Click to edit the gradient")).clicked() {
+        e.open_gradient_editor = true;
+    }
+    ui.add_space(4.0);
+    for (key, text) in [("dither", tl!("Dither")), ("reverse", tl!("Reverse"))] {
+        let mut b = flag(v, key, false);
+        if widgets::checkbox(ui, &mut b, text).changed() {
+            v[key] = json!(b);
+            e.add(Edit::discrete(true));
+        }
+    }
+    ui.horizontal(|ui| {
+        label(ui, tl!("Method:"));
+        use photocraft_doc::effects::GradientMethod as M;
+        let mut method = v.get("method").and_then(Value::as_str).and_then(M::from_name).unwrap_or(M::Classic);
+        let opts = [(M::Classic, tl!("Classic")), (M::Perceptual, tl!("Perceptual")), (M::Linear, tl!("Linear")), (M::Smooth, tl!("Smooth"))];
+        if widgets::dropdown(ui, &format!("{:?}-gm-method", cx.mem), tl!("Method:"), &mut method, &opts, ui.available_width().min(150.0)) {
+            v["method"] = json!(method.name());
+            e.add(Edit::discrete(true));
+        }
+    });
+    e
+}
+
 pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();

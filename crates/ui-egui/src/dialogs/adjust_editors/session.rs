@@ -84,6 +84,32 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    layer_editor_in(app, ui, id, adj, false);
+}
+
+/// Whether layer `id` of the active document is a Gradient Map adjustment layer.
+pub fn is_gradient_map(app: &PhotocraftApp, id: LayerId) -> bool {
+    app.session
+        .active()
+        .and_then(|s| s.doc.layer(id))
+        .is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Adjustment(Adjustment::GradientMap { .. })))
+}
+
+/// The Gradient Editor window on Gradient Map layer `id`: its whole gradient editor (presets,
+/// stops, the selected stop's colour and location), which the Properties panel opens it for.
+pub fn gradient_map_window(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId) {
+    let Some(adj) = app.session.active().and_then(|s| s.doc.layer(id)).and_then(|l| match &l.content {
+        photocraft_doc::LayerContent::Adjustment(a @ Adjustment::GradientMap { .. }) => Some(a.clone()),
+        _ => None,
+    }) else {
+        return;
+    };
+    layer_editor_in(app, ui, id, &adj, true);
+}
+
+/// [`layer_editor`]; `window`: the Gradient Editor window's full Gradient Map editor rather than
+/// the Properties panel's compact one.
+fn layer_editor_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment, window: bool) {
     let t = Tokens::get(ui.ctx());
     let kind = photocraft_engine::commands::adjustment_kind(adj);
     match adj {
@@ -124,7 +150,10 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     if kind == "levels" {
         crate::layer_picker::controls(app, ui, id);
     }
-    let e = editor(ui, kind, &mut values, &cx);
+    let e = if kind == "gradientMap" && !window { super::gradient_map::gradient_map_compact(ui, &mut values, &cx) } else { editor(ui, kind, &mut values, &cx) };
+    if e.open_gradient_editor {
+        crate::gradient_ui::toggle_editor(app, ui.ctx(), crate::gradient_ui::EditorMode::Map(id));
+    }
     if kind == "curves"
         && let Some(slots) = ui.data(|d| d.get_temp::<Rect>(curves_picker_slots_id(cx.mem)))
     {

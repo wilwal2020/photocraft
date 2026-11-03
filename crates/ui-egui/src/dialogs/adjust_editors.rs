@@ -52,7 +52,7 @@ use hue_saturation::hue_saturation;
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
-pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
+pub use session::{gradient_map_window, is_gradient_map, layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
 /// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
 pub const KINDS: [&str; 13] = [
@@ -89,6 +89,8 @@ pub struct Edit {
     pub commit: bool,
     /// Open the host's gradient-file dialog without changing adjustment parameters.
     pub import_gradients: bool,
+    /// Open the Gradient Editor window on this Gradient Map (its Properties swatch).
+    pub open_gradient_editor: bool,
 }
 
 impl Edit {
@@ -96,6 +98,7 @@ impl Edit {
         self.changed |= o.changed;
         self.commit |= o.commit;
         self.import_gradients |= o.import_gradients;
+        self.open_gradient_editor |= o.open_gradient_editor;
     }
     fn discrete(changed: bool) -> Self {
         Edit { changed, commit: changed, ..Default::default() }

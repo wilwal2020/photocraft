@@ -305,9 +305,8 @@ mod tests {
             h.run_steps(3);
             let sections = crate::props_layout::sections_drawn(&h.ctx);
             assert_eq!(sections.iter().any(|(title, _)| title == "Align and Distribute"), !gradient);
-            assert_eq!(sections.iter().any(|(title, _)| title == "Gradient"), gradient);
-            assert_eq!(sections.iter().any(|(title, _)| title == "Gradient Options"), gradient);
-            assert!(!sections.iter().any(|(title, _)| title == "Color stops" || title == "Opacity stops"));
+            assert_eq!(sections.iter().any(|(title, _)| title == "Gradient Controls"), gradient);
+            assert_eq!(sections.iter().any(|(title, _)| title == "Opacity Controls"), gradient);
         }
     }
 
