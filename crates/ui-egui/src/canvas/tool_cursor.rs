@@ -397,6 +397,8 @@ fn still_changing(ctx: &egui::Context, shape: &Shape, scale: f32) -> bool {
 
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
+    // A drawn shape replaces any icon set earlier in the pass ([`shown_icon`]).
+    ctx.data_mut(|d| d.remove::<&'static str>(shown_id()));
     // Where cursor images can't be uploaded (immediate viewports, the web), paint the shape.
     if native(ctx) {
         let scale = native_scale(ctx);

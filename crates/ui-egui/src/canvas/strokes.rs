@@ -239,6 +239,9 @@ pub(crate) struct LiveStroke {
     pub(super) damage: Vec<DRect>,
     /// Drag points rendered so far.
     fed: usize,
+    /// What rendering a document pixel of the stroke's path costs, in ms (0 until measured):
+    /// how many waiting points fit a frame's [`LIVE_BUDGET_MS`].
+    pub(super) ms_per_px: f64,
 }
 
 impl LiveStroke {
@@ -412,6 +415,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         key: (1 << 44) | (n << 20),
         damage,
         fed: if d.tool == Tool::MixerBrush { 1 } else { d.points.len() },
+        ms_per_px: 0.0,
         preview_failed: false,
     })
 }
@@ -433,7 +437,65 @@ pub(crate) fn cancel_mixer_on_context_change(app: &mut PhotocraftApp, ctx: &egui
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
 /// rotation the commit's `paint.stroke` gets for them.
+/// The most dab rendering a frame gives the live stroke, in ms; the points past it wait for the
+/// next frames, and the release renders what is left. A heavy brush (a large sampled tip, 2 ms a
+/// dab) rendering each frame's whole path took 100-400 ms frames, and Windows merges the pointer
+/// moves of a window that busy into one: the stroke got a point or two a frame and a circle came
+/// out a polygon (user report). Within the budget the window keeps reading the pen. Each push
+/// also composites (10-20 ms on a large page), so a much smaller budget would fall behind.
+pub(super) const LIVE_BUDGET_MS: f64 = 40.0;
+
+/// The end of the drag points `from..` that one frame renders: as many as `ms_per_px` (the cost
+/// of a pixel of path) says fit `budget` ms, and one at least. With no cost measured yet, all.
+pub(super) fn budgeted_end(points: &[[f64; 3]], from: usize, ms_per_px: f64, budget: f64) -> usize {
+    if ms_per_px <= 0.0 || !ms_per_px.is_finite() {
+        return points.len();
+    }
+    let Some(mut prev) = from.checked_sub(1).and_then(|i| points.get(i)).or(points.get(from)).copied() else { return points.len() };
+    let mut cost = 0.0;
+    let mut end = from;
+    for p in points.iter().skip(from) {
+        let step = ms_per_px * (p[0] - prev[0]).hypot(p[1] - prev[1]);
+        if end > from && cost + step > budget {
+            break;
+        }
+        cost += step;
+        end += 1;
+        prev = *p;
+    }
+    end
+}
+
+/// The length in document pixels of the path through `points` `from..to`, from the point before.
+fn path_px(points: &[[f64; 3]], from: usize, to: usize) -> f64 {
+    let mut prev = from.checked_sub(1).and_then(|i| points.get(i)).or(points.get(from)).copied();
+    let mut len = 0.0;
+    for p in points.get(from..to).unwrap_or_default() {
+        if let Some(q) = prev {
+            len += (p[0] - q[0]).hypot(p[1] - q[1]);
+        }
+        prev = Some(*p);
+    }
+    len
+}
+
+/// Whether the live stroke has drag points it hasn't rendered yet (the frame budget left them):
+/// the canvas keeps repainting until it catches up.
+pub(super) fn live_backlog(app: &PhotocraftApp) -> bool {
+    matches!((&app.live_stroke, &app.drag), (Some(l), Some(d)) if !l.preview_failed && l.fed < d.points.len())
+}
+
+/// Render the drag points the live stroke hasn't yet, within the frame's [`LIVE_BUDGET_MS`].
 pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
+    feed_live_stroke_within(app, Some(LIVE_BUDGET_MS));
+}
+
+/// [`feed_live_stroke`] with every waiting point (a release that commits the live pixels).
+pub(super) fn feed_live_stroke_all(app: &mut PhotocraftApp) {
+    feed_live_stroke_within(app, None);
+}
+
+fn feed_live_stroke_within(app: &mut PhotocraftApp, budget: Option<f64>) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
     if app.defer_live_stroke {
@@ -446,7 +508,9 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     let pose = &app.stylus.stroke;
     // The same times `stroke_points` gives the commit (from the drag's first point).
     let t0 = app.stylus.point_ms(0);
-    let pts: Vec<_> = (l.fed..d.points.len())
+    let from = l.fed;
+    let end = budget.map_or(d.points.len(), |b| budgeted_end(&d.points, from, l.ms_per_px, b));
+    let pts: Vec<_> = (from..end)
         .filter_map(|i| {
             let p = d.points.get(i)?;
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
@@ -459,10 +523,23 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     if pts.is_empty() {
         return;
     }
-    l.fed = d.points.len();
+    l.fed = end;
+    let px = path_px(&d.points, from, end);
     let started = crate::gpu_canvas::now_ms();
     match l.stroke.push(&pts) {
-        Ok(r) => l.damage.push(r),
+        Ok(r) => {
+            l.damage.push(r);
+            // The cost of a pixel of path: the brush's dab time (its composite is paid once a
+            // push, whatever the length), else the whole push.
+            let ms = match &l.stroke {
+                EngineStroke::Brush(b) => b.stats.dabs_ms,
+                _ => crate::gpu_canvas::now_ms() - started,
+            };
+            if px >= 1.0 && ms.is_finite() {
+                let sample = ms.max(0.0) / px;
+                l.ms_per_px = if l.ms_per_px > 0.0 { 0.6 * l.ms_per_px + 0.4 * sample } else { sample };
+            }
+        }
         Err(e) => {
             if d.tool == Tool::MixerBrush {
                 // Keep the last valid preview and its document/revision guard. All input

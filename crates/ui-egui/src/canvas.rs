@@ -28,6 +28,7 @@ mod gesture;
 pub mod gpu_canvas;
 pub mod guide_select;
 pub mod layer_pick_ui;
+mod merged_moves;
 pub mod move_ui;
 mod navigator;
 pub mod outline;
@@ -1103,7 +1104,20 @@ fn handle_canvas_tool_stroke(
         let mut positions = if app.brush_resize.is_some() {
             response.interact_pointer_pos().into_iter().collect()
         } else if freehand_tool(tool) {
-            pointer_moves(&events, button, down_at_start)
+            let moves = pointer_moves(&events, button, down_at_start);
+            // The moves Windows merged while the last frame was busy (a heavy brush), up to
+            // egui's latest one; on the release frame egui's own, bounded by the release.
+            let anchor = moves.last().copied().or_else(|| {
+                events.iter().rev().find_map(|e| match e {
+                    egui::Event::PointerButton { pos, button: b, pressed: true, .. } if *b == button => Some(*pos),
+                    _ => None,
+                })
+            });
+            let merged = merged_moves::frame_moves(app, ctx, anchor, down_at_start);
+            match merged {
+                Some(m) if !buttons.stopped && m.len() > moves.len() => m,
+                _ => moves,
+            }
         } else if buttons.dragged {
             response.interact_pointer_pos().into_iter().collect()
         } else {
@@ -1136,6 +1150,10 @@ fn handle_canvas_tool_stroke(
         app.defer_live_stroke = false;
         // One live-stroke update for the whole frame, not one per recovered sample.
         feed_live_stroke(app);
+        // Points past the frame's budget render in the next frames, pen moving or not.
+        if strokes::live_backlog(app) {
+            ctx.request_repaint();
+        }
         crate::magnetic_lasso_ui::flush(app);
     }
     if buttons.stopped {
@@ -1411,6 +1429,9 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
+    } else if response.hover_pos().is_some() && (crate::layer_picker::armed(app).is_some() || crate::adjust_dialog::picker_armed(app)) {
+        // A Levels or Curves Set Point eyedropper owns the image: its pipette (set with the
+        // click handling) stays, with no brush outline over it (user report).
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.

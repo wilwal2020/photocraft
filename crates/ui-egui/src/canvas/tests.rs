@@ -2160,6 +2160,56 @@ fn live_stroke_uses_pen_tilt_and_updates_a_reduced_texture_partially() {
     assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
 }
 
+/// A frame renders only the drag points its budget fits; the rest render in later frames or at
+/// the release, and the stroke comes out as it would all at once (user report: a heavy brush's
+/// slow frames merged the pen's moves, so a circle came out a polygon).
+#[test]
+fn a_heavy_live_stroke_renders_within_the_frame_budget_and_commits_whole() {
+    use super::strokes::{LIVE_BUDGET_MS, budgeted_end, live_backlog};
+    let line: Vec<[f64; 3]> = (0..10).map(|i| [f64::from(i) * 10.0, 0.0, 1.0]).collect();
+    assert_eq!(budgeted_end(&line, 3, 0.0, LIVE_BUDGET_MS), 10, "no cost known yet: all");
+    assert_eq!(budgeted_end(&line, 3, 1.0, 25.0), 5, "two 10 px steps fit 25 ms at 1 ms a px");
+    assert_eq!(budgeted_end(&line, 3, 100.0, 25.0), 4, "one point at least");
+    assert_eq!(budgeted_end(&line, 10, 1.0, 25.0), 10);
+
+    let paint = |budgeted: bool| {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 60, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0, "spacing": 0.1}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 30.0, pressure: 1.0 }, m);
+        if budgeted {
+            // A heavy brush: a few px of path fill the budget.
+            app.live_stroke.as_mut().unwrap().ms_per_px = LIVE_BUDGET_MS / 15.0;
+        }
+        // One frame's moves, fed once as the canvas does.
+        app.defer_live_stroke = true;
+        for x in (30..=190).step_by(10) {
+            tool_event(&mut app, ToolEvent::Move { x: f64::from(x), y: 30.0 + f64::from(x % 20) / 4.0, pressure: 1.0 }, m);
+        }
+        app.defer_live_stroke = false;
+        feed_live_stroke(&mut app);
+        assert_eq!(live_backlog(&app), budgeted, "points wait for the next frames only with the budget");
+        if budgeted {
+            app.live_stroke.as_mut().unwrap().ms_per_px = LIVE_BUDGET_MS / 15.0;
+            feed_live_stroke(&mut app);
+            assert!(live_backlog(&app), "a frame renders a little more");
+        }
+        tool_event(&mut app, ToolEvent::Up { x: 190.0, y: 30.0 }, m);
+        app.session.documents()[0].doc.layers[0].surface().unwrap().clone()
+    };
+    let (whole, budgeted) = (paint(false), paint(true));
+    for y in 0..60 {
+        for x in 0..200 {
+            let (a, b) = (whole.rgba(x, y), budgeted.rgba(x, y));
+            assert!((0..4).all(|c| (a[c] - b[c]).abs() < 0.02), "({x}, {y}): {a:?} vs {b:?}");
+        }
+    }
+    assert!(whole.rgba(185, 30)[3] > 0.9, "the stroke reached its end");
+}
+
 /// Timings of a large brush's drag on a 4000×4000 page through the canvas, as the user paints
 /// (user report: 200–800 ms "live stroke" spans with their 429 px hard round at 1 % spacing).
 /// `cargo test -p photocraft-ui-egui --lib large_brush_drag_timings -- --ignored --nocapture`;

@@ -61,6 +61,18 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
     None
 }
 
+/// The mouse moves Windows merged while a frame was busy, for strokes to take back (a heavy brush
+/// made a circle a polygon).
+#[cfg(target_os = "windows")]
+pub fn mouse_history_service() -> Option<photocraft_ui_egui::MouseHistoryFn> {
+    Some(Box::new(|| photocraft_tablet::windows::mouse_history().into_iter().map(|m| (m.x, m.y, m.time)).collect()))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn mouse_history_service() -> Option<photocraft_ui_egui::MouseHistoryFn> {
+    None
+}
+
 /// The busy cursor around a command that holds the window (Windows: winit sets the cursor only
 /// while it handles messages; macOS and Linux show their own once the window stops answering).
 #[cfg(target_os = "windows")]

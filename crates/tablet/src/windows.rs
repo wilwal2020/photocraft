@@ -13,9 +13,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
+#[derive(Default)]
 struct POINT {
     x: i32,
     y: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct MOUSEMOVEPOINT {
+    x: i32,
+    y: i32,
+    time: u32,
+    extra_info: usize,
 }
 
 #[repr(C)]
@@ -75,6 +85,35 @@ unsafe extern "system" {
     fn GetLastError() -> u32;
     fn LoadCursorW(instance: *mut std::ffi::c_void, name: *const u16) -> *mut std::ffi::c_void;
     fn SetCursor(cursor: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn GetCursorPos(point: *mut POINT) -> i32;
+    fn GetMouseMovePointsEx(cb_size: u32, lppt: *const MOUSEMOVEPOINT, lppt_buf: *mut MOUSEMOVEPOINT, n_buf_points: i32, resolution: u32) -> i32;
+}
+
+/// `GMMP_USE_DISPLAY_POINTS` (winuser.h): history in screen pixels.
+const GMMP_USE_DISPLAY_POINTS: u32 = 1;
+/// The most moves Windows keeps (`GetMouseMovePointsEx`).
+const MOUSE_HISTORY: usize = 64;
+
+/// The cursor's latest moves, newest first, in screen pixels: what Windows keeps of the moves it
+/// merged into one `WM_MOUSEMOVE` while the window was busy (a frame painting a heavy brush; user
+/// report: a circle came out a polygon). Empty if the system has none for the cursor's place (a
+/// pen sending pointer messages, not mouse moves).
+pub fn mouse_history() -> Vec<crate::MovePoint> {
+    let mut now = POINT::default();
+    // SAFETY: GetCursorPos writes the cursor's screen position into a valid POINT.
+    if unsafe { GetCursorPos(&mut now) } == 0 {
+        return Vec::new();
+    }
+    // The history is looked up by the low 16 bits of the coordinates (winuser.h's sample).
+    let at = MOUSEMOVEPOINT { x: now.x & 0xFFFF, y: now.y & 0xFFFF, time: 0, extra_info: 0 };
+    let mut buf = [MOUSEMOVEPOINT::default(); MOUSE_HISTORY];
+    // SAFETY: `at` is a valid MOUSEMOVEPOINT, `buf` holds MOUSE_HISTORY of them, and both sizes
+    // are given; the call writes at most that many and returns how many (or -1).
+    let n = unsafe { GetMouseMovePointsEx(std::mem::size_of::<MOUSEMOVEPOINT>() as u32, &at, buf.as_mut_ptr(), MOUSE_HISTORY as i32, GMMP_USE_DISPLAY_POINTS) };
+    let Ok(n) = usize::try_from(n) else { return Vec::new() };
+    // Coordinates come back as 16-bit values: left of or above the main display is negative.
+    let signed = |v: i32| if v > 32767 { v - 65536 } else { v };
+    buf.iter().take(n).map(|p| crate::MovePoint { x: signed(p.x), y: signed(p.y), time: p.time }).collect()
 }
 
 /// `IDC_WAIT` (winuser.h): the system's busy cursor.
@@ -307,6 +346,19 @@ mod tests {
 
     const POINTER_FLAG_INCONTACT: u32 = 0x0004;
     const POINTER_FLAG_FIRSTBUTTON: u32 = 0x0010;
+
+    #[test]
+    fn the_mouse_history_ends_where_the_cursor_is() {
+        let history = mouse_history();
+        assert!(history.len() <= MOUSE_HISTORY);
+        if let Some(newest) = history.first() {
+            let mut now = POINT::default();
+            // SAFETY: GetCursorPos writes into a valid POINT.
+            unsafe { GetCursorPos(&mut now) };
+            assert!((newest.x - now.x).abs() <= 1 && (newest.y - now.y).abs() <= 1, "{newest:?} vs ({}, {})", now.x, now.y);
+            assert!(history.windows(2).all(|w| w[0].time.wrapping_sub(w[1].time) < 1 << 31), "newest first: {history:?}");
+        }
+    }
 
     #[test]
     fn plain_pen_contact_is_not_treated_as_barrel() {

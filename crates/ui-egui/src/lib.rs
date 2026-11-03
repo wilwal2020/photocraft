@@ -265,8 +265,9 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn,
     CameraRawPresetDirs, CapsLockFn, CaptionStyleFn, ClipboardGetFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DeviceLossRestartFn,
     DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
-    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopActionsFn, PhotoshopShortcutsFn, QuitFn,
-    RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, WaitCursorFn, WindowFrameFn, WriteFn,
+    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, MouseHistoryFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopActionsFn,
+    PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, WaitCursorFn,
+    WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;

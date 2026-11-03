@@ -844,9 +844,14 @@ fn properties_white_point_eyedropper_edits_the_layer(kind: &str) {
     let mut h = app_harness(kind, "rgb", 8);
     let (_, before) = layer(&h);
     let steps = h.state().session.active().unwrap().history.past_len();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.get_by_label("Set White Point").click();
     h.run_steps(2);
     assert!(crate::layer_picker::armed(h.state()).is_some(), "armed from the Properties panel");
+    // Over the image the pointer is the pipette, not the Brush's outline (user report).
+    h.hover_at(doc_on_screen(&h, 10.0, 10.0));
+    h.run_steps(2);
+    assert_eq!(crate::tool_cursor::shown_icon(&h.ctx), Some("pipette"), "{kind}: the sampler's cursor");
     // The left half is #6a3020: the white point moves to it, so it composites white.
     let at = doc_on_screen(&h, 10.0, 10.0);
     click(&mut h, at);

@@ -76,6 +76,15 @@ impl Sample {
     }
 }
 
+/// A pointer position from the system's move history, in screen pixels, with its time (ms, the
+/// system's tick count).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovePoint {
+    pub x: i32,
+    pub y: i32,
+    pub time: u32,
+}
+
 /// What a raw platform event means for the current pen sample.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Update {

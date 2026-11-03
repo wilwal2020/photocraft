@@ -386,6 +386,10 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// The cursor's latest moves the system keeps, newest first: screen pixels and time (ms)
+/// ([`Services::mouse_history`]).
+pub type MouseHistoryFn = Box<dyn Fn() -> Vec<(i32, i32, u32)>>;
+
 /// Show the OS busy cursor at once (`true`) or put back the cursor it replaced (`false`), around
 /// a command that holds the UI thread ([`Services::wait_cursor`]).
 pub type WaitCursorFn = Box<dyn Fn(bool)>;
@@ -508,6 +512,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// The pointer moves the system merged while a frame was busy (Windows), put back into
+    /// strokes (`canvas::merged_moves`).
+    pub mouse_history: Option<MouseHistoryFn>,
     /// The busy cursor around a command expected to hold the window (Windows; elsewhere the OS
     /// shows its own once the window stops answering).
     pub wait_cursor: Option<WaitCursorFn>,
