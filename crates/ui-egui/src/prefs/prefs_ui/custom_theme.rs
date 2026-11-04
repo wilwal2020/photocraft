@@ -108,12 +108,15 @@ pub(super) fn custom_theme_editor(ui: &mut egui::Ui, obj: &mut Map<String, Value
     let base = Tokens::for_kind(base_kind(&custom));
     preview(ui, &tokens);
     ui.add_space(6.0);
+    // Two colours a row where they fit, else one: the grid must never hold the dialog wider than
+    // the user sized it (#7420).
+    let per_row = if ui.available_width() >= 2.0 * COLOR_PAIR_WIDTH { 2 } else { 1 };
     for (group, colors) in CUSTOM_COLOR_GROUPS {
         ui.label(RichText::new(tl!(group)).color(t.text).strong());
-        egui::Grid::new(("custom-theme-colors", *group)).num_columns(4).spacing([14.0, 4.0]).min_col_width(130.0).show(ui, |ui| {
+        egui::Grid::new(("custom-theme-colors", *group)).num_columns(2 * per_row).spacing([14.0, 4.0]).min_col_width(130.0).show(ui, |ui| {
             for (i, (name, label)) in colors.iter().enumerate() {
                 color_row(ui, &mut custom, &tokens, &base, name, label);
-                if i % 2 == 1 || i + 1 == colors.len() {
+                if (i + 1) % per_row == 0 || i + 1 == colors.len() {
                     ui.end_row();
                 }
             }
@@ -130,6 +133,10 @@ pub(super) fn custom_theme_editor(ui: &mut egui::Ui, obj: &mut Map<String, Value
 
 /// The side of a colour's link and reset buttons.
 const RESET_SIZE: f32 = 20.0;
+
+/// About the width one colour takes in the grid: its label column, then the link button, swatch,
+/// hex field and reset button, with the spacing between them and the next pair.
+const COLOR_PAIR_WIDTH: f32 = 340.0;
 
 /// The room a hidden link or reset button leaves, item spacing included.
 fn skip_button(ui: &mut egui::Ui) {
@@ -257,7 +264,7 @@ fn preview(ui: &mut egui::Ui, p: &Tokens) {
     painter.rect_filled(card, r, p.card);
     let tabs = Rect::from_min_size(card.min, vec2(card.width(), 17.0));
     painter.rect_filled(tabs, egui::CornerRadius { nw: r as u8, ne: r as u8, sw: 0, se: 0 }, p.tab_strip);
-    let layers = painter.text(tabs.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, tl!("Layers"), crate::theme::semibold(11.0), p.text);
+    let layers = painter.text(tabs.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, tl!("Layers"), font.clone(), p.text);
     painter.text(pos2(layers.right() + 10.0, tabs.center().y), Align2::LEFT_CENTER, tl!("Channels"), font.clone(), p.text_faint);
     painter.rect_stroke(card, r, Stroke::new(1.0, p.card_border), StrokeKind::Inside);
 

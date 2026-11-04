@@ -354,7 +354,7 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
         });
     }
     // Last, so Presentation still shows without scrolling in a small window (#2532).
-    if custom_theme_matches(query) {
+    if obj.contains_key("customTheme") && custom_theme_matches(query) {
         pref_group(ui, "Custom Theme", |ui| custom_theme_editor(ui, obj, system));
     }
 }
