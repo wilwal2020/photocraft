@@ -58,6 +58,9 @@ pub struct Runtime {
     pub(crate) tool_brushes_rev: u64,
     pub(crate) tool_brushes_saved_rev: u64,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    /// The custom theme on screen (Preferences › Interface › Custom Theme), `None` for a
+    /// built-in one.
+    pub(crate) custom_theme: Option<Tokens>,
 }
 
 // ------------------------------------------------------------------ shortcuts
@@ -65,6 +68,7 @@ pub struct Runtime {
 pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
 mod appearance;
+mod custom_theme;
 mod dialogs;
 mod fields;
 mod graphics;
@@ -102,6 +106,8 @@ pub(crate) use startup::{on_recovery_event, remember_rulers};
 
 // Test modules stay after the production code: the prefs_usage test reads each file up to
 // its first `#[cfg(test)] mod`.
+#[cfg(test)]
+mod custom_theme_tests;
 #[cfg(test)]
 mod recovery_tests;
 

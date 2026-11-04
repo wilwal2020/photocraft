@@ -58,8 +58,8 @@ choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "neares
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
 choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
-choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark" } default ProMedium);
-choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
+choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark", Custom = "custom" } default ProMedium);
+choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight", Custom = "custom" } default ProLight);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P105 = "105", P110 = "110", P115 = "115", P120 = "120", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -262,6 +262,8 @@ pub struct Interface {
     pub light_theme: LightTheme,
     /// Theme shortcuts shown in the appearance button's context menu.
     pub favorite_themes: Vec<Theme>,
+    /// The Custom theme (`custom` in either theme slot): a built-in theme with the user's colours.
+    pub custom_theme: CustomTheme,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -322,6 +324,7 @@ impl Default for Interface {
             dark_theme: DarkTheme::ProMedium,
             light_theme: LightTheme::ProLight,
             favorite_themes: Vec::new(),
+            custom_theme: CustomTheme::default(),
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,
@@ -344,6 +347,21 @@ impl Default for Interface {
             notification_duration_seconds: 6,
         }
     }
+}
+
+/// Preferences › Interface › Custom Theme: the built-in theme it starts from, and the colours the
+/// user changed, by design-token name (`card`, `text`, `accent`…) as `#rrggbb` or `#rrggbbaa`.
+/// The shell owns the token names; a name it doesn't know is kept and ignored.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomTheme {
+    pub base: Theme,
+    pub colors: BTreeMap<String, String>,
+}
+
+impl CustomTheme {
+    /// The most colours a custom theme keeps (well above the shell's editable tokens).
+    pub const MAX_COLORS: usize = 64;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -461,7 +479,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, parse_hex_rgba, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -16,11 +16,15 @@
 //! - **Pro (Light Gray)** and **Pro (Light)**: Photoshop's third and fourth interface brightness
 //!   levels (#B8B8B8 and #F0F0F0 panels) with the Pro layout (#2661).
 //!
+//! - **Custom**: any of the above with the user's own colours (Preferences › Interface › Custom
+//!   Theme; [`Tokens::custom`]).
+//!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use photocraft_engine::prefs::UiFontSize;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +157,52 @@ impl ThemeKind {
             _ => None,
         }
     }
+}
+
+/// The colours Preferences › Interface › Custom Theme edits, in groups: (group, [(token, label)]).
+/// Tokens are [`Tokens`] field names, which is how the custom theme stores them.
+pub const CUSTOM_COLOR_GROUPS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Surfaces",
+        &[
+            ("chrome", "Title Bar and Toolbars"),
+            ("dock", "Panel Dock"),
+            ("card", "Panel Background"),
+            ("card_border", "Panel Border"),
+            ("tab_strip", "Panel Tab Strip"),
+            ("separator", "Separator"),
+            ("canvas", "Canvas Surround"),
+            ("canvas_dot", "Canvas Dots"),
+        ],
+    ),
+    ("Text", &[("text", "Text"), ("text_dim", "Secondary Text"), ("text_faint", "Faint Text"), ("icon", "Icons")]),
+    (
+        "Controls",
+        &[("field", "Field Background"), ("field_border", "Field Border"), ("hover", "Hover"), ("pressed", "Pressed"), ("row_selected", "Selected Row")],
+    ),
+    (
+        "Accent",
+        &[
+            ("accent", "Accent"),
+            ("accent_soft", "Accent Background"),
+            ("accent_border", "Accent Border"),
+            ("accent_text", "Accent Text"),
+            ("primary_bg", "Primary Button"),
+            ("primary_text", "Primary Button Text"),
+        ],
+    ),
+    ("Status", &[("danger", "Danger"), ("warning", "Warning"), ("success", "Success")]),
+];
+
+/// A colour as a custom theme stores it: `#rrggbb`, or `#rrggbbaa` when it isn't opaque.
+pub fn color_hex(c: Color32) -> String {
+    let [r, g, b, a] = c.to_srgba_unmultiplied();
+    if a == 255 { format!("#{r:02x}{g:02x}{b:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") }
+}
+
+/// A stored custom theme colour (`#rrggbb` or `#rrggbbaa`).
+pub fn parse_color_hex(s: &str) -> Option<Color32> {
+    photocraft_engine::prefs::parse_hex_rgba(s).map(|[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a))
 }
 
 /// Colour and shape tokens.
@@ -777,6 +827,68 @@ impl Tokens {
         }
     }
 
+    /// `base` with a custom theme's colours (token name → `#rrggbb` / `#rrggbbaa`) laid over it;
+    /// its layout, radii and every colour not listed stay the base theme's. Unknown names and
+    /// unreadable colours are skipped. Where the base draws no canvas dots (dots the colour of the
+    /// canvas), a new canvas colour takes the dots with it unless they have their own.
+    pub fn custom(base: ThemeKind, colors: &BTreeMap<String, String>) -> Self {
+        let mut t = Tokens::for_kind(base);
+        let dotless = t.canvas_dot == t.canvas;
+        for (name, value) in colors {
+            if let (Some(slot), Some(c)) = (t.color_mut(name), parse_color_hex(value)) {
+                *slot = c;
+            }
+        }
+        if dotless && !colors.contains_key("canvas_dot") {
+            t.canvas_dot = t.canvas;
+        }
+        t
+    }
+
+    /// The colour token named `name` (a field name such as `card` or `text_dim`).
+    pub fn color_mut(&mut self, name: &str) -> Option<&mut Color32> {
+        Some(match name {
+            "chrome" => &mut self.chrome,
+            "canvas" => &mut self.canvas,
+            "canvas_dot" => &mut self.canvas_dot,
+            "dock" => &mut self.dock,
+            "card" => &mut self.card,
+            "card_border" => &mut self.card_border,
+            "field" => &mut self.field,
+            "field_border" => &mut self.field_border,
+            "hover" => &mut self.hover,
+            "pressed" => &mut self.pressed,
+            "text" => &mut self.text,
+            "text_dim" => &mut self.text_dim,
+            "text_faint" => &mut self.text_faint,
+            "icon" => &mut self.icon,
+            "accent" => &mut self.accent,
+            "accent_soft" => &mut self.accent_soft,
+            "accent_border" => &mut self.accent_border,
+            "accent_text" => &mut self.accent_text,
+            "separator" => &mut self.separator,
+            "shadow" => &mut self.shadow,
+            "primary_bg" => &mut self.primary_bg,
+            "primary_text" => &mut self.primary_text,
+            "danger" => &mut self.danger,
+            "warning" => &mut self.warning,
+            "success" => &mut self.success,
+            "tab_strip" => &mut self.tab_strip,
+            "row_selected" => &mut self.row_selected,
+            "histogram_bg" => &mut self.histogram_bg,
+            "caption_close" => &mut self.caption_close,
+            "caption_close_text" => &mut self.caption_close_text,
+            "scrim" => &mut self.scrim,
+            _ => return None,
+        })
+    }
+
+    /// The colour token named `name`, if there is one.
+    pub fn color(&self, name: &str) -> Option<Color32> {
+        let mut t = *self;
+        t.color_mut(name).map(|c| *c)
+    }
+
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
@@ -1030,10 +1142,14 @@ pub fn mono(size: f32) -> FontId {
 
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    apply_tokens(ctx, Tokens::for_kind(kind));
+}
+
+/// [`apply`] for tokens of any theme, such as a custom one ([`Tokens::custom`]).
+pub fn apply_tokens(ctx: &egui::Context, t: Tokens) {
     // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
     // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
-    let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;

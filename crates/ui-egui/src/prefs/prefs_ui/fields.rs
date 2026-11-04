@@ -1,4 +1,5 @@
 use super::appearance::{AppearanceRows, appearance_rows, system_theme};
+use super::custom_theme::{custom_theme_editor, custom_theme_matches};
 use super::dialogs::{mismatch_body, presets_body, presets_io_body, settings_height};
 use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, read_at_launch, rendering_mode_row};
 use super::shortcuts::shortcuts_body;
@@ -33,6 +34,7 @@ pub(super) fn humanize(key: &str) -> String {
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
+        "customTheme" => return "Custom Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
         _ => {}
     }
@@ -316,7 +318,7 @@ fn pref_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// Preferences › Interface laid out like Photoshop's: the theme and canvas settings, then UI
-/// language, font size and scaling, then everything else. Compact enough that the language
+/// language, font size and scaling, then everything else, and the Custom Theme editor. Compact enough that the language
 /// shows without scrolling in a small window (#2532). A search (`query`, lowercased) hides the
 /// rows that don't match and skips a group left empty.
 fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>, query: &str) {
@@ -351,6 +353,10 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
             grid("interface-options").show(ui, |ui| field_rows(ui, "interface", obj, other, lang));
         });
     }
+    // Last, so Presentation still shows without scrolling in a small window (#2532).
+    if custom_theme_matches(query) {
+        pref_group(ui, "Custom Theme", |ui| custom_theme_editor(ui, obj, system));
+    }
 }
 
 /// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
@@ -367,7 +373,7 @@ fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
 /// by their own widgets; their stored values pass through untouched.
 pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, query: &str) -> bool {
     let path = format!("{section}.{k}");
-    let drawn_elsewhere = (section == "interface" && matches!(k, "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes"))
+    let drawn_elsewhere = (section == "interface" && matches!(k, "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "customTheme"))
         // View › Rulers (⌘R) sets it, as in Photoshop.
         || path == "unitsAndRulers.showRulers"
         || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))

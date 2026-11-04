@@ -1,9 +1,9 @@
 use super::shortcuts::normalize_shortcut;
 use super::{
-    AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, DarkTheme, ExportLocation, ExportMetadata, FontPreview,
-    GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize, PressureCurve,
-    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit, UiFontSize, UiScale,
-    Unit, Value,
+    AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, CustomTheme, DarkTheme, ExportLocation, ExportMetadata,
+    FontPreview, GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize,
+    PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit,
+    UiFontSize, UiScale, Unit, Value,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -174,6 +174,53 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
     Some([b(0)?, b(2)?, b(4)?])
 }
 
+/// `#rrggbb` or `#rrggbbaa` (unmultiplied alpha; `#rrggbb` is opaque).
+pub fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {
+    let t = s.trim().trim_start_matches('#');
+    match t.len() {
+        6 => parse_hex(t).map(|[r, g, b]| [r, g, b, 255]),
+        8 => {
+            let b = |i: usize| t.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+            Some([b(0)?, b(2)?, b(4)?, b(6)?])
+        }
+        _ => None,
+    }
+}
+
+/// `interface.customTheme` (or its `base` / `colors`): a known base theme and at most
+/// [`CustomTheme::MAX_COLORS`] colours keyed by short token names.
+fn check_custom_theme(path: &str, v: &Value) -> std::result::Result<(), String> {
+    let (base, colors) = match path {
+        "interface.customTheme" => {
+            let obj = v.as_object().ok_or("`interface.customTheme` must be an object with `base` and `colors`")?;
+            (obj.get("base"), obj.get("colors"))
+        }
+        "interface.customTheme.base" => (Some(v), None),
+        "interface.customTheme.colors" => (None, Some(v)),
+        _ => return Ok(()),
+    };
+    if let Some(base) = base
+        && base.as_str().and_then(Theme::parse).is_none()
+    {
+        return Err(format!("`interface.customTheme.base` must be one of {} (got {base})", Theme::NAMES.join("|")));
+    }
+    if let Some(colors) = colors {
+        let map = colors.as_object().ok_or("`interface.customTheme.colors` must map token names to #rrggbb colours")?;
+        if map.len() > CustomTheme::MAX_COLORS {
+            return Err(format!("`interface.customTheme.colors` holds at most {} colours", CustomTheme::MAX_COLORS));
+        }
+        for (name, c) in map {
+            if name.is_empty() || name.len() > 32 || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                return Err(format!("`{name}` is not a theme colour name"));
+            }
+            if c.as_str().and_then(parse_hex_rgba).is_none() {
+                return Err(format!("`interface.customTheme.colors.{name}` must be a #rrggbb or #rrggbbaa colour (got {c})"));
+            }
+        }
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ JSON paths
 
 /// Map keys that are command ids (which contain dots): `shortcuts.<id>`,
@@ -238,6 +285,7 @@ pub(super) fn check_value(path: &str, v: &Value) -> std::result::Result<(), Stri
             seen.push(theme);
         }
     }
+    check_custom_theme(path, v)?;
     if path == "performance.renderingMode" && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }

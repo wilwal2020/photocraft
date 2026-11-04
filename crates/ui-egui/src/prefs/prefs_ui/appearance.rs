@@ -1,4 +1,5 @@
-use super::dialogs::open_preferences;
+use super::custom_theme::custom_tokens;
+use super::dialogs::{is_preferences, open_preferences};
 use super::fields::{choice_label, color_of, preference_matches};
 use super::{AppearanceMode, Color32, DarkTheme, LightTheme, Map, PhotocraftApp, RichText, SavedTheme, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
 
@@ -31,14 +32,26 @@ pub fn pasteboard_color(app: &PhotocraftApp) -> Option<Color32> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> ThemeKind {
+    resolved_theme(interface, system).0
+}
+
+/// The theme the appearance mode shows: a built-in theme, or the custom theme's tokens on the
+/// built-in theme it starts from.
+pub(super) fn resolved_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> (ThemeKind, Option<Tokens>) {
     let light = match interface.appearance_mode {
         AppearanceMode::Light => true,
         AppearanceMode::Dark => false,
         AppearanceMode::Auto => system == Some(egui::Theme::Light),
     };
-    if light {
+    let custom = || {
+        let t = custom_tokens(&interface.custom_theme);
+        (t.kind, Some(t))
+    };
+    let kind = if light {
         match interface.light_theme {
+            LightTheme::Custom => return custom(),
             LightTheme::StudioLight => ThemeKind::StudioLight,
             LightTheme::ProLightGray => ThemeKind::ProLightGray,
             LightTheme::ProLight => ThemeKind::ProLight,
@@ -49,6 +62,7 @@ pub(super) fn selected_theme(interface: &prefs::Interface, system: Option<egui::
         }
     } else {
         match interface.dark_theme {
+            DarkTheme::Custom => return custom(),
             DarkTheme::Pro => ThemeKind::Pro,
             DarkTheme::ProMedium => ThemeKind::ProMedium,
             DarkTheme::Studio => ThemeKind::Studio,
@@ -57,6 +71,33 @@ pub(super) fn selected_theme(interface: &prefs::Interface, system: Option<egui::
             DarkTheme::BreezeDark => ThemeKind::BreezeDark,
             DarkTheme::SoftDark => ThemeKind::SoftDark,
         }
+    };
+    (kind, None)
+}
+
+/// While Preferences is open, the appearance in its draft is the one on screen, so a picked or
+/// edited theme shows at once (Photoshop previews a colour theme the same way); Apply or OK keep
+/// it, Cancel goes back to the saved one. A draft that doesn't read as an Interface section
+/// leaves the saved appearance.
+fn draft_interface(app: &PhotocraftApp) -> Option<prefs::Interface> {
+    let d = app.ui.dialogs.iter().find(|d| is_preferences(&d.fields))?;
+    serde_json::from_value(d.fields.get("values")?.get("interface")?.clone()).ok()
+}
+
+/// The theme to show now: the open Preferences draft's ([`draft_interface`]), else the saved one.
+fn wanted_theme(app: &PhotocraftApp, ctx: &egui::Context) -> (ThemeKind, Option<Tokens>) {
+    let system = system_theme(app, ctx);
+    match draft_interface(app) {
+        Some(draft) => resolved_theme(&draft, system),
+        None => resolved_theme(&app.session.prefs().interface, system),
+    }
+}
+
+/// Show `wanted` unless it is on screen already. A replaced egui context starts on the plain
+/// theme, so a custom theme is also compared with the context's tokens.
+fn show_theme(app: &mut PhotocraftApp, ctx: &egui::Context, (kind, custom): (ThemeKind, Option<Tokens>)) {
+    if app.ui.theme != kind || app.prefs_rt.custom_theme != custom || custom.is_some_and(|t| Tokens::get(ctx) != t) {
+        app.apply_theme_tokens(ctx, kind, custom);
     }
 }
 
@@ -70,10 +111,8 @@ pub(crate) fn cycle_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         return;
     }
-    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
-    if app.ui.theme != selected {
-        app.apply_theme(ctx, selected);
-    }
+    let wanted = wanted_theme(app, ctx);
+    show_theme(app, ctx, wanted);
 }
 
 /// Photoshop's four interface brightnesses, darkest first.
@@ -205,20 +244,17 @@ pub(crate) fn sync_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A restored or embedding-supplied pin must not suppress native appearance events.
     ctx.set_theme(egui::ThemePreference::System);
     // The native service also covers Wayland sessions where winit has no system theme.
-    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
-    if app.ui.theme != selected {
-        app.apply_theme(ctx, selected);
-    }
+    let wanted = wanted_theme(app, ctx);
+    show_theme(app, ctx, wanted);
 }
 
 /// One theme as a Color Theme swatch: its panel colour under a chrome strip with an accent dot,
 /// outlined when chosen. The name is the tooltip and the accessible label. A star badge on its
 /// corner adds the theme to (or removes it from) the favourites listed by the appearance
 /// button's menu; it shows while the swatch is hovered, and stays for a favourite.
-fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut String, favorites: &mut Vec<SavedTheme>) {
+fn theme_swatch(ui: &mut egui::Ui, p: Tokens, id: &str, selected: &mut String, favorites: &mut Vec<SavedTheme>) {
     const BADGE: f32 = 7.0;
     let t = Tokens::get(ui.ctx());
-    let p = Tokens::for_kind(kind);
     let label = tl!(&choice_label(id)).to_string();
     let on = selected.as_str() == id;
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 26.0), Sense::click());
@@ -264,16 +300,26 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
     }
 }
 
-/// A grid row of theme swatches, marked Active when the appearance mode shows this family.
-fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, favorites: &mut Vec<SavedTheme>, options: &[(&str, ThemeKind)]) {
+/// A grid row of theme swatches, the Custom theme (`custom`) last, marked Active when the
+/// appearance mode shows this family.
+fn theme_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    active: bool,
+    selected: &mut String,
+    favorites: &mut Vec<SavedTheme>,
+    options: &[(&str, ThemeKind)],
+    custom: Tokens,
+) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!(title)).color(t.text_dim));
     ui.horizontal(|ui| {
         // Room for the favourite star badges on the swatch corners.
         ui.spacing_mut().item_spacing.x = 6.0;
         for (id, kind) in options {
-            theme_swatch(ui, *kind, id, selected, favorites);
+            theme_swatch(ui, Tokens::for_kind(*kind), id, selected, favorites);
         }
+        theme_swatch(ui, custom, "custom", selected, favorites);
         if active {
             ui.add_space(6.0);
             ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
@@ -318,11 +364,13 @@ pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, s
     let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
     let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
     let mut favorites: Vec<SavedTheme> = obj.get("favoriteThemes").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    let custom = obj.get("customTheme").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    let custom = custom_tokens(&custom);
     if rows.light {
-        theme_row(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS);
+        theme_row(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS, custom);
     }
     if rows.dark {
-        theme_row(ui, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS);
+        theme_row(ui, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS, custom);
     }
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));

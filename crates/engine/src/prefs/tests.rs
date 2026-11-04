@@ -161,6 +161,50 @@ fn favorite_themes_persist_and_reject_invalid_lists() {
 }
 
 #[test]
+fn custom_theme_persists_and_rejects_invalid_values() {
+    let mut s = Session::new();
+    assert_eq!(s.prefs().interface.custom_theme, CustomTheme::default());
+    let theme = json!({"base": "studio", "colors": {"card": "#102030", "accent_soft": "#8b7cf62e"}});
+    s.execute("prefs.set", json!({"path": "interface.customTheme", "value": theme})).unwrap();
+    s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": "custom"})).unwrap();
+    s.execute("prefs.set", json!({"path": "interface.lightTheme", "value": "custom"})).unwrap();
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    let custom = &restored.prefs().interface.custom_theme;
+    assert_eq!(custom.base, Theme::Studio);
+    assert_eq!(custom.colors.get("card").map(String::as_str), Some("#102030"));
+    assert_eq!(restored.prefs().interface.dark_theme, DarkTheme::Custom);
+    assert_eq!(restored.prefs().interface.light_theme, LightTheme::Custom);
+    // The dialog commits the whole Interface section, nested custom theme included.
+    s.execute("prefs.set", json!({"path": "", "value": {"interface": {"customTheme": {"base": "classic", "colors": {}}}}})).unwrap();
+    assert_eq!(s.prefs().interface.custom_theme.base, Theme::Classic);
+    assert!(s.prefs().interface.custom_theme.colors.is_empty());
+    let too_many: serde_json::Map<String, Value> = (0..=CustomTheme::MAX_COLORS).map(|i| (format!("c{i}"), json!("#000000"))).collect();
+    for invalid in [
+        json!("studio"),
+        json!({"base": "nope"}),
+        json!({"colors": {"card": "red"}}),
+        json!({"colors": {"card": "#12345"}}),
+        json!({"colors": {"bad name": "#123456"}}),
+        json!({"colors": ["#123456"]}),
+        json!({"colors": too_many}),
+    ] {
+        assert!(s.execute("prefs.set", json!({"path": "interface.customTheme", "value": invalid})).is_err(), "{invalid}");
+        assert_eq!(s.prefs().interface.custom_theme.base, Theme::Classic);
+    }
+    assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.base", "value": "breezeDark"})).is_ok());
+    assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.colors", "value": {"text": "#ffffff80"}})).is_ok());
+    assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.colors", "value": {"text": 3}})).is_err());
+    assert_eq!(parse_hex_rgba("#ffffff80"), Some([255, 255, 255, 128]));
+    assert_eq!(parse_hex_rgba("102030"), Some([16, 32, 48, 255]));
+    assert_eq!(parse_hex_rgba("#1020"), None);
+    // A damaged saved custom theme falls back instead of failing the whole file.
+    let mut lenient = Session::new();
+    lenient.load_prefs_json(&json!({"interface": {"customTheme": 7, "darkTheme": "custom"}}).to_string()).unwrap();
+    assert_eq!(lenient.prefs().interface.custom_theme, CustomTheme::default());
+}
+
+#[test]
 fn get_set_reset_by_path() {
     let mut s = session();
     assert_eq!(s.execute("prefs.get", json!({"path": "performance.historyStates"})).unwrap(), json!(50));

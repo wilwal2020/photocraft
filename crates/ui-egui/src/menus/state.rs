@@ -128,7 +128,9 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
     if let Some(name) = id.strip_prefix("window.theme.").filter(|n| *n != "toggle") {
         let auto = app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto;
-        return Some(if name == "system" { auto } else { !auto && crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme) });
+        // A custom theme is built on a built-in one, which isn't the theme on screen.
+        let shown = app.prefs_rt.custom_theme.is_none() && crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme);
+        return Some(if name == "system" { auto } else { !auto && shown });
     }
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
