@@ -161,9 +161,9 @@ pub mod web_cmds;
 pub(super) mod wia_cmds;
 
 pub(crate) use adjust_params::inject_kind;
-pub(crate) use adjust_params::joins_clipping_group;
-use adjust_params::{adjust_mode, destructive_adjust, doc_mode, empty_layer_to_replace, gray_tone_params, new_adjustment};
+use adjust_params::{adjust_mode, destructive_adjust, doc_mode, gray_tone_params, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
+pub(crate) use adjust_params::{insert_fill_layer, joins_clipping_group};
 pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable, is_mask_target, is_second_mask_target, paint_surface};
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel_or_channel, has_selection};
 pub use layer_params::blend_from_str;
@@ -839,21 +839,9 @@ fn build() -> Vec<CommandSpec> {
                     };
                     let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
-                    // On an empty layer the fill takes its place, clipping and all.
-                    let id = match empty_layer_to_replace(doc, *active) {
-                        Some(empty) => {
-                            l.clipped = doc.layer(empty).is_some_and(|e| e.clipped);
-                            let id = doc.insert_above(Some(empty), l);
-                            doc.remove(empty);
-                            id
-                        }
-                        None => {
-                            // Made on a clipped layer, the fill joins its clipping group (user
-                            // request), as a new adjustment layer does.
-                            l.clipped = joins_clipping_group(doc, *active);
-                            crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto)
-                        }
-                    };
+                    // On an empty layer the fill takes its place; made on a clipped layer, it
+                    // joins its clipping group (user requests).
+                    let id = insert_fill_layer(doc, *active, l, crate::layer_place::Place::Auto);
                     *active = Some(id);
                     Ok(id)
                 })?;
@@ -885,8 +873,9 @@ fn build() -> Vec<CommandSpec> {
                     .in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
-                    l.clipped = joins_clipping_group(doc, *active);
-                    let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
+                    // On an empty layer the gradient takes its place (user request), as a Solid
+                    // Color does.
+                    let id = insert_fill_layer(doc, *active, l, crate::layer_place::Place::Auto);
                     *active = Some(id);
                     Ok(id)
                 })?;

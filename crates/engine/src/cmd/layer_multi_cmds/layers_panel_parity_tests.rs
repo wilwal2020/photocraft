@@ -103,6 +103,36 @@ fn solid_color_takes_the_place_of_an_empty_layer() {
     }
 }
 
+/// User request: a gradient added on an empty layer takes its place, as Solid Color does, from
+/// New Fill Layer › Gradient, the Gradient tool's live gradient and a Gradients panel preset (one
+/// step each); on a layer with pixels it goes above.
+#[test]
+fn a_gradient_takes_the_place_of_an_empty_layer() {
+    for (cmd, params) in
+        [("layer.newFillLayer.gradient", json!({})), ("gradient.fill.create", json!({"from": [0, 8], "to": [24, 8]})), ("gradient.presets.apply", json!({}))]
+    {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 24, "height": 16})).unwrap();
+        let painted = LayerId(s.execute("layer.new.layer", json!({"name": "Painted"})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+        let empty = LayerId(s.execute("layer.new.layer", json!({"name": "Empty"})).unwrap()["layer"].as_u64().unwrap());
+        let order = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+        let before = order(&s);
+        let fill = LayerId(s.execute(cmd, params.clone()).unwrap()["layer"].as_u64().unwrap());
+        let doc = &s.active().unwrap().doc;
+        assert!(doc.layer(empty).is_none(), "{cmd}: the empty layer is gone");
+        assert!(matches!(doc.layer(fill).unwrap().content, photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })), "{cmd}");
+        assert_eq!(order(&s), before.iter().map(|id| if *id == empty { fill } else { *id }).collect::<Vec<_>>(), "{cmd}: in its place");
+        assert_eq!(s.active().unwrap().active_layer, Some(fill), "{cmd}: the gradient is active");
+        s.undo();
+        assert_eq!(order(&s), before, "{cmd}: one undo step");
+        s.execute("layer.select", json!({"layer": painted.0})).unwrap();
+        s.execute(cmd, params).unwrap();
+        assert!(s.active().unwrap().doc.layer(painted).is_some(), "{cmd}: a layer with pixels stays");
+        assert_eq!(s.active().unwrap().doc.layers.len(), before.len() + 1, "{cmd}: the gradient went above");
+    }
+}
+
 /// Set one Layers panel option in the preferences, as the Panel Options dialog does.
 fn option(s: &mut Session, key: &str, enabled: bool) {
     s.prefs.edit(|p| {

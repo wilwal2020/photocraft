@@ -511,14 +511,17 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         {
             // A path selected in the Paths panel becomes the vector mask, as in Photoshop (#4728);
             // Alt still inverts it.
+            // Otherwise one Add Mask command (user request): an action records "Add Mask", not
+            // the mask it happened to add, and adds whichever one the layer lacks when played.
             match crate::vector_ui::selected_document_path(app).filter(|_| cmd.starts_with("layer.vectorMask.")) {
                 Some(name) => actions.push(("layer.vectorMask.currentPath".into(), json!({"name": name, "hide": alt}))),
-                None if cmd == photocraft_engine::second_mask_cmds::ADD => {
-                    actions.push((cmd.into(), json!({"hide": alt})));
-                    // The new mask is targeted, as a new layer mask is.
-                    actions.push(("ui.secondMaskTarget".into(), json!(true)));
+                None => {
+                    actions.push((photocraft_engine::second_mask_cmds::ADD_MASK.into(), json!({"hide": alt})));
+                    if cmd == photocraft_engine::second_mask_cmds::ADD {
+                        // The new mask is targeted, as a new layer mask is.
+                        actions.push(("ui.secondMaskTarget".into(), json!(true)));
+                    }
                 }
-                None => actions.push((cmd.into(), json!({}))),
             }
         }
         let fx = fx_button(ui, 26.0, tl!("Add a layer style"));

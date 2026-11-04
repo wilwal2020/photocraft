@@ -100,3 +100,40 @@ fn bad_params_are_errors_not_panics() {
     s.execute("layer.new.layer", json!({})).unwrap();
     assert!(s.execute(super::ADD, json!({})).is_err());
 }
+
+/// User request: recording the Add Mask button keeps one "Add Mask" step whichever mask it added;
+/// playing it adds the layer mask where there is none and the second mask where there is one.
+#[test]
+fn a_recorded_add_mask_adds_whichever_mask_the_layer_lacks() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "Mask"})).unwrap();
+    assert_eq!(s.execute(super::ADD_MASK, json!({})).unwrap()["added"], "mask");
+    assert_eq!(s.execute(super::ADD_MASK, json!({"hide": true})).unwrap()["added"], "secondMask");
+    s.execute("actions.stop", json!({})).unwrap();
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, [super::ADD_MASK, super::ADD_MASK], "one Add Mask step each, nothing nested");
+    let layer = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+    };
+    let l = layer(&s);
+    assert!(l.mask.is_some() && l.second_mask.is_some());
+    assert!(l.second_mask.unwrap().surface.pixel(5, 5)[0] < 0.01, "hide inverted the second mask");
+    // A layer with a mask already: the first step adds the second mask, the second a vector mask.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("actions.play", json!({"action": "Mask"})).unwrap();
+    let l = layer(&s);
+    assert!(l.second_mask.is_some() && l.vector_mask.is_some(), "the masks it lacked");
+    // A bare layer: the layer mask, then the second mask.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("actions.play", json!({"action": "Mask"})).unwrap();
+    let l = layer(&s);
+    assert!(l.mask.is_some() && l.second_mask.is_some() && l.vector_mask.is_none());
+    // Nothing left to add: an error, not a panic.
+    s.execute(super::ADD_MASK, json!({})).unwrap();
+    assert!(s.execute(super::ADD_MASK, json!({})).is_err());
+    assert!(s.execute(super::ADD_MASK, json!({"hide": 1})).is_err());
+}

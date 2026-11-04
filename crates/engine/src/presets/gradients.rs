@@ -645,7 +645,8 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
         let fill = Fill::gradient(stops, angle, scale, style, reverse).in_mode(doc.mode);
         let layer = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
-        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::Auto);
+        // On an empty layer the gradient takes its place (user request).
+        let id = crate::commands::insert_fill_layer(doc, *active, layer, crate::layer_place::Place::Auto);
         *active = Some(id);
         Ok(id)
     })?;

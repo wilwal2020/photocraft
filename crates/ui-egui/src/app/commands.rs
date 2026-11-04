@@ -164,6 +164,15 @@ impl PhotocraftApp {
             crate::gigapixel_ui::started(self, v);
         }
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
+        // Add Mask says which mask it made: a new layer or vector mask is targeted as above.
+        let added = r
+            .as_ref()
+            .ok()
+            .filter(|_| id == photocraft_engine::second_mask_cmds::ADD_MASK && on_active_layer)
+            .and_then(|v| v.get("added"))
+            .and_then(Value::as_str);
+        let creates_active_mask = creates_active_mask || added == Some("mask");
+        let creates_active_vector_mask = creates_active_vector_mask || added == Some("vectorMask");
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;

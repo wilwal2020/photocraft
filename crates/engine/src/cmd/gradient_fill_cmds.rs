@@ -353,7 +353,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     // The selection became the layer mask: dropped, as in Photoshop (Undo brings it back).
     let masked_by_selection = layer.mask.is_some();
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
-        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+        // On an empty layer the gradient takes its place (user request).
+        let id = crate::commands::insert_fill_layer(doc, *active, layer, crate::layer_place::Place::AutoEditable);
         if masked_by_selection {
             doc.selection = None;
         }

@@ -40,6 +40,8 @@ pub use basic::{reset_adjustment_editor, reset_color_balance};
 pub(crate) use curves::CURVES_TOOL_GAP;
 use curves::curves;
 #[cfg(test)]
+use curves::slider_moved;
+#[cfg(test)]
 use curves::{CURVE_HANDLE_SIZE, curve_graph};
 #[cfg(test)]
 use curves::{CURVES_SIDE, CURVES_TOOL, curves_indent, curves_input_slider};
@@ -248,6 +250,9 @@ mod tests {
         assert_eq!(pts[0], [127.0, 0.0]);
         assert!(!curves_input_slider(&mut pts, true, f32::NAN));
         assert!(!curves_input_slider(&mut [], false, 10.0));
+        // A moved slider gets its line to the end point (user request); one at its end doesn't.
+        assert!(slider_moved(true, [170.0, 255.0]) && slider_moved(false, [40.0, 0.0]));
+        assert!(!slider_moved(true, [255.0, 200.0]) && !slider_moved(false, [0.0, 30.0]));
     }
 
     /// The Curves graph is centred in a wide panel and flush left in a narrow one.

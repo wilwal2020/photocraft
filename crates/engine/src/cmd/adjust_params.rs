@@ -35,14 +35,38 @@ pub(crate) fn joins_clipping_group(doc: &photocraft_doc::Document, active: Optio
     doc.layer_at(&above).is_some_and(|l| l.clipped)
 }
 
-/// The active layer a new Solid Color fill takes the place of (user request): an empty pixel
-/// layer, not the Background, with nothing of its own (no mask, vector mask or effects).
+/// The active layer a new Solid Color or Gradient fill takes the place of (user request): an
+/// empty pixel layer, not the Background, with nothing of its own (no mask, vector mask or
+/// effects).
 pub(super) fn empty_layer_to_replace(doc: &photocraft_doc::Document, active: Option<photocraft_doc::LayerId>) -> Option<photocraft_doc::LayerId> {
     let id = active?;
     let l = doc.layer(id)?;
     let LayerContent::Raster(surf) = &l.content else { return None };
     let bare = l.mask.is_none() && l.vector_mask.is_none() && l.effects.items.is_empty() && !doc.is_background(id);
     (bare && surf.content_bounds().is_empty()).then_some(id)
+}
+
+/// Put new fill layer `l` in the document: on an empty active layer ([`empty_layer_to_replace`])
+/// it takes that layer's place, clipping and all; else it goes in at `place`, joining the active
+/// layer's clipping group as a new adjustment layer does.
+pub(crate) fn insert_fill_layer(
+    doc: &mut photocraft_doc::Document,
+    active: Option<photocraft_doc::LayerId>,
+    mut l: photocraft_doc::Layer,
+    place: crate::layer_place::Place,
+) -> photocraft_doc::LayerId {
+    match empty_layer_to_replace(doc, active) {
+        Some(empty) => {
+            l.clipped = doc.layer(empty).is_some_and(|e| e.clipped);
+            let id = doc.insert_above(Some(empty), l);
+            doc.remove(empty);
+            id
+        }
+        None => {
+            l.clipped = joins_clipping_group(doc, active);
+            crate::layer_place::insert_new(doc, active, l, place)
+        }
+    }
 }
 
 /// Apply `adj` in place to the targeted layer mask, the targeted alpha channel or Quick Mask, or else the active layer's pixels, as one history step named `label`.

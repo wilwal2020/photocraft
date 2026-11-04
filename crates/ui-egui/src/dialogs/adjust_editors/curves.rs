@@ -271,6 +271,12 @@ pub(super) fn curves_input_slider(pts: &mut [[f32; 2]], white: bool, input: f32)
     input.is_finite() && curve_edit::move_to(pts, i, [input, q[1]])
 }
 
+/// Whether the black (or `white`) input slider is off its end of the bar: Curves then draws a line
+/// from it up to the end point `q` it moved.
+pub(super) fn slider_moved(white: bool, q: [f32; 2]) -> bool {
+    if white { q[0] < 255.0 } else { q[0] > 0.0 }
+}
+
 /// Partial sets have a combined record even in Lab. Convert each displayed curve separately,
 /// so the normal Lab serializer (which aliases the composite to Lightness) cannot discard it.
 fn set_editor_pencil(v: &mut Value, pencil: bool, cx: &EditorCx) -> bool {
@@ -459,6 +465,11 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let Some(q) = pts.get(i) else { continue };
         let x = to_scr(*q).x;
         let top = hbar.bottom() + 1.0;
+        // A moved slider: a line from its arrow up to the end point it moves (user request), so
+        // the input level it sets shows across the graph.
+        if slider_moved(white, *q) {
+            p.line_segment([pos2(x, top), to_scr(*q)], Stroke::new(1.0, t.text));
+        }
         let tri = vec![pos2(x, top), pos2(x + CURVES_SLIDER_W / 2.0, top + CURVES_SLIDER_H), pos2(x - CURVES_SLIDER_W / 2.0, top + CURVES_SLIDER_H)];
         let (fill, edge) = if white { (Color32::WHITE, Color32::from_gray(90)) } else { (Color32::BLACK, Color32::from_gray(170)) };
         p.add(egui::Shape::convex_polygon(tri, fill, Stroke::new(1.0, edge)));

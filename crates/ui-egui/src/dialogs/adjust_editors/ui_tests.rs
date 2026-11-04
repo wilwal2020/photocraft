@@ -309,6 +309,30 @@ fn curves_graph_grows_with_the_properties_panel() {
     assert!((c[1][0] - 127.5).abs() < 2.0 && (c[1][1] - 127.5).abs() < 2.0, "{c:?}");
 }
 
+/// User request: a moved input slider draws a line from its arrow up to the end point it moved,
+/// showing which input level it set across the graph. A picture (needs the GPU renderer; run
+/// with `--ignored --test-threads=1`, PHOTOCRAFT_SHOTS=<dir> also saves it).
+#[test]
+#[ignore = "pictures"]
+fn a_moved_curves_input_slider_draws_its_line() {
+    let mut h = app_harness("curves", "rgb", 8);
+    let (id, _) = layer(&h);
+    let g = curves_graph(&h, id);
+    // The white slider sits under the bar below the graph's right edge.
+    let x = g.left() + 170.0 / 255.0 * g.width();
+    drag(&mut h, Pos2::new(g.right(), g.bottom() + 15.0), Pos2::new(x, g.bottom() + 15.0));
+    let c = curve_of(&layer(&h).1);
+    assert!((c.last().unwrap()[0] - 170.0).abs() < 2.0, "{c:?}");
+    let image = h.render().unwrap();
+    if let Ok(dir) = std::env::var("PHOTOCRAFT_SHOTS") {
+        image.save(format!("{dir}/curves_slider_line.png")).unwrap();
+    }
+    let ppp = h.ctx.pixels_per_point();
+    let lit = |y: f32| (-2..=2).any(|dx| image.get_pixel(((x + dx as f32) * ppp) as u32, (y * ppp) as u32).0[0] > 180);
+    // Halfway up the graph, where the curve itself is far to the left, the line shows.
+    assert!(lit(g.center().y) && lit(g.bottom() - 10.0), "the slider's line");
+}
+
 /// Issue #43: pressing on a point selects it (no new point), Delete/Backspace and ⌘/Ctrl-click
 /// remove points, dragging off the graph removes one, endpoints stay.
 #[test]

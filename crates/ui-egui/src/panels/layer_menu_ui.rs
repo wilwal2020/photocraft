@@ -16,12 +16,7 @@ pub(crate) fn mask_toggle_label(enabled: bool) -> &'static str {
 /// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
 /// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
 pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
-    match (has_selection, alt) {
-        (true, false) => "layer.layerMask.revealSelection",
-        (true, true) => "layer.layerMask.hideSelection",
-        (false, false) => "layer.layerMask.revealAll",
-        (false, true) => "layer.layerMask.hideAll",
-    }
+    photocraft_engine::second_mask_cmds::layer_mask_command(has_selection, alt)
 }
 
 /// What the Layers panel "Add a mask" button does for `layer` (#2075). Like Photoshop it never
@@ -29,18 +24,10 @@ pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
 /// already has one gets PhotoCraft's second pixel mask (Photoshop adds the vector mask there;
 /// `"hide"` with ⌥), then a vector mask (⌥: Hide All); a layer with all three (or a shape layer,
 /// whose path is already its vector mask, with both pixel masks) gets nothing (`None`).
+/// The button runs `layer.addMask`, which takes this same step when it runs (so a recorded "Add
+/// Mask" adds whichever mask the layer lacks at playback).
 pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool) -> Option<&'static str> {
-    let l = layer?;
-    if l.mask.is_none() {
-        Some(add_mask_command(has_selection, alt))
-    } else if l.second_mask.is_none() {
-        // PhotoCraft: a second pixel mask (Photoshop adds the vector mask here); ⌥ inverts it.
-        Some(photocraft_engine::second_mask_cmds::ADD)
-    } else if l.vector_mask.is_none() && !matches!(l.content, LayerContent::Shape(_)) {
-        Some(if alt { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" })
-    } else {
-        None
-    }
+    photocraft_engine::second_mask_cmds::add_mask_step(layer?, has_selection, alt)
 }
 
 /// Commands that act on the active layer only and have no sensible meaning for a selection: Blending

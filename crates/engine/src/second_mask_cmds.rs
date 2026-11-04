@@ -4,7 +4,7 @@
 //! filters and adjustments edit it with `"target":"secondMask"`, as `"target":"mask"` edits the
 //! first.
 
-use photocraft_doc::{LayerId, LayerMask};
+use photocraft_doc::{Layer, LayerContent, LayerId, LayerMask};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
@@ -15,6 +15,37 @@ pub const DELETE: &str = "layer.secondMask.delete";
 pub const ENABLED: &str = "layer.secondMask.enabled";
 pub const TO_VECTOR: &str = "layer.secondMask.toVectorMask";
 pub const LINKED: &str = "layer.secondMask.linked";
+/// The Layers panel's Add Mask button as one command (user request): an action records "Add
+/// Mask", and playing it adds whichever mask the layer is missing then, as the button would.
+pub const ADD_MASK: &str = "layer.addMask";
+
+/// The layer mask Add Layer Mask makes: an active selection becomes the mask; `hide` (⌥) inverts
+/// it (Hide Selection, or Hide All without a selection).
+pub fn layer_mask_command(has_selection: bool, hide: bool) -> &'static str {
+    match (has_selection, hide) {
+        (true, false) => "layer.layerMask.revealSelection",
+        (true, true) => "layer.layerMask.hideSelection",
+        (false, false) => "layer.layerMask.revealAll",
+        (false, true) => "layer.layerMask.hideAll",
+    }
+}
+
+/// What Add Mask does for `layer` (#2075). Like Photoshop it never replaces a mask: a layer
+/// without a layer mask gets one ([`layer_mask_command`]); a layer that already has one gets the
+/// second pixel mask ([`ADD`], `"hide"` with ⌥; Photoshop adds the vector mask there), then a
+/// vector mask (⌥: Hide All); a layer with all three (or a shape layer, whose path is already its
+/// vector mask, with both pixel masks) gets nothing (`None`).
+pub fn add_mask_step(l: &Layer, has_selection: bool, hide: bool) -> Option<&'static str> {
+    if l.mask.is_none() {
+        Some(layer_mask_command(has_selection, hide))
+    } else if l.second_mask.is_none() {
+        Some(ADD)
+    } else if l.vector_mask.is_none() && !matches!(l.content, LayerContent::Shape(_)) {
+        Some(if hide { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" })
+    } else {
+        None
+    }
+}
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -81,6 +112,31 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"layer": id.0}))
+}
+
+/// [`ADD_MASK`]: the step [`add_mask_step`] picks for the layer as it is now, run as this one
+/// command, so recording keeps a single "Add Mask" step. Without `"layer"` a new layer mask goes
+/// on every selected layer that can take one, as the button's does.
+fn add_mask(s: &mut Session, p: &Value) -> Result<Value> {
+    let hide = flag(ADD_MASK, p, "hide")?.unwrap_or(false);
+    let id = layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let step = add_mask_step(l, d.doc.selection.is_some(), hide).ok_or_else(|| bad(ADD_MASK, "the layer already has all its masks"))?;
+    let mut params = json!({});
+    if let Some(layer) = p.get("layer").filter(|v| !v.is_null()) {
+        params["layer"] = layer.clone();
+    }
+    if step == ADD {
+        params["hide"] = json!(hide);
+    }
+    let r = s.execute(step, params)?;
+    let added = match step {
+        ADD => "secondMask",
+        s if s.starts_with("layer.vectorMask.") => "vectorMask",
+        _ => "mask",
+    };
+    Ok(json!({"layer": r.get("layer").cloned().unwrap_or(json!(id.0)), "added": added}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -159,6 +215,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Second Mask",
             r##"{"layer":id?,"hide":bool? (inverted)} — a second pixel mask on a layer that has a layer mask, from the selection when there is one (which it drops), else revealing all"##,
             add,
+        ),
+        spec(
+            ADD_MASK,
+            "Add Mask",
+            r##"{"layer":id?,"hide":bool? (inverted)} → {layer, added:"mask"|"secondMask"|"vectorMask"} — the Layers panel's Add Mask: a layer mask (from the selection when there is one; without `layer`, on every selected layer), else the second mask, else a vector mask"##,
+            add_mask,
         ),
         spec(DELETE, "Delete Second Mask", r##"{"layer":id?}"##, delete),
         spec(ENABLED, "Enable Second Mask", r##"{"layer":id?,"enabled":bool}"##, enabled),

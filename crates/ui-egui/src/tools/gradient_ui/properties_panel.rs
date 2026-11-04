@@ -173,6 +173,15 @@ pub(super) fn presets(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups = app.session.presets.gradients.clone();
     let current = app.session.presets.gradient.name.clone();
     let mut picked = None;
+    // Import…, as Photoshop's Gradient Editor has beside its presets (user request: there was no
+    // way to import gradients from here); the new group shows in the list below.
+    let mut import = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            import = widgets::secondary_button(ui, tl!("Import…"), 0.0).on_hover_text(tl!("Add the gradients in a .grd file to the presets")).clicked();
+        });
+    });
+    ui.add_space(2.0);
     // The Gradient Editor window's height is the user's: the presets take all of it (user
     // report: the window couldn't be made taller than a fixed list height).
     egui::ScrollArea::vertical().id_salt("gradient-presets").auto_shrink([false, false]).show(ui, |ui| {
@@ -209,6 +218,9 @@ pub(super) fn presets(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+    if import {
+        crate::preset_files_ui::import_gradients_dialog(app);
     }
 }
 
@@ -459,6 +471,55 @@ mod tests {
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(3);
+    }
+
+    /// User request: the Gradient Editor imports gradients. Import… asks for a .grd file and its
+    /// gradients show as a new group in the editor, which stays open; nothing goes in the history.
+    #[test]
+    fn the_gradient_editor_imports_a_grd_file() {
+        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop};
+        let bytes = photocraft_psd::grd::write(&[GrdGradient {
+            name: "Imported Teal".into(),
+            stops: vec![
+                GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Rgb([0.0, 0.5, 0.5]) },
+                GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 1.0, 0.0]) },
+            ],
+            ..Default::default()
+        }]);
+        let mut app = app();
+        // One built-in group, so the imported one is in view.
+        app.session.presets.gradients.truncate(1);
+        app.services.file_dialog = Some(Box::new(move |request, _, reply| {
+            assert!(matches!(request, crate::FileDialogRequest::Open { multiple: false, extensions: Some(ref exts), .. } if exts == &["grd"]));
+            reply.send(Some(crate::FileDialogAnswer::Contents("My Gradients.GRD".into(), bytes.clone())));
+        }));
+        let mut h = Harness::builder().with_size(vec2(700.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                super::super::editor_window(app, &ctx);
+                app.poll_file_dialog(&ctx, None);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::ProMedium);
+        h.state_mut().ui.panels.gradient_editor = true;
+        h.state_mut().gradient.editor = EditorMode::Presets;
+        h.run_steps(3);
+        let past = h.state().session.active().unwrap().history.past_len();
+        assert!(h.query_by_label("Imported Teal").is_none());
+        h.get_by_label("Import…").click();
+        h.run_steps(4);
+        assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+        assert!(h.state().ui.status.contains("Imported 1 gradient"), "{}", h.state().ui.status);
+        assert!(h.state().session.presets.gradients.iter().any(|g| g.items.iter().any(|i| i.name == "Imported Teal")));
+        assert!(h.state().ui.panels.gradient_editor, "the editor stays open");
+        // Its group, opened if it starts closed.
+        if h.query_by_label("Imported Teal").is_none() {
+            h.get_by_label("My Gradients").click();
+            h.run_steps(3);
+        }
+        h.get_by_label("Imported Teal");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), past);
     }
 
     /// User request: the Presets swatch opens the Gradient Editor's presets alone, as Photoshop's
