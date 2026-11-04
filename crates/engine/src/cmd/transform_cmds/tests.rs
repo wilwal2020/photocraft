@@ -948,3 +948,30 @@ fn a_stroked_soft_shapes_frame_matches_the_hard_shapes() {
         assert_eq!(boxes(&s), hard, "{align} at {x}: Feather alone leaves the frame");
     }
 }
+
+/// A fill layer's frame is where its mask shows it: the canvas for a mask that reads white past
+/// what is painted on it (a black hole), the painted white for one that reads black.
+#[test]
+fn a_fill_layers_frame_is_where_its_mask_shows_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    s.execute("layer.newFillLayer.solidColor", json!({"color": [0.0, 0.0, 0.0]})).unwrap();
+    let frame = |s: &Session| {
+        let st = s.active().unwrap();
+        transform_bounds(&st.doc, st.doc.layer(st.active_layer.unwrap()).unwrap())
+    };
+    s.edit("hole", |doc, a| {
+        doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(16, 16, 40, 48), &[0.0]);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(frame(&s), Rect::new(0, 0, 64, 64));
+    s.edit("patch", |doc, a| {
+        let m = doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap();
+        m.surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        m.surface.fill_rect(Rect::new(16, 16, 40, 48), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(frame(&s), Rect::new(16, 16, 40, 48));
+}

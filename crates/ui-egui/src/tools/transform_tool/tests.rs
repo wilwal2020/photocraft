@@ -3397,3 +3397,29 @@ fn several_layers_reuse_the_transform_interpolation_preference() {
     assert_eq!(transform.layers.len(), 2);
     assert_eq!(transform.interpolation, "nearest");
 }
+
+/// User report: a black Solid Color layer whose mask is white with a black hole in the middle
+/// vanished under Free Transform. The mask paints only the hole, so the box framed the hole, which
+/// the mask hides. The box frames the canvas the mask shows the layer over, and the preview keeps
+/// the hole.
+#[test]
+fn a_fill_layer_masked_with_a_hole_shows_while_it_is_transformed() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.session.execute("layer.newFillLayer.solidColor", json!({"color": [0.0, 0.0, 0.0]})).unwrap();
+    app.session
+        .edit("mask", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(16, 16, 40, 48), &[0.0]);
+            Ok(())
+        })
+        .unwrap();
+    for target in [true, false] {
+        app.ui.mask_target = target;
+        begin(&mut app, &gpu_ctx()).unwrap();
+        assert_eq!(app.ui.transform.as_ref().unwrap().rect, [0.0, 0.0, 64.0, 64.0], "the canvas, not the hole");
+        let (img, _) = app.transform_preview.as_ref().unwrap().texture.level_image(0).unwrap();
+        let at = |x: usize, y: usize| img.pixels[y * img.size[0] + x];
+        assert_eq!(at(2, 2), Color32::BLACK, "the fill shows round the hole");
+        assert_eq!(at(24, 30).a(), 0, "the hole stays clear");
+        cancel(&mut app);
+    }
+}

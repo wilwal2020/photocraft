@@ -65,7 +65,16 @@ pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
         LayerContent::Shape(sh) if sh.has_soft_mask() => photocraft_compose::soft_shape_frame(sh, doc.pixel_format(), doc.bounds()).unwrap_or(Rect::EMPTY),
         _ => layer.surface().map_or(Rect::EMPTY, photocraft_compose::bounds::content_bounds),
     };
-    if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content }
+    if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| mask_shown_bounds(doc, &m.surface)) } else { content }
+}
+
+/// Where a mask lets its layer show: its painted values, and the whole canvas when what it reads
+/// past them is not black. A fill layer's mask made white with a black hole paints only the hole,
+/// so the frame was the hole alone, which the mask hides, and the layer vanished while the box was
+/// open (user report).
+fn mask_shown_bounds(doc: &Document, mask: &Surface) -> Rect {
+    let painted = photocraft_compose::bounds::content_bounds(mask);
+    if mask.default_pixel().first().is_some_and(|v| *v > 0.0) { painted.union(&doc.bounds()) } else { painted }
 }
 
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
