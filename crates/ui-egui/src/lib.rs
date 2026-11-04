@@ -40,6 +40,7 @@ pub mod file_open;
 pub mod fill_tool_ui;
 pub mod frame_stages;
 pub mod gigapixel_ui;
+pub mod gpu_memory;
 pub mod gpu_status;
 pub mod i18n;
 mod icon_data;
@@ -266,8 +267,8 @@ pub use services::{
     CameraRawPresetDirs, CapsLockFn, CaptionStyleFn, ClipboardGetFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DeviceLossRestartFn,
     DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
     FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, MouseHistoryFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopActionsFn,
-    PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, WaitCursorFn,
-    WindowFrameFn, WriteFn,
+    PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, VideoMemoryFn,
+    WaitCursorFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -678,6 +679,8 @@ pub struct PhotocraftApp {
     gpu_fault: Option<photocraft_gpu::Fault>,
     /// Out-of-memory errors this session after which the GPU canvas was rebuilt by itself (#6564).
     gpu_oom_retries: u32,
+    /// The graphics memory other programs leave the canvas (see `gpu_memory`).
+    gpu_memory: gpu_memory::Watch,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
     /// The window's own graphics device (eframe's, shared with the GPU canvas) and whether it was

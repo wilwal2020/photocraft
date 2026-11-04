@@ -102,6 +102,8 @@ mod tests {
         tool_event(app, ToolEvent::Up { x, y }, mods);
     }
 
+    /// On a targeted mask the Eyedropper picks the mask's grey, not the image's (user request):
+    /// black where it hides, white where it reveals; on the pixels, the image's colour.
     #[test]
     fn mask_sampling_sets_gray_swatches_without_changing_pixel_sampling() {
         for depth in [8, 16, 32] {
@@ -111,20 +113,21 @@ mod tests {
                 .edit("red", |doc, _| {
                     let surface = doc.layers[0].surface_mut().unwrap();
                     surface.fill_rect(photocraft_geom::Rect::new(0, 0, 20, 20), &photocraft_raster::from_rgba(&surface.format(), [1.0, 0.0, 0.0, 1.0]));
-                    doc.layers[0].mask = Some(photocraft_doc::LayerMask::reveal_all());
+                    let mut mask = photocraft_doc::LayerMask::reveal_all();
+                    mask.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 10, 20), &[0.0]);
+                    doc.layers[0].mask = Some(mask);
                     Ok(())
                 })
                 .unwrap();
             app.ui.tool = Tool::Eyedropper;
             app.ui.mask_target = true;
             click(&mut app, 5.0, 5.0, egui::Modifiers::NONE);
-            let gray = photocraft_color::convert::rgb_to_gray([1.0, 0.0, 0.0]);
-            assert_eq!(fg(&app), [gray, gray, gray, 1.0], "depth {depth}");
-            click(&mut app, 5.0, 5.0, egui::Modifiers::ALT);
-            assert_eq!(app.session.tools.background, [gray, gray, gray, 1.0]);
+            assert_eq!(fg(&app), [0.0, 0.0, 0.0, 1.0], "depth {depth}: the mask's black");
+            click(&mut app, 15.0, 5.0, egui::Modifiers::ALT);
+            assert_eq!(app.session.tools.background, [1.0, 1.0, 1.0, 1.0], "the mask's white");
             app.ui.mask_target = false;
-            click(&mut app, 5.0, 5.0, egui::Modifiers::NONE);
-            assert_eq!(fg(&app), [1.0, 0.0, 0.0, 1.0]);
+            click(&mut app, 15.0, 5.0, egui::Modifiers::NONE);
+            assert_eq!(fg(&app), [1.0, 0.0, 0.0, 1.0], "on the pixels, the image");
         }
     }
 

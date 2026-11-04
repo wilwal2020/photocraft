@@ -73,6 +73,17 @@ pub fn mouse_history_service() -> Option<photocraft_ui_egui::MouseHistoryFn> {
     None
 }
 
+/// The graphics memory Windows leaves PhotoCraft on an adapter (DXGI's per-process budget).
+#[cfg(target_os = "windows")]
+pub fn video_memory_service() -> Option<photocraft_ui_egui::VideoMemoryFn> {
+    Some(Box::new(|vendor, device| photocraft_tablet::windows::video_memory(vendor, device).map(|m| (m.budget, m.usage))))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn video_memory_service() -> Option<photocraft_ui_egui::VideoMemoryFn> {
+    None
+}
+
 /// The busy cursor around a command that holds the window (Windows: winit sets the cursor only
 /// while it handles messages; macOS and Linux show their own once the window stops answering).
 #[cfg(target_os = "windows")]

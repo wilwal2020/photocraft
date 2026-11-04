@@ -390,6 +390,10 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 /// ([`Services::mouse_history`]).
 pub type MouseHistoryFn = Box<dyn Fn() -> Vec<(i32, i32, u32)>>;
 
+/// This process's memory budget and usage (bytes) on the graphics adapter with the given PCI
+/// vendor and device ids ([`Services::video_memory`]).
+pub type VideoMemoryFn = Box<dyn Fn(u32, u32) -> Option<(u64, u64)>>;
+
 /// Show the OS busy cursor at once (`true`) or put back the cursor it replaced (`false`), around
 /// a command that holds the UI thread ([`Services::wait_cursor`]).
 pub type WaitCursorFn = Box<dyn Fn(bool)>;
@@ -515,6 +519,9 @@ pub struct Services {
     /// The pointer moves the system merged while a frame was busy (Windows), put back into
     /// strokes (`canvas::merged_moves`).
     pub mouse_history: Option<MouseHistoryFn>,
+    /// The graphics memory the system leaves this process on the canvas's card (Windows), read
+    /// by `gpu_memory` to warn and keep less there while other programs hold it.
+    pub video_memory: Option<VideoMemoryFn>,
     /// The busy cursor around a command expected to hold the window (Windows; elsewhere the OS
     /// shows its own once the window stops answering).
     pub wait_cursor: Option<WaitCursorFn>,

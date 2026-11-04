@@ -239,12 +239,14 @@ pub(crate) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
 /// The colour at document point (x, y) with the Eyedropper's Sample Size (the composite pixel,
 /// or the average of the square around it) from the layers `sample_layer` names (`document.sampleColor`).
 /// `None` off the image or over transparency.
-fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> Option<[f32; 3]> {
+/// `target`: what painting edits (`paint_target`), whose grey is picked when it is a mask or
+/// channel, or `pixels` for the image.
+fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str, target: serde_json::Value) -> Option<[f32; 3]> {
     if !(x.is_finite() && y.is_finite()) {
         return None;
     }
     let size = app.ui.tool_options.eyedropper_size;
-    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer})).ok()?;
+    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer, "target": target})).ok()?;
     match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
         [r, g, b, a] if a > 0.0 => Some([r, g, b]),
         _ => None,
@@ -255,14 +257,17 @@ fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> 
 /// options bar's Sample Size and Sample (#1649).
 pub(crate) fn eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     let layers = app.ui.tool_options.eyedropper_sample.clone();
-    sample_color(app, x, y, &layers)
+    // On a targeted mask (or channel) the Eyedropper picks its grey, not the image's colour
+    // (user request): what painting there would put down again.
+    let target = super::paint_target(app);
+    sample_color(app, x, y, &layers, target)
 }
 
 /// The active document's composite colour at document point (x, y), averaged over the
 /// Eyedropper's Sample Size as Photoshop's dialog eyedroppers (Curves, Color Picker) do.
 /// `None` off the image or over transparency.
 pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
-    sample_color(app, x, y, "all")
+    sample_color(app, x, y, "all", json!("pixels"))
 }
 
 pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {

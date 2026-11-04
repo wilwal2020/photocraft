@@ -230,6 +230,35 @@ pub fn layers_param(cmd: &str, p: &Value) -> Result<SampleLayers> {
     }
 }
 
+/// The one-channel surface the `target` param names on document `d`: the active layer's mask or
+/// second mask, an alpha channel or Quick Mask, which the Eyedropper samples instead of the image
+/// while it is what painting edits (user request: on a mask it picked the image's colour). `None`
+/// for the image (`"pixels"`, colour channels, a filter mask) and for a mask the layer doesn't
+/// have.
+fn target_gray<'a>(d: &'a crate::DocState, p: &Value) -> Result<Option<&'a photocraft_raster::Surface>> {
+    const CMD: &str = "document.sampleColor";
+    let layer = || d.active_layer.and_then(|id| d.doc.layer(id));
+    Ok(match p.get("target") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) => match t.as_str() {
+            "mask" => layer().and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
+            "secondMask" => layer().and_then(|l| l.second_mask.as_ref()).map(|m| &m.surface),
+            "quickMask" => d.doc.quick_mask.as_ref().map(|q| &q.surface),
+            "pixels" | "filterMask" => None,
+            other => return Err(bad(CMD, format!("unknown target `{other}` (pixels|mask|secondMask|quickMask|{{channel}})"))),
+        },
+        Some(Value::Object(o)) => match o.get("channel") {
+            Some(i) => {
+                let i = i.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(CMD, "`target.channel` must be a channel index"))?;
+                Some(&d.doc.channels.get(i).ok_or_else(|| bad(CMD, format!("no alpha channel {i}")))?.surface)
+            }
+            // A set of colour channels: the image.
+            None => None,
+        },
+        Some(v) => return Err(bad(CMD, format!("`target` = {v} must be a string or {{channel}}"))),
+    })
+}
+
 fn coord(cmd: &str, p: &Value, key: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` must be a finite number (document pixels)")))
 }
@@ -240,7 +269,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Sample Color",
         menu: &[],
         shortcut: None,
-        params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"sampleLayer":"current"|"currentAndBelow"|"all"|"allNoAdjustments"|"currentAndBelowNoAdjustments"="all"} → [r,g,b,a] (the Eyedropper's Sample Size and Sample: the composite pixel, or the average of the size×size square centred on it, clipped to the canvas; transparent off the canvas)"##,
+        params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"sampleLayer":"current"|"currentAndBelow"|"all"|"allNoAdjustments"|"currentAndBelowNoAdjustments"="all","target":"pixels"|"mask"|"secondMask"|"quickMask"|{"channel":i}? (what painting edits: a mask or channel is sampled as its grey, opaque)} → [r,g,b,a] (the Eyedropper's Sample Size and Sample: the composite pixel, or the average of the size×size square centred on it, clipped to the canvas; transparent off the canvas)"##,
         enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
         run: |s: &mut Session, p: &Value| {
             const CMD: &str = "document.sampleColor";
@@ -251,6 +280,9 @@ pub fn specs() -> Vec<CommandSpec> {
             // A mask or channel shown alone (⌥-click a mask thumbnail) is what is sampled, as
             // Photoshop's Eyedropper does (user report: it picked the hidden colours).
             if let Some(surf) = crate::selection_cmds::shown_gray_surface(d) {
+                return Ok(json!(sample_gray(surf, d.doc.bounds(), x, y, size)));
+            }
+            if let Some(surf) = target_gray(d, p)? {
                 return Ok(json!(sample_gray(surf, d.doc.bounds(), x, y, size)));
             }
             Ok(json!(sample_color(&d.doc, d.active_layer, x, y, size, which)))
@@ -477,6 +509,38 @@ mod tests {
             json!([1, 2]),
         ] {
             assert!(matches!(s.execute("document.sampleColor", bad.clone()), Err(EngineError::BadParams { .. })), "{bad}");
+        }
+    }
+
+    /// User request: with a mask targeted the Eyedropper samples the mask, not the image: its grey
+    /// at the point (opaque), the second mask, an alpha channel or Quick Mask the same way;
+    /// "pixels" (and a mask the layer doesn't have) sample the image; a bad target is an error.
+    #[test]
+    fn a_targeted_mask_or_channel_is_sampled_not_the_image() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 10, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        let sample = |s: &mut Session, target: Value| -> Vec<f32> {
+            serde_json::from_value(s.execute("document.sampleColor", json!({"x": 15, "y": 5, "target": target})).unwrap()).unwrap()
+        };
+        assert_eq!(sample(&mut s, json!("mask")), vec![1.0, 0.0, 0.0, 1.0], "no mask yet: the image");
+        // The left half selected: a mask hiding the right half.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        assert_eq!(sample(&mut s, json!("mask")), vec![0.0, 0.0, 0.0, 1.0], "the mask's black, not the image's white");
+        assert_eq!(sample(&mut s, json!("pixels")), vec![1.0, 1.0, 1.0, 1.0], "the image there: white under the hidden red");
+        assert_eq!(sample(&mut s, Value::Null), vec![1.0, 1.0, 1.0, 1.0]);
+        s.execute("layer.secondMask.add", json!({"hide": true})).unwrap();
+        assert_eq!(sample(&mut s, json!("secondMask")), vec![0.0, 0.0, 0.0, 1.0]);
+        let v: Vec<f32> = serde_json::from_value(s.execute("document.sampleColor", json!({"x": 2, "y": 5, "target": "mask"})).unwrap()).unwrap();
+        assert_eq!(v, vec![1.0, 1.0, 1.0, 1.0], "the revealed half is white");
+        // An alpha channel from a selection of the right half.
+        s.execute("select.rect", json!({"x": 10, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("select.saveSelection", json!({})).unwrap();
+        assert_eq!(sample(&mut s, json!({"channel": 0})), vec![1.0, 1.0, 1.0, 1.0]);
+        for bad in [json!("nope"), json!(3), json!({"channel": 9}), json!({"channel": "x"})] {
+            assert!(s.execute("document.sampleColor", json!({"x": 1, "y": 1, "target": bad})).is_err(), "{bad}");
         }
     }
 }

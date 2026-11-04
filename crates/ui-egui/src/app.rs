@@ -183,6 +183,7 @@ impl PhotocraftApp {
             gpu_render_state: None,
             gpu_fault: None,
             gpu_oom_retries: 0,
+            gpu_memory: Default::default(),
             started: None,
             window_gpu: Default::default(),
             perf: Default::default(),

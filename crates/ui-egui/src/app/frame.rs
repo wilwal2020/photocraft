@@ -403,6 +403,8 @@ impl PhotocraftApp {
         }
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         crate::gpu_status::check(self, &ctx);
+        // Other programs holding the graphics card's memory: warn, keep less there, reload.
+        crate::gpu_memory::watch(self, &ctx);
         // The Brush Preset picker's view (its gear's card parts and the footer scale) is
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.

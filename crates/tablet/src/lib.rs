@@ -85,6 +85,15 @@ pub struct MovePoint {
     pub time: u32,
 }
 
+/// A graphics adapter's own memory as the system shares it out to this process: what it may use
+/// (`budget`, which shrinks while other programs hold the card's memory) and what it uses
+/// (`usage`). Past the budget, the system moves the process's textures to system memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoMemory {
+    pub budget: u64,
+    pub usage: u64,
+}
+
 /// What a raw platform event means for the current pen sample.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Update {

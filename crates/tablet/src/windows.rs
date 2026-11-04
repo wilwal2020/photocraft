@@ -278,6 +278,33 @@ pub fn is_barrel_button_down() -> bool {
     BARREL_DOWN.load(Ordering::Relaxed)
 }
 
+/// The local (on-card) memory budget and usage of this process on the adapter with PCI `vendor`
+/// and `device` ids (DXGI's `QueryVideoMemoryInfo`), or `None` where there's no such adapter or
+/// the system doesn't report it (before Windows 10).
+pub fn video_memory(vendor: u32, device: u32) -> Option<crate::VideoMemory> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3, IDXGIFactory1};
+    use windows::core::Interface;
+    // SAFETY: creating a DXGI factory has no preconditions; the result is a reference-counted
+    // COM object released on drop.
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
+    // Adapters are numbered from 0; the first index without one ends the list (an error).
+    for i in 0..64 {
+        // SAFETY: EnumAdapters1 on a live factory returns an owned adapter or an error.
+        let adapter = unsafe { factory.EnumAdapters1(i) }.ok()?;
+        // SAFETY: GetDesc1 on a live adapter fills a plain struct.
+        let desc = unsafe { adapter.GetDesc1() }.ok()?;
+        if desc.VendorId != vendor || desc.DeviceId != device {
+            continue;
+        }
+        let adapter: IDXGIAdapter3 = adapter.cast().ok()?;
+        let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        // SAFETY: node 0 always exists; `info` is a valid struct the call writes.
+        unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }.ok()?;
+        return Some(crate::VideoMemory { budget: info.Budget, usage: info.CurrentUsage });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +385,21 @@ mod tests {
             assert!((newest.x - now.x).abs() <= 1 && (newest.y - now.y).abs() <= 1, "{newest:?} vs ({}, {})", now.x, now.y);
             assert!(history.windows(2).all(|w| w[0].time.wrapping_sub(w[1].time) < 1 << 31), "newest first: {history:?}");
         }
+    }
+
+    /// The machine's first adapter reports a budget; a made-up one reports nothing.
+    #[test]
+    fn video_memory_reads_the_adapters_budget() {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        // SAFETY: as in `video_memory`.
+        let Some(desc) =
+            unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok().and_then(|f| unsafe { f.EnumAdapters1(0) }.ok()).and_then(|a| unsafe { a.GetDesc1() }.ok())
+        else {
+            return;
+        };
+        let m = video_memory(desc.VendorId, desc.DeviceId).expect("the first adapter's memory");
+        assert!(m.budget > 0, "{m:?}");
+        assert_eq!(video_memory(0xdead, 0xbeef), None);
     }
 
     #[test]
