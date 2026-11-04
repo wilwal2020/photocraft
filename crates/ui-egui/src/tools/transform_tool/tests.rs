@@ -2763,6 +2763,32 @@ fn transform_preview_preserves_displayed_profile_colors() {
     }
 }
 
+/// User report: Free Transform on an adjustment layer's mask made the mask invisible: the
+/// preview was the layer drawn alone, which is nothing. Its mask previews instead: white where
+/// the adjustment applies, clear elsewhere.
+#[test]
+fn an_adjustment_layers_mask_shows_while_it_is_transformed() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.session.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    app.session
+        .edit("mask", |doc, a| {
+            let m = doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+            m.surface.fill_rect(photocraft_geom::Rect::new(16, 16, 32, 32), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let r = app.ui.transform.as_ref().unwrap().rect;
+    let p = app.transform_preview.as_ref().unwrap();
+    let (img, _) = p.texture.level_image(0).unwrap();
+    let at = |x: f64, y: f64| img.pixels[(y - r[1]) as usize * img.size[0] + (x - r[0]) as usize];
+    assert_eq!(at(20.0, 20.0), Color32::WHITE, "the mask's white shows");
+    assert_eq!(at(r[0] + 2.0, r[1] + 2.0).a(), 0, "its black is clear");
+    assert!(p.opacity < 1.0, "over the image, not hiding it");
+}
+
 #[test]
 fn preview_applies_the_linked_mask() {
     for linked in [true, false] {

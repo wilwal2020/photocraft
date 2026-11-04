@@ -889,6 +889,29 @@ fn a_masked_artboards_thumbnail_retargets_it_and_ends_the_mask_view() {
     assert!(!viewing(&h), "and the mask view ends");
 }
 
+/// User report: ⌘-clicking a mask (loading it as a selection) and clicking it right after opened
+/// its settings, as a double-click. Clicks with different modifier keys are two clicks; with the
+/// same ones, a double-click.
+#[test]
+fn a_command_click_and_a_plain_click_are_not_a_double_click() {
+    let ctx = egui::Context::default();
+    let frame = |t: f64, modifiers: egui::Modifiers| {
+        let mut double = false;
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(t), events: vec![egui::Event::ModifiersChanged(modifiers)], ..Default::default() }, |ui| {
+            super::frame_began(ui.ctx());
+            double = super::second_click(ui.ctx(), true, 7, 2);
+            super::frame_ended(ui.ctx(), 5.0);
+        });
+        out.textures_delta.clear();
+        double
+    };
+    assert!(!frame(1.0, egui::Modifiers::COMMAND));
+    assert!(!frame(1.2, egui::Modifiers::NONE), "a ⌘-click, then a click");
+    assert!(frame(1.4, egui::Modifiers::NONE), "two plain clicks");
+    assert!(!frame(3.0, egui::Modifiers::ALT));
+    assert!(frame(3.2, egui::Modifiers::ALT), "two ⌥-clicks");
+}
+
 /// User report (again): a double-click on a Solid Color thumbnail on a big document sometimes
 /// didn't open the Color Picker. The first click selects the layer, and that frame can take more
 /// than the double-click time; the second click, made while it worked, is handled by the next

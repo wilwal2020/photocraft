@@ -91,6 +91,8 @@ const NEUTRAL_SPREAD: f32 = 0.06;
 
 /// A black-and-white page: the share of its pixels near black or white ([`is_bilevel`]).
 const BILEVEL_SHARE: f64 = 0.8;
+/// ...of which at least this share is paper (near white).
+const PAPER_SHARE: f64 = 0.05;
 
 /// A screen's fill that is within this of white or black is plain paper or solid ink: it stays.
 const PLAIN: f32 = 0.04;
@@ -109,6 +111,12 @@ const LATTICE_SHIFT: i32 = 12;
 /// The shortest shift's square: (2, 2), a fine 45° screen's neighbour.
 const LATTICE_MIN_SHIFT2: i32 = 8;
 const LATTICE_CORR: f32 = 0.5;
+/// Radius of the box blur (applied twice) a patch's slope in tone is taken from before it is
+/// tested: a filter that is the same everywhere keeps a screen repeating, while a slope (the glow
+/// around a lamp) matches itself under every small shift. User report: in a dark, nearly grey
+/// photo such a glow passed as a screen, and the Remove tool quilted blocks of the beam above
+/// into the hole.
+const LATTICE_SLOPE_BLUR: usize = 3;
 /// A patch whose tones vary less than this (variance) is plain: it doesn't vote. Nor does one
 /// that varies less than [`LATTICE_FAINT`] and isn't a screen: a screen's highlights (tiny, soft
 /// dots) fail the test and outvoted the middle of a hole that was all screen.
@@ -372,6 +380,15 @@ fn is_lattice(lum: &[f32], w: usize, x0: usize, y0: usize) -> Option<bool> {
     if var < LATTICE_FLAT || !var.is_finite() {
         return None;
     }
+    let faint = var < LATTICE_FAINT;
+    // The patch less its slope in tone.
+    let slope = blur_twice(&patch, &vec![1.0; s * s], s, s, LATTICE_SLOPE_BLUR);
+    let patch: Vec<f32> = patch.iter().zip(&slope).map(|(v, b)| v - b).collect();
+    let mean = patch.iter().sum::<f32>() / (s * s) as f32;
+    let var = patch.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / (s * s) as f32;
+    if var < 1e-7 {
+        return (!faint).then_some(false);
+    }
     let corr = |dx: i32, dy: i32| {
         let (mut sum, mut count) = (0f32, 0u32);
         for y in 0..s as i32 {
@@ -399,7 +416,6 @@ fn is_lattice(lum: &[f32], w: usize, x0: usize, y0: usize) -> Option<bool> {
     // A repeat: a shift under which the patch matches itself, and matches again twice as far
     // (two lines a gap apart match once; a screen repeats).
     let repeats = |dx: i32, dy: i32, c: f32| c >= LATTICE_CORR && corr(2 * dx, 2 * dy) >= LATTICE_CORR;
-    let faint = var < LATTICE_FAINT;
     let Some(&(ax, ay, _)) = shifts.iter().filter(|s| repeats(s.0, s.1, s.2)).max_by(|p, q| p.2.total_cmp(&q.2)) else {
         return (!faint).then_some(false);
     };
@@ -412,10 +428,13 @@ fn is_lattice(lum: &[f32], w: usize, x0: usize, y0: usize) -> Option<bool> {
 }
 
 /// Whether `tones` (0–1) are mostly black or white: at least [`BILEVEL_SHARE`] of them within
-/// [`PLAIN`]·5 of 0 or 1.
+/// [`PLAIN`]·5 of 0 or 1, and at least [`PAPER_SHARE`] of them paper. A dark photo is mostly near
+/// black too, but it has no paper, and its grain belongs back in a fill (user report: a lamp
+/// removed from a dark grey photo).
 fn is_bilevel(tones: &[f32]) -> bool {
     let ends = tones.iter().filter(|t| **t <= 5.0 * PLAIN || **t >= 1.0 - 5.0 * PLAIN).count();
-    !tones.is_empty() && ends as f64 >= BILEVEL_SHARE * tones.len() as f64
+    let paper = tones.iter().filter(|t| **t >= 1.0 - 5.0 * PLAIN).count();
+    !tones.is_empty() && ends as f64 >= BILEVEL_SHARE * tones.len() as f64 && paper as f64 >= PAPER_SHARE * tones.len() as f64
 }
 
 /// Whether the surroundings' colours (`colours` per pixel, 0–1) are black and white or grey
@@ -828,6 +847,28 @@ mod tests {
         assert_eq!(is_lattice(&vec![1.0; w * h], w, 40, 40), None, "paper doesn't vote");
     }
 
+    /// User report: removing a lamp from a dark, nearly grey photo quilted blocks of the beam
+    /// above into the hole. The glow around it, a smooth slope in tone under sensor noise, is no
+    /// dot screen, and there is none around the hole.
+    #[test]
+    fn a_glow_in_a_dark_grey_photo_is_not_a_dot_screen() {
+        let (w, h) = (256, 192);
+        let mut r = Rng::new(3);
+        let lum: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32, (i / w) as f32);
+                let glow = 0.7 * (-((x - 128.0).powi(2) / 3000.0 + (y - 96.0).powi(2) / 800.0)).exp();
+                0.1 + glow + 0.03 * ((r.next() % 1001) as f32 / 1000.0 - 0.5)
+            })
+            .collect();
+        for (x0, y0) in [(80, 40), (112, 30), (150, 50), (60, 100), (170, 110)] {
+            assert_ne!(is_lattice(&lum, w, x0, y0), Some(true), "patch at {x0},{y0}");
+        }
+        let hole = disc(w, h, 128.0, 96.0, 24.0);
+        let valid: Vec<bool> = hole.iter().map(|m| !m).collect();
+        assert!(dot_screen(w, h, &lum, &hole, &valid, &Interrupt::NONE).unwrap().is_none());
+    }
+
     /// Strong texture on a photo (not black and white) is the model's to draw: only faint grain
     /// is quilted.
     #[test]
@@ -844,6 +885,7 @@ mod tests {
     fn grey_pages_are_told_from_colour_ones() {
         assert!(is_bilevel(&(0..100).map(|i| if i % 3 == 0 { 0.05 } else { 0.97 }).collect::<Vec<_>>()));
         assert!(!is_bilevel(&(0..100).map(|i| i as f32 / 100.0).collect::<Vec<_>>()));
+        assert!(!is_bilevel(&(0..100).map(|i| 0.02 + (i % 17) as f32 / 100.0).collect::<Vec<_>>()), "a dark photo");
         let grey: Vec<[f32; 3]> = (0..100).map(|i| [i as f32 / 100.0; 3]).collect();
         assert!(is_neutral(&grey.iter().map(|p| &p[..]).collect::<Vec<_>>()));
         let colour: Vec<[f32; 3]> = (0..100).map(|i| [i as f32 / 100.0, 0.5, 0.2]).collect();

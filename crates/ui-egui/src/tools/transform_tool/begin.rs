@@ -70,13 +70,26 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // A style is drawn again from the pixels as the box moves them, so they are read without it.
     // Not for the selected part of a layer: its style belongs to that part and the rest together.
     let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
-    let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
+    // An adjustment layer draws nothing by itself, so its preview was empty and its mask vanished
+    // while the box moved it (user report): its mask moves instead, white where the adjustment
+    // applies and clear where it doesn't, so the image shows through.
+    let adjustment_mask = layer.mask.as_ref().filter(|_| matches!(layer.content, LayerContent::Adjustment(_)));
+    let (image, uv) = match adjustment_mask {
+        Some(m) => {
+            let (mut image, uv) = crate::transform_tex::read_surface(&m.surface, None, b, max_side);
+            for p in &mut image.pixels {
+                *p = Color32::from_white_alpha(p.r());
+            }
+            (image, uv)
+        }
+        None => preview_image(&doc, id, lifted.as_ref(), b, max_side, styled),
+    };
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
         doc: Arc::new(pd),
         texture,
-        opacity: layer.opacity * layer.fill_opacity,
+        opacity: if adjustment_mask.is_some() { 0.6 } else { layer.opacity * layer.fill_opacity },
         above: Some(above),
         styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
         follow: Some(Follow { revision, hidden: if lifted.is_none() { vec![id] } else { Vec::new() } }),

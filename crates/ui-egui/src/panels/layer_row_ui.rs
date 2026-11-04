@@ -499,12 +499,16 @@ const QUEUED_S: f64 = 0.1;
 /// thumbnail sometimes didn't open the Color Picker). A third click starts over. Reported again:
 /// a pen tap that slides a few points is a click here (`tapped` includes [`slid_tap`]), and two
 /// clicks that land in one slow frame (egui then reports one click) are a double-click too.
+/// Both clicks hold the same modifier keys: a ⌘-click (which loads a mask as a selection) and a
+/// plain click after it are two clicks (user report: they opened the mask's settings).
 pub(crate) fn second_click(ctx: &egui::Context, tapped: bool, layer: u64, part: u8) -> bool {
     if !tapped {
         return false;
     }
     let id = egui::Id::unique("pc-layer-row-click");
     let (earliest, now) = click_time(ctx);
+    let keys = ctx.input(|i| u8::from(i.modifiers.command) | u8::from(i.modifiers.shift) << 1 | u8::from(i.modifiers.alt) << 2);
+    let part = part | keys << 5;
     let last: Option<(f64, u64, u8)> = ctx.data(|d| d.get_temp(id));
     let same_frame = ctx.input(|i| {
         i.pointer.button_clicked(egui::PointerButton::Primary)
