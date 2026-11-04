@@ -157,7 +157,7 @@ fn start_from_and_reset_go_back_to_the_preset() {
     h.get_by_label("Solarized Dark").click();
     h.run_steps(4);
     let d = draft(&h, id);
-    assert_eq!(d["customTheme"], json!({"base": "solarizedDark", "colors": {}}));
+    assert_eq!(d["customTheme"], json!({"base": "solarizedDark", "colors": {}, "unlinked": []}));
     assert_eq!(d["darkTheme"], "custom");
     assert_eq!(Tokens::get(&h.ctx), Tokens::for_kind(ThemeKind::SolarizedDark));
     // The Custom swatch is offered in both theme rows, without a favourite star.
@@ -193,4 +193,79 @@ fn the_preview_and_the_dialog_render_in_the_custom_colours() {
     // The dialog's own background, just left of the preview: the edited panel colour.
     let card = at(egui::pos2(preview.left() - 4.0, preview.center().y));
     assert!(near(card, Color32::from_rgb(0x20, 0x40, 0x60)), "dialog {card:?}");
+}
+
+fn typed_hex(h: &mut Harness<'static, PhotocraftApp>, label: &str, hex: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label(label).type_text(hex);
+    h.run_steps(3);
+}
+
+#[test]
+fn colours_that_start_out_the_same_are_linked_until_unlinked() {
+    let store: Arc<Mutex<Option<String>>> = Arc::default();
+    let mut h = harness(app_on(&store));
+    let id = open_custom_theme(&mut h);
+    const LINKED: &str = "Panel Background is linked to Title Bar and Toolbars: changing one changes all. Click to unlink.";
+    const UNLINKED: &str = "Panel Background is not linked. Click to link it to Title Bar and Toolbars.";
+    // Pro (Medium Gray) panels and title bar are both #535353: an edit to one changes both.
+    assert!(h.query_by_label(UNLINKED).is_none());
+    h.get_by_label(LINKED);
+    typed_hex(&mut h, "Panel Background hex", "#c03070");
+    let colors = draft(&h, id)["customTheme"]["colors"].clone();
+    assert_eq!(colors, json!({"card": "#c03070", "chrome": "#c03070"}));
+    assert_eq!(Tokens::get(&h.ctx).chrome, PINK, "the linked title bar shows it too");
+    // The canvas and its dots, and the accent, its border and the primary button, are links too.
+    let base = Tokens::for_kind(ThemeKind::ProMedium);
+    let mut custom = prefs::CustomTheme::default();
+    assert_eq!(super::custom_theme::linked(&custom, &base, "canvas"), ["canvas_dot"]);
+    assert_eq!(super::custom_theme::linked(&custom, &base, "accent"), ["accent_border", "primary_bg"]);
+    assert!(super::custom_theme::linked(&custom, &base, "danger").is_empty());
+    // Studio's transparent tab strip and selected row draw nothing: no link.
+    assert!(super::custom_theme::linked(&custom, &Tokens::for_kind(ThemeKind::Studio), "tab_strip").is_empty());
+
+    // Unlinked, the panel colour changes on its own; the title bar keeps the shared one.
+    h.get_by_label(LINKED).click();
+    h.run_steps(3);
+    assert_eq!(draft(&h, id)["customTheme"]["unlinked"], json!(["card"]));
+    typed_hex(&mut h, "Panel Background hex", "#204060");
+    let colors = draft(&h, id)["customTheme"]["colors"].clone();
+    assert_eq!(colors, json!({"card": "#204060", "chrome": "#c03070"}));
+    assert!(h.query_by_label(LINKED).is_none());
+
+    // Linked again, it takes the link's colour; a reset then resets the whole link.
+    h.get_by_label(UNLINKED).click();
+    h.run_steps(3);
+    let d = draft(&h, id);
+    assert_eq!(d["customTheme"]["unlinked"], json!([]));
+    assert_eq!(d["customTheme"]["colors"], json!({"card": "#c03070", "chrome": "#c03070"}));
+    h.get_by_label("Reset Panel Background").click();
+    h.run_steps(3);
+    assert_eq!(draft(&h, id)["customTheme"]["colors"], json!({}));
+
+    // Links are saved with the theme and survive a restart; Reset to Preset brings them back.
+    h.get_by_label(LINKED).click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(6);
+    let saved: Value = serde_json::from_str(store.lock().unwrap().as_deref().unwrap()).unwrap();
+    assert_eq!(saved["interface"]["customTheme"]["unlinked"], json!(["card"]));
+    let mut restarted = harness(app_on(&store));
+    assert_eq!(restarted.state().session.prefs().interface.custom_theme.unlinked.len(), 1);
+    let id = open_custom_theme(&mut restarted);
+    restarted.get_by_label(UNLINKED);
+    restarted.get_by_label("Reset to Preset").click();
+    restarted.run_steps(3);
+    assert_eq!(draft(&restarted, id)["customTheme"]["unlinked"], json!([]));
+    restarted.get_by_label(LINKED);
+
+    // A link of two with one colour taken out: linking the other puts both back together.
+    custom.unlinked.insert("chrome".into());
+    custom.colors.insert("chrome".into(), "#102030".into());
+    assert!(super::custom_theme::linked(&custom, &base, "card").is_empty());
+    super::custom_theme::relink(&mut custom, &base, "card");
+    assert!(custom.unlinked.is_empty());
+    assert_eq!(custom.colors.get("card").map(String::as_str), Some("#102030"));
 }

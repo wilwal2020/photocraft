@@ -2,14 +2,67 @@
 //! in the dialog's draft. The draft's appearance is the one on screen while Preferences is open
 //! (`appearance::draft_interface`), so every edit shows in the whole app at once; a preview in the
 //! group shows the colours too when the other appearance mode is the active one.
+//!
+//! Colours the starting theme gives the same value are linked: editing or resetting one does the
+//! same to the others. Each linked colour's chain button takes it out of its link, or puts it
+//! back (`prefs::CustomTheme::unlinked`).
 
 use super::fields::preference_matches;
 use super::{Color32, Map, RichText, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
 use crate::theme::{CUSTOM_COLOR_GROUPS, color_hex, parse_color_hex};
 
+/// The built-in theme a custom theme starts from.
+fn base_kind(custom: &prefs::CustomTheme) -> ThemeKind {
+    ThemeKind::from_name(custom.base.name()).unwrap_or_default()
+}
+
 /// The tokens of a saved or drafted custom theme.
 pub(super) fn custom_tokens(custom: &prefs::CustomTheme) -> Tokens {
-    Tokens::custom(ThemeKind::from_name(custom.base.name()).unwrap_or_default(), &custom.colors)
+    Tokens::custom(base_kind(custom), &custom.colors)
+}
+
+/// The editable colours, as (token, label).
+fn editable() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CUSTOM_COLOR_GROUPS.iter().flat_map(|(_, colors)| colors.iter().copied())
+}
+
+/// The other editable colours `name` is linked with by default: those the starting theme (`base`)
+/// gives the same colour. A transparent colour draws nothing and links with none.
+fn default_links(base: &Tokens, name: &str) -> Vec<&'static str> {
+    let Some(c) = base.color(name).filter(|c| c.a() > 0) else { return Vec::new() };
+    editable().map(|(n, _)| n).filter(|n| *n != name && base.color(n) == Some(c)).collect()
+}
+
+/// The colours an edit to `name` also changes: its default links still in the link, none when
+/// `name` itself was unlinked.
+pub(super) fn linked(custom: &prefs::CustomTheme, base: &Tokens, name: &str) -> Vec<&'static str> {
+    if custom.unlinked.contains(name) {
+        return Vec::new();
+    }
+    default_links(base, name).into_iter().filter(|n| !custom.unlinked.contains(*n)).collect()
+}
+
+/// Put `name` back in its link, taking the colour of the link it joins. When every other colour
+/// of the link was taken out, the first is put back with it.
+pub(super) fn relink(custom: &mut prefs::CustomTheme, base: &Tokens, name: &str) {
+    custom.unlinked.remove(name);
+    let mut partners = linked(custom, base, name);
+    if partners.is_empty()
+        && let Some(first) = default_links(base, name).first().copied()
+    {
+        custom.unlinked.remove(first);
+        partners.push(first);
+    }
+    let Some(partner) = partners.first() else { return };
+    // The link shares one colour: the partner's change, or the starting colour they both had.
+    match custom.colors.get(*partner).cloned() {
+        Some(hex) => custom.colors.insert(name.to_string(), hex),
+        None => custom.colors.remove(name),
+    };
+}
+
+fn label_of(name: &str) -> &'static str {
+    editable().find(|(n, _)| *n == name).map_or("", |(_, label)| label)
 }
 
 /// Whether a search (`query`, lowercased; empty matches everything) shows the Custom Theme group.
@@ -36,26 +89,30 @@ pub(super) fn custom_theme_editor(ui: &mut egui::Ui, obj: &mut Map<String, Value
         if crate::widgets::dropdown(ui, "custom-theme-base", tl!("Start From"), &mut base, &options, 200.0)
             && let Some(theme) = prefs::Theme::parse(&base)
         {
-            // A new starting point brings its own colours.
+            // A new starting point brings its own colours and links.
             custom.base = theme;
             custom.colors.clear();
+            custom.unlinked.clear();
         }
+        let edited = !custom.colors.is_empty() || !custom.unlinked.is_empty();
         let reset = ui
-            .add_enabled(!custom.colors.is_empty(), egui::Button::new(tl!("Reset to Preset")))
-            .on_hover_text(tl!("Go back to the colours of the theme it starts from"));
+            .add_enabled(edited, egui::Button::new(tl!("Reset to Preset")))
+            .on_hover_text(tl!("Go back to the colours and links of the theme it starts from"));
         if reset.clicked() {
             custom.colors.clear();
+            custom.unlinked.clear();
         }
     });
     ui.add_space(6.0);
     let tokens = custom_tokens(&custom);
+    let base = Tokens::for_kind(base_kind(&custom));
     preview(ui, &tokens);
     ui.add_space(6.0);
     for (group, colors) in CUSTOM_COLOR_GROUPS {
         ui.label(RichText::new(tl!(group)).color(t.text).strong());
         egui::Grid::new(("custom-theme-colors", *group)).num_columns(4).spacing([14.0, 4.0]).min_col_width(130.0).show(ui, |ui| {
             for (i, (name, label)) in colors.iter().enumerate() {
-                color_row(ui, &mut custom, &tokens, name, label);
+                color_row(ui, &mut custom, &tokens, &base, name, label);
                 if i % 2 == 1 || i + 1 == colors.len() {
                     ui.end_row();
                 }
@@ -71,17 +128,26 @@ pub(super) fn custom_theme_editor(ui: &mut egui::Ui, obj: &mut Map<String, Value
     }
 }
 
-/// The side of a colour's reset button.
+/// The side of a colour's link and reset buttons.
 const RESET_SIZE: f32 = 20.0;
 
+/// The room a hidden link or reset button leaves, item spacing included.
+fn skip_button(ui: &mut egui::Ui) {
+    ui.add_space(RESET_SIZE + ui.spacing().item_spacing.x);
+}
+
 /// One colour's label and controls (two grid cells): its swatch, which opens the Color Picker and
-/// previews while it is open, a hex field (`#rrggbb` or `#rrggbbaa`), and a button that puts back
-/// the starting theme's colour once it has been changed.
-fn color_row(ui: &mut egui::Ui, custom: &mut prefs::CustomTheme, tokens: &Tokens, name: &str, label: &str) {
+/// previews while it is open, a hex field (`#rrggbb` or `#rrggbbaa`), the link button of a colour
+/// that shares its starting colour with others, and a button that puts back the starting theme's
+/// colour once it has been changed. An edit or a reset also goes to the colours linked with it.
+fn color_row(ui: &mut egui::Ui, custom: &mut prefs::CustomTheme, tokens: &Tokens, base: &Tokens, name: &str, label: &str) {
     let Some(mut color) = tokens.color(name) else { return };
     let label = tl!(label);
+    let links = linked(custom, base, name);
     ui.label(label);
     ui.horizontal(|ui| {
+        // The buttons' room is kept when they are hidden, so the columns line up in every group.
+        link_button(ui, custom, base, name, label, !links.is_empty());
         let mut changed = crate::widgets::color_edit_button_srgba(ui, &mut color, &crate::color_picker_ui::title_for(label)).changed();
         // A colour the theme leaves transparent (Studio's tab strip) keeps its alpha in the
         // picker: a picked colour becomes opaque so it shows.
@@ -91,18 +157,47 @@ fn color_row(ui: &mut egui::Ui, custom: &mut prefs::CustomTheme, tokens: &Tokens
         }
         changed |= hex_input(ui, name, label, &mut color);
         if changed {
-            custom.colors.insert(name.to_string(), color_hex(color));
+            let hex = color_hex(color);
+            for n in links.iter().copied().chain([name]) {
+                custom.colors.insert(n.to_string(), hex.clone());
+            }
         }
-        // The button's room is kept when it is hidden, so the columns line up in every group.
         if custom.colors.contains_key(name) {
             let tip = crate::i18n::fmt(tl!("Reset {color}"), &[("color", label)]);
             if crate::icons::button(ui, "undo-2", RESET_SIZE, false, &tip).clicked() {
-                custom.colors.remove(name);
+                for n in links.iter().copied().chain([name]) {
+                    custom.colors.remove(n);
+                }
             }
         } else {
-            ui.add_space(RESET_SIZE);
+            skip_button(ui);
         }
     });
+}
+
+/// The chain button of a colour that starts out the same as others: lit while the colour is
+/// linked (`on`), where a click takes it out of the link; broken while it isn't, where a click
+/// puts it back. The tooltip names the colours of the link.
+fn link_button(ui: &mut egui::Ui, custom: &mut prefs::CustomTheme, base: &Tokens, name: &str, label: &str, on: bool) {
+    let partners = default_links(base, name);
+    if partners.is_empty() {
+        skip_button(ui);
+        return;
+    }
+    let names = partners.iter().map(|n| tl!(label_of(n))).collect::<Vec<_>>().join(", ");
+    let (icon, template) = if on {
+        ("link", "{color} is linked to {colors}: changing one changes all. Click to unlink.")
+    } else {
+        ("unlink", "{color} is not linked. Click to link it to {colors}.")
+    };
+    let tip = crate::i18n::fmt(tl!(template), &[("color", label), ("colors", &names)]);
+    if crate::icons::button(ui, icon, RESET_SIZE, on, &tip).clicked() {
+        if on {
+            custom.unlinked.insert(name.to_string());
+        } else {
+            relink(custom, base, name);
+        }
+    }
 }
 
 /// A hex field for a theme colour; true when a typed value changed it.

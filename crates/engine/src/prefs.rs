@@ -352,11 +352,15 @@ impl Default for Interface {
 /// Preferences › Interface › Custom Theme: the built-in theme it starts from, and the colours the
 /// user changed, by design-token name (`card`, `text`, `accent`…) as `#rrggbb` or `#rrggbbaa`.
 /// The shell owns the token names; a name it doesn't know is kept and ignored.
+///
+/// Colours the base theme gives the same value start out linked (an edit to one changes them
+/// all); `unlinked` lists the tokens the user took out of their link.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CustomTheme {
     pub base: Theme,
     pub colors: BTreeMap<String, String>,
+    pub unlinked: std::collections::BTreeSet<String>,
 }
 
 impl CustomTheme {

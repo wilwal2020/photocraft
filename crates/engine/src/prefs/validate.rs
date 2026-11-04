@@ -187,18 +187,33 @@ pub fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {
     }
 }
 
-/// `interface.customTheme` (or its `base` / `colors`): a known base theme and at most
-/// [`CustomTheme::MAX_COLORS`] colours keyed by short token names.
+/// A theme colour's token name: short, `[A-Za-z0-9_]`.
+fn is_token_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 32 && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// `interface.customTheme` (or its `base` / `colors` / `unlinked`): a known base theme, at most
+/// [`CustomTheme::MAX_COLORS`] colours keyed by short token names, and as many unlinked names.
 fn check_custom_theme(path: &str, v: &Value) -> std::result::Result<(), String> {
-    let (base, colors) = match path {
+    let (base, colors, unlinked) = match path {
         "interface.customTheme" => {
-            let obj = v.as_object().ok_or("`interface.customTheme` must be an object with `base` and `colors`")?;
-            (obj.get("base"), obj.get("colors"))
+            let obj = v.as_object().ok_or("`interface.customTheme` must be an object with `base`, `colors` and `unlinked`")?;
+            (obj.get("base"), obj.get("colors"), obj.get("unlinked"))
         }
-        "interface.customTheme.base" => (Some(v), None),
-        "interface.customTheme.colors" => (None, Some(v)),
+        "interface.customTheme.base" => (Some(v), None, None),
+        "interface.customTheme.colors" => (None, Some(v), None),
+        "interface.customTheme.unlinked" => (None, None, Some(v)),
         _ => return Ok(()),
     };
+    if let Some(unlinked) = unlinked {
+        let names = unlinked.as_array().ok_or("`interface.customTheme.unlinked` must be a list of theme colour names")?;
+        if names.len() > CustomTheme::MAX_COLORS {
+            return Err(format!("`interface.customTheme.unlinked` holds at most {} names", CustomTheme::MAX_COLORS));
+        }
+        if let Some(bad) = names.iter().find(|n| !n.as_str().is_some_and(is_token_name)) {
+            return Err(format!("`{bad}` is not a theme colour name"));
+        }
+    }
     if let Some(base) = base
         && base.as_str().and_then(Theme::parse).is_none()
     {
@@ -210,7 +225,7 @@ fn check_custom_theme(path: &str, v: &Value) -> std::result::Result<(), String> 
             return Err(format!("`interface.customTheme.colors` holds at most {} colours", CustomTheme::MAX_COLORS));
         }
         for (name, c) in map {
-            if name.is_empty() || name.len() > 32 || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+            if !is_token_name(name) {
                 return Err(format!("`{name}` is not a theme colour name"));
             }
             if c.as_str().and_then(parse_hex_rgba).is_none() {

@@ -195,6 +195,16 @@ fn custom_theme_persists_and_rejects_invalid_values() {
     assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.base", "value": "breezeDark"})).is_ok());
     assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.colors", "value": {"text": "#ffffff80"}})).is_ok());
     assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.colors", "value": {"text": 3}})).is_err());
+    // Colours taken out of their link are saved too.
+    s.execute("prefs.set", json!({"path": "interface.customTheme.unlinked", "value": ["card", "chrome"]})).unwrap();
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    let unlinked: Vec<&str> = restored.prefs().interface.custom_theme.unlinked.iter().map(String::as_str).collect();
+    assert_eq!(unlinked, ["card", "chrome"]);
+    for invalid in [json!("card"), json!([3]), json!(["bad name"])] {
+        assert!(s.execute("prefs.set", json!({"path": "interface.customTheme.unlinked", "value": invalid})).is_err(), "{invalid}");
+    }
+    assert!(s.execute("prefs.set", json!({"path": "interface.customTheme", "value": {"unlinked": [""]}})).is_err());
     assert_eq!(parse_hex_rgba("#ffffff80"), Some([255, 255, 255, 128]));
     assert_eq!(parse_hex_rgba("102030"), Some([16, 32, 48, 255]));
     assert_eq!(parse_hex_rgba("#1020"), None);
