@@ -586,6 +586,11 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
             (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(h);
             surface_fp(&m.surface, h, pin);
         }
+        // The effects' own masks shape a child's composite (their Debug names no pixels).
+        for (i, m) in l.effects.items.iter().enumerate().filter_map(|(i, e)| Some((i, e.mask()?))) {
+            (i, m.enabled, m.density.to_bits()).hash(h);
+            surface_fp(&m.surface, h, pin);
+        }
         format!("{:?}{:?}", l.vector_mask, l.effects).hash(h);
         l.blend_if.hash(h);
         l.advanced.hash(h);

@@ -4,7 +4,7 @@ use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::cell_rect;
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
-use super::{Arc, Compositor, DocId, HashMap, I, Kernel, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, TileCoord, plan};
+use super::{Arc, Compositor, DocId, HashMap, I, Kernel, Pattern, Plan, Rect, Surface, TILE_SIZE, TileCoord, plan};
 
 impl Compositor {
     /// Bring the pages of `cell` that `plan` samples up to date and resolve its effect maps.
@@ -40,14 +40,13 @@ impl Compositor {
                         (keys.len() - 1, r)
                     },
                 );
-            let mask = p
-                .mask
-                .as_ref()
-                .and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats))
-                .map(|(k, r)| {
-                    keys.push(k);
-                    (keys.len() - 1, r)
-                });
+            let mask =
+                p.mask.as_ref().and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, m.role, cell), m.surface.get(), ma.intersect(&cr), stats)).map(
+                    |(k, r)| {
+                        keys.push(k);
+                        (keys.len() - 1, r)
+                    },
+                );
             views.push((tex, mask));
             maps.push(p.map.and_then(|m| {
                 let f = plan.fx.get(m.fx)?;

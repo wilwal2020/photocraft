@@ -129,6 +129,8 @@ impl Kernel {
 pub enum Role {
     Content,
     Mask,
+    /// The own mask of the layer's effect at that index (`FxCommon::mask`).
+    FxMask(u32),
     /// A stroked shape's stroke alone (its fill uses `Content`).
     Stroke,
 }
@@ -208,6 +210,8 @@ impl SurfaceRef<'_> {
 #[derive(Clone, Debug)]
 pub struct MaskUse<'a> {
     pub layer: LayerId,
+    /// Which of the layer's masks: `Role::Mask`, or an effect's own (`Role::FxMask`).
+    pub role: Role,
     pub surface: SurfaceRef<'a>,
     pub density: f32,
     pub default: f32,

@@ -60,6 +60,7 @@ const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment res
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
+const F_FX_MASK: u32 = 2097152u;   // lerp: B (A with an effect painted) back towards A by the pass mask (the effect's own mask); p0.x linear, p0.y A reads as zero
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
@@ -1061,6 +1062,20 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let a = textureLoad(tex_a, p, 0);
     let b = textureLoad(tex_b, p, 0);
+    if ((op.flags & F_FX_MASK) != 0u) {
+        // compose::effects: the effect's coverage times its own mask. Compositing is affine in
+        // the coverage, so that is the painted result mixed back towards the one before it
+        // (premultiplied), or for the outside strokes' accumulators the values themselves.
+        let k = mask_value(doc_px(p));
+        let a0 = select(a, vec4(0.0), op.p0.y > 0.5);
+        if (op.p0.x > 0.5) {
+            return a0 + (b - a0) * k;
+        }
+        let pa = vec4(a0.rgb * a0.a, a0.a);
+        let pm = pa + (vec4(b.rgb * b.a, b.a) - pa) * k;
+        if (pm.a <= 0.0) { return vec4(0.0); }
+        return vec4(pm.rgb / pm.a, pm.a);
+    }
     if ((op.flags & F_QUANT) != 0u) {
         return floor(a * op.p0.x + 0.5) / op.p0.x;
     }

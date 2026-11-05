@@ -108,6 +108,9 @@ pub const F_TEXT_GAMMA: u32 = 8192;
 /// (`p0.x`) inside the shape, times the shape's alpha: `FxInit` `INIT_INSIDE` then
 /// `INIT_ALPHA` in the merge, for a layer with no interior effects between them.
 pub const F_LAYER_SHAPE: u32 = 1_048_576;
+/// Lerp: B (A with an effect painted) mixed back towards A by the pass mask, the effect's own mask
+/// (`params[0]`: x linear, y A reads as zero).
+pub const F_FX_MASK: u32 = 2_097_152;
 
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
 /// [this layer, underlying layer]; every range as two floats, `black low × 256 + black high` and
@@ -264,7 +267,7 @@ impl<'a> Planner<'a> {
     fn mask_use(&self, layer: &'a Layer) -> Option<MaskUse<'a>> {
         if let Some(c) = photocraft_compose::masks::combined_mask(layer, self.cx.canvas) {
             let default = c.default_pixel().first().copied().unwrap_or(1.0);
-            return Some(MaskUse { layer: layer.id, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
+            return Some(MaskUse { layer: layer.id, role: Role::Mask, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
         }
         let m = layer.mask.as_ref()?;
         if !m.enabled {
@@ -272,10 +275,51 @@ impl<'a> Planner<'a> {
         }
         Some(MaskUse {
             layer: layer.id,
+            role: Role::Mask,
             surface: SurfaceRef::Doc(&m.surface),
             density: m.density,
             default: m.surface.default_pixel().first().copied().unwrap_or(1.0),
         })
+    }
+
+    /// The own mask of `layer`'s effect `e` (`FxCommon::mask`), if it has one switched on.
+    fn fx_mask_use(&self, layer: &'a Layer, e: &'a Effect) -> Option<MaskUse<'a>> {
+        let m = e.active_mask()?;
+        let index = layer.effects.items.iter().position(|x| std::ptr::eq(x, e))?;
+        Some(MaskUse {
+            layer: layer.id,
+            role: Role::FxMask(u32::try_from(index).ok()?),
+            surface: SurfaceRef::Doc(&m.surface),
+            density: m.density,
+            default: m.surface.default_pixel().first().copied().unwrap_or(1.0),
+        })
+    }
+
+    /// `after` (`before` with an effect painted) mixed back towards `before` by the effect's own
+    /// mask `m`: the CPU's coverage × mask, as compositing is affine in the coverage. `linear`
+    /// mixes the values as they are (the outside strokes' accumulators); no `before` reads as
+    /// zero. Consumes both slots.
+    fn own_mask_mix(&mut self, m: MaskUse<'a>, before: Option<Slot>, after: Slot, linear: bool, clip: Rect) -> Slot {
+        let mut p = Pass::new(Kernel::Lerp, 0);
+        p.params[0] = [f32::from(u8::from(linear)), f32::from(u8::from(before.is_none())), 0.0, 0.0];
+        p.a = Some(before.unwrap_or_else(|| self.retain(after)));
+        p.b = Some(after);
+        p.mask = Some(m);
+        p.flags = F_FX_MASK;
+        p.clip = Some(clip);
+        self.emit(p)
+    }
+
+    /// `draw` (which paints effect `e` onto `dst`), within the effect's own mask.
+    fn masked(&mut self, layer: &'a Layer, e: &'a Effect, dst: Slot, clip: Rect, draw: impl FnOnce(&mut Self, Slot) -> Slot) -> Slot {
+        match self.fx_mask_use(layer, e) {
+            None => draw(self, dst),
+            Some(m) => {
+                let before = self.retain(dst);
+                let after = draw(self, dst);
+                self.own_mask_mix(m, Some(before), after, false, clip)
+            }
+        }
     }
 
     /// `compose::apply_blend_if`: `after` (the backdrop with `layer` drawn) mixed back towards
@@ -780,10 +824,6 @@ impl<'a> Planner<'a> {
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
         let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
         check_effect_gradients(&items)?;
-        // An effect's own mask (a PhotoCraft extension) is drawn by the CPU compositor.
-        if items.iter().any(|e| e.active_mask().is_some()) {
-            return Err(Unsupported("an effect's own mask".into()));
-        }
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
@@ -918,18 +958,20 @@ impl<'a> Planner<'a> {
                 // in a mode that blends with it (as the CPU renderer: `shadow_see_through`).
                 let flags = if s.knocks_out { F_KNOCKOUT } else { 0 };
                 let see_through = photocraft_compose::effects::shadow_see_through(layer);
-                w = self.paint_k(
-                    w,
-                    content,
-                    Cov::Map(map(i, 0), 0.0),
-                    &Paint::Color(s.color.to_rgb()),
-                    s.common.blend,
-                    s.common.opacity,
-                    flags,
-                    clip,
-                    sb,
-                    see_through,
-                );
+                w = self.masked(layer, e, w, clip, |me, w| {
+                    me.paint_k(
+                        w,
+                        content,
+                        Cov::Map(map(i, 0), 0.0),
+                        &Paint::Color(s.color.to_rgb()),
+                        s.common.blend,
+                        s.common.opacity,
+                        flags,
+                        clip,
+                        sb,
+                        see_through,
+                    )
+                });
             }
         }
         for &(i, e) in &rev {
@@ -938,7 +980,9 @@ impl<'a> Planner<'a> {
                 // Match CPU exterior knockout: a see-through fill must not reveal the
                 // glow through its own shape. The shader applies m × (1 − alpha × k).
                 let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
-                w = self.paint_k(w, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_KNOCKOUT, clip, sb, see_through);
+                w = self.masked(layer, e, w, clip, |me, w| {
+                    me.paint_k(w, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_KNOCKOUT, clip, sb, see_through)
+                });
             }
         }
 
@@ -998,6 +1042,7 @@ impl<'a> Planner<'a> {
     fn effect_paints(&mut self, work: &mut EffectState<'a>) {
         let rev = work.rev.clone();
         let fx = work.fx;
+        let layer = work.layer;
         let content = work.content;
         let mut l = work.l;
         let clip = work.clip;
@@ -1009,33 +1054,43 @@ impl<'a> Planner<'a> {
                 && let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable())
             {
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
-                l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| me.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb));
             }
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb)
+                });
             }
         }
         for &(_, e) in &rev {
             if let Effect::ColorOverlay { common, color } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Color(color.to_rgb()), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::One, &Paint::Color(color.to_rgb()), common.blend, common.opacity, F_GATE, clip, sb)
+                });
             }
         }
         for &(i, e) in &rev {
             if let Effect::Satin(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb)
+                });
             }
         }
         for &(i, e) in &rev {
             if let Effect::InnerGlow(g) = e {
                 let paint = self.glow_paint(g, anchor);
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb)
+                });
             }
         }
         for &(i, e) in &rev {
             if let Effect::InnerShadow(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb)
+                });
             }
         }
         work.l = l;
@@ -1076,17 +1131,10 @@ impl<'a> Planner<'a> {
                 let (in_w, _) = stroke_widths(st);
                 if in_w > 0.0 {
                     let paint = self.fx_paint(&st.paint, anchor);
-                    l = self.paint(
-                        l,
-                        content,
-                        Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
-                        &paint,
-                        st.common.blend,
-                        st.common.opacity,
-                        F_GATE,
-                        clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
-                    );
+                    let frame = photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb);
+                    l = self.masked(layer, e, l, clip, |me, l| {
+                        me.paint(l, content, Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)), &paint, st.common.blend, st.common.opacity, F_GATE, clip, frame)
+                    });
                 }
             }
         }
@@ -1094,6 +1142,7 @@ impl<'a> Planner<'a> {
     }
 
     fn effect_inner_bevel(&mut self, work: &mut EffectState<'a>) {
+        let layer = work.layer;
         let rev = work.rev.clone();
         let fx = work.fx;
         let content = work.content;
@@ -1106,18 +1155,23 @@ impl<'a> Planner<'a> {
             if let Effect::BevelEmboss(b) = e
                 && bevel_paint(b) == photocraft_compose::effects::BevelPaint::Inner
             {
-                l = self.paint(
-                    l,
-                    content,
-                    Cov::Map(map(i, 0), 0.0),
-                    &Paint::Color(b.highlight_color.to_rgb()),
-                    b.highlight.blend,
-                    b.highlight.opacity,
-                    F_REL,
-                    clip,
-                    sb,
-                );
-                l = self.paint(l, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, F_REL, clip, sb);
+                // Each paint within the effect's own mask.
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(
+                        l,
+                        content,
+                        Cov::Map(map(i, 0), 0.0),
+                        &Paint::Color(b.highlight_color.to_rgb()),
+                        b.highlight.blend,
+                        b.highlight.opacity,
+                        F_REL,
+                        clip,
+                        sb,
+                    )
+                });
+                l = self.masked(layer, e, l, clip, |me, l| {
+                    me.paint(l, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, F_REL, clip, sb)
+                });
             }
         }
         work.l = l;
@@ -1165,6 +1219,10 @@ impl<'a> Planner<'a> {
                 cover = Some(self.fx_init(clip, ll, None, INIT_COVER, 1.0));
             }
             for (n, &(i, st)) in outs.iter().enumerate() {
+                // Within the stroke's own mask its share and coverage mix back towards the
+                // accumulators before it (both are sums of the strokes' shares).
+                let own = items.get(i).and_then(|e| self.fx_mask_use(layer, e));
+                let (acc_before, cover_before) = if own.is_some() { (acc.map(|s| self.retain(s)), cover.map(|s| self.retain(s))) } else { (None, None) };
                 let paint = self.fx_paint(&st.paint, anchor);
                 let flags = F_STROKE_OUT | if vector_shape { F_VECTOR } else { 0 } | if outline { F_OUTLINE } else { 0 } | if n == 0 { F_FIRST } else { 0 };
                 // Share × blended colour, then coverage (both read the coverage so far).
@@ -1194,8 +1252,17 @@ impl<'a> Planner<'a> {
                 p.adjust_kind = 1;
                 p.map = Some(map(i, 0));
                 p.c = cover;
-                cover = Some(self.emit(p));
-                acc = Some(a);
+                let c = self.emit(p);
+                match own {
+                    Some(m) => {
+                        acc = Some(self.own_mask_mix(m.clone(), acc_before, a, true, clip));
+                        cover = Some(self.own_mask_mix(m, cover_before, c, true, clip));
+                    }
+                    None => {
+                        acc = Some(a);
+                        cover = Some(c);
+                    }
+                }
             }
             let mut p = Pass::new(Kernel::FxStrokeEnd, 0);
             p.a = Some(w);
@@ -1208,6 +1275,7 @@ impl<'a> Planner<'a> {
     }
 
     fn effect_outer_bevel(&mut self, work: &mut EffectState<'a>) {
+        let layer = work.layer;
         let rev = work.rev.clone();
         let bevel_paint = |b: &photocraft_doc::Bevel| photocraft_compose::effects::bevel_geom(b).paint;
         let fx = work.fx;
@@ -1220,19 +1288,22 @@ impl<'a> Planner<'a> {
             if let Effect::BevelEmboss(b) = e
                 && bevel_paint(b) == photocraft_compose::effects::BevelPaint::Outer
             {
-                let k = 0;
-                w = self.paint(
-                    w,
-                    content,
-                    Cov::Map(map(i, k), 0.0),
-                    &Paint::Color(b.highlight_color.to_rgb()),
-                    b.highlight.blend,
-                    b.highlight.opacity,
-                    0,
-                    clip,
-                    sb,
-                );
-                w = self.paint(w, content, Cov::Map(map(i, k + 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, 0, clip, sb);
+                w = self.masked(layer, e, w, clip, |me, w| {
+                    me.paint(
+                        w,
+                        content,
+                        Cov::Map(map(i, 0), 0.0),
+                        &Paint::Color(b.highlight_color.to_rgb()),
+                        b.highlight.blend,
+                        b.highlight.opacity,
+                        0,
+                        clip,
+                        sb,
+                    )
+                });
+                w = self.masked(layer, e, w, clip, |me, w| {
+                    me.paint(w, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, 0, clip, sb)
+                });
             }
         }
 
@@ -1254,10 +1325,10 @@ impl<'a> Planner<'a> {
         let bevel_paint = |b: &photocraft_doc::Bevel| photocraft_compose::effects::bevel_geom(b).paint;
         let map = |item: usize, map: usize| MapRef { fx, item, map };
         let mode = if premerge || layer.blend == BlendMode::PassThrough { BlendMode::Normal } else { layer.blend };
-        let late: Vec<(usize, &'a photocraft_doc::Bevel)> = rev
+        let late: Vec<(usize, &'a Effect, &'a photocraft_doc::Bevel)> = rev
             .iter()
-            .filter_map(|&(i, e)| if let Effect::BevelEmboss(b) = e { Some((i, b)) } else { None })
-            .filter(|(_, b)| bevel_paint(b) == photocraft_compose::effects::BevelPaint::Both)
+            .filter_map(|&(i, e)| if let Effect::BevelEmboss(b) = e { Some((i, e, b)) } else { None })
+            .filter(|(_, _, b)| bevel_paint(b) == photocraft_compose::effects::BevelPaint::Both)
             .collect();
         if late.is_empty() {
             let mut p = Pass::new(Kernel::FxMerge, 0);
@@ -1283,9 +1354,11 @@ impl<'a> Planner<'a> {
             p.extra[3] = photocraft_compose::text_gamma(layer);
             p.clip = Some(clip);
             let mut m = self.emit(p);
-            for (i, b) in late {
+            for (i, e, b) in late {
                 for (k, color, fxc) in [(0, &b.highlight_color, &b.highlight), (1, &b.shadow_color, &b.shadow)] {
-                    m = self.paint(m, content, Cov::Map(map(i, k), 0.0), &Paint::Color(color.to_rgb()), fxc.blend, fxc.opacity, 0, clip, sb);
+                    m = self.masked(layer, e, m, clip, |me, m| {
+                        me.paint(m, content, Cov::Map(map(i, k), 0.0), &Paint::Color(color.to_rgb()), fxc.blend, fxc.opacity, 0, clip, sb)
+                    });
                 }
             }
             let mut p = Pass::new(Kernel::FxMerge, 0);

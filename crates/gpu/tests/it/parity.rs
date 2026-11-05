@@ -1945,6 +1945,60 @@ fn layer_effects_every_kind() {
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
 
+/// Effect masks (`FxCommon::mask`, user request): every effect kind with a mask of its own that
+/// hides the right part and half-hides a band, as the CPU draws it (coverage × mask), with the
+/// mask then painted, switched off and on. They used to send the whole canvas to the CPU (user
+/// report: painting such a page lagged ~220 ms a frame).
+#[test]
+fn layer_effects_every_kind_through_their_own_masks() {
+    let Some(mut g) = gpu() else { return };
+    let own = || {
+        let mut m = LayerMask::reveal_all();
+        m.surface.fill_rect(Rect::new(52, 0, 96, 80), &[0.0]);
+        m.surface.fill_rect(Rect::new(0, 30, 52, 44), &[0.4]);
+        m
+    };
+    let mut failures = Vec::new();
+    for depth in [SampleType::U8, SampleType::U16] {
+        for (name, mut fx) in effect_cases() {
+            for e in &mut fx {
+                *e.mask_mut() = Some(own());
+            }
+            let mut d = fx_doc(96, 80, depth);
+            d.patterns.push(checker_pattern());
+            let mut l = blob("fx", d.pixel_format(), 46.0, 40.0, 22.0, [0.9, 0.4, 0.2]);
+            l.effects.items = fx;
+            d.layers.push(l);
+            let mut step = |d: &Document, what: &str| {
+                if let Err(e) = fx_diff(&mut g, d, &format!("{name} {depth:?} {what}")) {
+                    failures.push(e);
+                }
+            };
+            step(&d, "masked");
+            let l = d.layers.last_mut().unwrap();
+            for e in &mut l.effects.items {
+                e.mask_mut().as_mut().unwrap().surface.fill_rect(Rect::new(20, 0, 34, 80), &[0.0]);
+            }
+            step(&d, "mask painted");
+            let l = d.layers.last_mut().unwrap();
+            if let Some(m) = l.effects.items.first_mut().and_then(|e| e.mask_mut().as_mut()) {
+                m.enabled = false;
+            }
+            step(&d, "first mask off");
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:
+{}",
+        failures.len(),
+        failures.join(
+            "
+"
+        )
+    );
+}
+
 #[test]
 fn exterior_effects_merge_from_the_shape_at_any_fill() {
     // Drop shadows and outer glows alone: the merge builds the layer from its shape (fill inside

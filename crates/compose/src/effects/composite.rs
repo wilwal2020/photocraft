@@ -313,25 +313,26 @@ impl<'a> EffectPass<'a> {
         }
     }
 
-    /// Coverage `m` of effect `i` within its own mask.
-    fn own(&self, i: usize, mut m: Map) -> Map {
-        if let Some(Some(k)) = self.own_masks.get(i) {
-            m.v.iter_mut().zip(k).for_each(|(v, k)| *v *= k);
+    /// `draw` (one paint of effect `i` onto `target`, over the region), within the effect's own
+    /// mask: the painted pixels mixed back towards the ones before it (premultiplied) where the
+    /// mask is dark. Compositing is affine in the coverage, so this is the coverage × mask, but
+    /// it also fades what coverage alone doesn't: a gradient glow keeps its colours, Dissolve its
+    /// grain. The GPU compositor mixes the same way (`F_FX_MASK`).
+    fn within_own(&self, i: usize, target: &mut Buffer, draw: impl FnOnce(&mut Buffer)) {
+        let Some(Some(k)) = self.own_masks.get(i) else {
+            draw(target);
+            return;
+        };
+        let before = target.px.clone();
+        draw(target);
+        for ((p, b), k) in target.px.iter_mut().zip(&before).zip(k) {
+            *p = mix_premul(*b, *p, *k);
         }
-        m
     }
 
     /// Effect `i`'s own mask value at pixel `p` of the region (1 without one).
     fn own_at(&self, i: usize, p: usize) -> f32 {
         self.own_masks.get(i).and_then(Option::as_ref).and_then(|k| k.get(p)).copied().unwrap_or(1.0)
-    }
-
-    /// Coverage `m` shared by several effects, within effect `i`'s own mask.
-    fn own_of<'m>(&self, i: usize, m: &'m Map) -> std::borrow::Cow<'m, Map> {
-        match self.own_masks.get(i) {
-            Some(Some(_)) => std::borrow::Cow::Owned(self.own(i, m.clone())),
-            _ => std::borrow::Cow::Borrowed(m),
-        }
     }
 
     /// The enabled effects with their indexes, last listed first.
@@ -381,23 +382,23 @@ impl<'a> EffectPass<'a> {
     fn paint_exterior(&self, work: &mut Buffer, shape: &Map) {
         for (i, e) in self.rev() {
             if let Effect::DropShadow(s) = e {
-                let mut m = self.own(i, self.fx(i, 0));
+                let mut m = self.fx(i, 0);
                 if s.knocks_out {
                     // The layer hides the shadow beneath it where its fill is see-through (at 100 %
                     // fill in a normal mode it covers it anyway; at 0 % the shape shows the bare
                     // backdrop), and wholly in a mode that blends with it ([`shadow_see_through`]).
                     knock_out_exterior(&mut m, shape, 1.0 - shadow_see_through(self.layer));
                 }
-                paint_color(work, &m, rgb(&s.color), s.common.blend, s.common.opacity);
+                self.within_own(i, work, |w| paint_color(w, &m, rgb(&s.color), s.common.blend, s.common.opacity));
             }
         }
         for (i, e) in self.rev() {
             if let Effect::OuterGlow(g) = e {
-                let mut m = self.own(i, self.fx(i, 0));
+                let mut m = self.fx(i, 0);
                 // The glow is behind the shape, not painted across its interior when Fill is 0 %.
                 // Preserve the existing anti-aliased edge when the fill is fully opaque.
                 knock_out_exterior(&mut m, shape, self.layer.fill_opacity);
-                paint_glow(work, &m, g, self.sb, self.anchor, self.big, self.patterns);
+                self.within_own(i, work, |w| paint_glow(w, &m, g, self.sb, self.anchor, self.big, self.patterns));
             }
         }
     }
@@ -431,38 +432,31 @@ impl<'a> EffectPass<'a> {
         let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
         for (i, e) in self.rev() {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-                paint_pattern(
-                    lay,
-                    &self.own_of(i, &full),
-                    patterns,
-                    name,
-                    id,
-                    Placement::anchored(anchor, *link, *phase, *scale, *angle),
-                    big,
-                    common.blend,
-                    common.opacity,
-                );
+                self.within_own(i, lay, |l| {
+                    paint_pattern(l, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity)
+                });
             }
         }
         for (i, e) in self.rev() {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                paint_fx(lay, &self.own_of(i, &full), &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
+                self.within_own(i, lay, |l| paint_fx(l, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns))
             }
         }
         for (i, e) in self.rev() {
             if let Effect::ColorOverlay { common, color } = e {
-                paint_color(lay, &self.own_of(i, &full), rgb(color), common.blend, common.opacity);
+                self.within_own(i, lay, |l| paint_color(l, &full, rgb(color), common.blend, common.opacity));
             }
         }
         for (i, e) in self.rev() {
             if let Effect::Satin(s) = e {
-                let m = self.own(i, relative_to_shape(self.fx(i, 0), shape));
-                paint_color(lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
+                let m = relative_to_shape(self.fx(i, 0), shape);
+                self.within_own(i, lay, |l| paint_color(l, &m, rgb(&s.color), s.common.blend, s.common.opacity));
             }
         }
         for (i, e) in self.rev() {
             if let Effect::InnerGlow(g) = e {
-                paint_glow(lay, &self.own(i, relative_to_shape(self.fx(i, 0), shape)), g, sb, anchor, big, patterns);
+                let m = relative_to_shape(self.fx(i, 0), shape);
+                self.within_own(i, lay, |l| paint_glow(l, &m, g, sb, anchor, big, patterns));
             }
         }
         if self.interior_group() {
@@ -472,8 +466,8 @@ impl<'a> EffectPass<'a> {
         }
         for (i, e) in self.rev() {
             if let Effect::InnerShadow(s) = e {
-                let m = self.own(i, relative_to_shape(self.fx(i, 0), shape));
-                paint_color(lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
+                let m = relative_to_shape(self.fx(i, 0), shape);
+                self.within_own(i, lay, |l| paint_color(l, &m, rgb(&s.color), s.common.blend, s.common.opacity));
             }
         }
     }
@@ -529,8 +523,9 @@ impl<'a> EffectPass<'a> {
             for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&fields.din) {
                 *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
             }
-            let m = self.own(fx, m);
-            paint_fx(lay, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
+            self.within_own(fx, lay, |l| {
+                paint_fx(l, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns)
+            });
         }
     }
 
@@ -541,17 +536,14 @@ impl<'a> EffectPass<'a> {
             if let Effect::BevelEmboss(b) = e
                 && self.maps.bevel_paint[i] == kind
             {
-                let map = |k: usize| {
-                    self.own(
-                        i,
-                        match shape {
-                            Some(shape) => relative_to_shape(self.fx(i, k), shape),
-                            None => self.fx(i, k),
-                        },
-                    )
+                let map = |k: usize| match shape {
+                    Some(shape) => relative_to_shape(self.fx(i, k), shape),
+                    None => self.fx(i, k),
                 };
-                paint_color(target, &map(0), rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
-                paint_color(target, &map(1), rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
+                // Each paint within the effect's own mask (as the GPU mixes them).
+                let (hi, lo) = (map(0), map(1));
+                self.within_own(i, target, |t| paint_color(t, &hi, rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity));
+                self.within_own(i, target, |t| paint_color(t, &lo, rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity));
             }
         }
     }
@@ -636,11 +628,13 @@ impl<'a> EffectPass<'a> {
         for (i, sh) in share.iter_mut().enumerate() {
             let band = (out_w + 0.5 - d[i]).clamp(0.0, 1.0);
             let k = if inside(shape.v[i]) { if vector_outline { 0.0 } else { band * outline_share(shape.v[i], lay.px[i][3]) } } else { band };
-            let mut k = k * st.common.opacity * self.own_at(fx, i);
+            let mut k = k * st.common.opacity;
             if st.common.blend == BlendMode::Dissolve {
                 let (x, y) = (i64::from(big.x0) + (i % w) as i64, i64::from(big.y0) + (i / w) as i64);
                 k = if k > 0.0 && dissolves_in(x, y, k) { 1.0 } else { 0.0 };
             }
+            // Within its own mask (after Dissolve's grain, as the GPU mixes the accumulators).
+            k *= self.own_at(fx, i);
             *sh = k * (1.0 - cover[i]);
             cover[i] += *sh;
         }
