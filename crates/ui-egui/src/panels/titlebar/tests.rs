@@ -26,6 +26,9 @@ struct Win {
     width: f32,
     time: f64,
     maximized: bool,
+    /// The window's outer corner on the screen, in pixels, and the screen's scaling.
+    outer_px: Pos2,
+    scale: f32,
 }
 
 impl Win {
@@ -34,7 +37,7 @@ impl Win {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
         app.custom_titlebar = true;
-        Self { ctx, app, width, time: 0.0, maximized: false }
+        Self { ctx, app, width, time: 0.0, maximized: false, outer_px: pos2(100.0, 80.0), scale: 1.0 }
     }
 
     fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -47,8 +50,9 @@ impl Win {
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, 600.0))), time: Some(self.time), events, ..Default::default() };
         if let Some(v) = input.viewports.get_mut(&ViewportId::ROOT) {
             v.maximized = Some(self.maximized);
-            // The window stays where it is: nothing moves it in a test.
-            v.outer_rect = Some(Rect::from_min_size(pos2(100.0, 80.0), vec2(self.width, 640.0)));
+            // The window stays where it is unless a test moves it.
+            v.outer_rect = Some(Rect::from_min_size(self.outer_px / self.scale, vec2(self.width, 640.0)));
+            v.native_pixels_per_point = Some(self.scale);
         }
         // What `PhotocraftApp::raw_input_hook` does.
         release_after_os_resize(&self.ctx, &mut input);
@@ -251,6 +255,64 @@ fn a_move_the_os_did_not_start_moves_the_window_from_the_app() {
     let cmds = w.gesture(&[empty, empty + vec2(12.0, 4.0)]);
     assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
     assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::OuterPosition(_))), "{cmds:?}");
+}
+
+/// User report: dragging the window with a pen (whose OS move never starts on Windows) onto a
+/// screen with other scaling made it flicker between the screens and left it between them. The
+/// window the app moves keeps the grabbed point under the pointer, across the change of scaling.
+#[test]
+#[cfg(target_os = "windows")]
+fn a_window_the_app_moves_stays_under_the_pointer_onto_a_screen_scaled_differently() {
+    let mut w = Win::new(1440.0);
+    w.frame(vec![]);
+    // The pointer on the screen, in pixels; events carry it in the window's points.
+    let mut pointer = w.outer_px + vec2(980.0, 16.0);
+    let local = |w: &Win, p: Pos2| ((p - w.outer_px) / w.scale).to_pos2();
+    fn step(w: &mut Win, events: Vec<Event>) {
+        for c in w.frame(events).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default() {
+            if let ViewportCommand::OuterPosition(p) = c {
+                // As egui-winit places it: points at the scaling of the input that asked.
+                w.outer_px = (p.to_vec2() * w.scale).to_pos2();
+            }
+        }
+    }
+    {
+        let e = vec![Event::PointerMoved(local(&w, pointer))];
+        step(&mut w, e);
+    }
+    {
+        let e = vec![button(local(&w, pointer), true, egui::PointerButton::Primary)];
+        step(&mut w, e);
+    }
+    let start = w.outer_px;
+    let (mut held, mut crossed) = (None, start);
+    for i in 0..16 {
+        pointer += vec2(40.0, 3.0);
+        if i == 8 {
+            // Past the edge of the first screen: the second one scales by 150 %.
+            w.scale = 1.5;
+        }
+        {
+            let e = vec![Event::PointerMoved(local(&w, pointer))];
+            step(&mut w, e);
+        }
+        if i == 8 {
+            crossed = w.outer_px;
+        }
+        if w.outer_px != start {
+            let at = local(&w, pointer);
+            let h = *held.get_or_insert(at);
+            assert!((at - h).length() < 1.0, "step {i}: the grabbed point {h:?} moved to {at:?} under the pointer");
+        }
+    }
+    assert!(held.is_some(), "the app moved the window");
+    // On the second screen it goes on following the pointer pixel for pixel.
+    let went = w.outer_px - crossed;
+    assert!((went - vec2(7.0 * 40.0, 7.0 * 3.0)).length() < 0.5, "{crossed:?} → {:?}", w.outer_px);
+    {
+        let e = vec![button(local(&w, pointer), false, egui::PointerButton::Primary)];
+        step(&mut w, e);
+    }
 }
 
 #[test]

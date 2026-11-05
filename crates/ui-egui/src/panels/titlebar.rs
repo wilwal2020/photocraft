@@ -481,12 +481,14 @@ struct HandOff {
     manual: bool,
     /// Inputs since the hand-off that moved the pointer with the button down and the window still.
     still_moves: u8,
+    /// A move the app makes: where the pointer holds the window, from its outer corner (points).
+    grab: Option<egui::Vec2>,
 }
 
 /// The OS took the press at this pass: [`release_after_os_resize`] ends it on the next input.
 fn hand_off(ctx: &egui::Context) {
     let pass = ctx.cumulative_pass_nr();
-    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None, moved_from: None, manual: false, still_moves: 0 }));
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None, moved_from: None, manual: false, still_moves: 0, grab: None }));
 }
 
 /// Move the window from this press. The window manager takes the press of an OS move as it does
@@ -496,14 +498,19 @@ pub(crate) fn start_os_move(ctx: &egui::Context) {
     ctx.send_viewport_cmd(ViewportCommand::StartDrag);
     let pass = ctx.cumulative_pass_nr();
     let moved_from = Some(ctx.input(|i| i.viewport().outer_rect.map_or(Pos2::ZERO, |r| r.min)));
-    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None, moved_from, manual: false, still_moves: 0 }));
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None, moved_from, manual: false, still_moves: 0, grab: None }));
 }
 
 /// A title-bar drag whose OS move didn't start (user report: the window couldn't be moved at
-/// all): the app moves the window itself, following the pointer, until the button is released.
-/// Call with the response of the area the drag started on.
+/// all; a pen never starts one on Windows, as winit keeps its pointer messages from becoming a
+/// mouse press): the app moves the window itself, until the button is released. The window keeps
+/// the point the pointer grabbed under the pointer, both read in the same input: moving it by the
+/// pointer's motion between inputs mixed two scales when the window crossed onto a screen with
+/// another scaling, so it jumped back and forth between the screens and was left between them
+/// with its title bar off screen (user report). Call with the response of the area the drag
+/// started on.
 pub(crate) fn follow_manual_move(ctx: &egui::Context, resp: &egui::Response) {
-    let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())).filter(|h| h.manual) else { return };
+    let Some(mut h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())).filter(|h| h.manual) else { return };
     if !resp.dragged_by(PointerButton::Primary) {
         if !ctx.input(|i| i.pointer.primary_down()) {
             ctx.data_mut(|d| d.remove::<HandOff>(resize_handed_off_id()));
@@ -515,10 +522,19 @@ pub(crate) fn follow_manual_move(ctx: &egui::Context, resp: &egui::Response) {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
         return;
     }
-    let delta = resp.drag_delta();
-    let Some(outer) = ctx.input(|i| i.viewport().outer_rect) else { return };
-    if delta != egui::Vec2::ZERO && delta.is_finite() {
-        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(outer.min + delta));
+    let (outer, inner, pointer, pressed, moved) = ctx.input(|i| {
+        let moved = i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)));
+        (i.viewport().outer_rect, i.viewport().inner_rect, i.pointer.latest_pos(), i.pointer.press_origin(), moved)
+    });
+    let (Some(outer), Some(pointer)) = (outer, pointer) else { return };
+    // Pointer positions are the client area's; on the screen, in this input's points.
+    let client = inner.unwrap_or(outer).min.to_vec2();
+    // Where the press was: the window catches up with the motion before the OS move was given up.
+    let grab = *h.grab.get_or_insert(pressed.unwrap_or(pointer) + client - outer.min);
+    let to = pointer + client - grab;
+    // Only on motion: the system's own placement after a change of scaling stands until then.
+    if moved && to.is_finite() && (to - outer.min).length() * ctx.pixels_per_point() >= 0.5 {
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(to));
         ctx.request_repaint();
     }
     ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), h));
