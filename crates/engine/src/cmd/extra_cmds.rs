@@ -585,9 +585,23 @@ fn set_visible(s: &mut Session, p: &Value, visible: bool) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit_visibility(if visible { "Show Layer" } else { "Hide Layer" }, |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.visible = visible;
+        if visible {
+            show_enclosing_groups(doc, id);
+        }
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// Make the groups around layer `id` visible: a layer shown inside a hidden group didn't show
+/// (user request; Photoshop shows the group too).
+pub(crate) fn show_enclosing_groups(doc: &mut Document, id: LayerId) {
+    let Some(path) = doc.path_of(id) else { return };
+    for depth in 1..path.len() {
+        if let Some(g) = path.get(..depth).and_then(|p| doc.layer_at_mut(p)) {
+            g.visible = true;
+        }
+    }
 }
 
 /// Layer › Hide Layers (⌘,): hide the targeted layers, or show them when every one is already

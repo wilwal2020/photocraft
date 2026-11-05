@@ -816,3 +816,23 @@ fn rasterize_smart_object_layer() {
     assert!(matches!(active(&s4).content, LayerContent::Raster(_)));
     assert_eq!(pixel(&s4, 30, 30), vec![1.0, 1.0, 0.0, 1.0]);
 }
+
+/// User request: showing a layer inside a hidden group shows the group (and any hidden group
+/// around it), as Photoshop does, so the layer shows; hiding one leaves the groups as they are.
+#[test]
+fn showing_a_layer_in_a_hidden_group_shows_the_group() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let inner = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let group = s.execute("layer.groupLayers", json!({"layer": inner.0})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let outer = s.execute("layer.groupLayers", json!({"layer": group.0})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let shown = |s: &Session, id: LayerId| s.active().unwrap().doc.layer(id).unwrap().visible;
+    for (how, params) in [("the eye", json!({"layer": inner.0, "visible": true})), ("Show Layers", json!({"layer": inner.0}))] {
+        s.execute("layer.setProps", json!({"layers": [inner.0, group.0, outer.0], "visible": false})).unwrap();
+        s.execute("layer.setProps", json!({"layer": inner.0, "visible": false})).unwrap();
+        assert!(!shown(&s, group) && !shown(&s, outer), "{how}: hiding keeps the groups hidden");
+        let id = if how == "the eye" { "layer.setProps" } else { "layer.showLayers" };
+        s.execute(id, params).unwrap();
+        assert!(shown(&s, inner) && shown(&s, group) && shown(&s, outer), "{how}");
+    }
+}

@@ -309,6 +309,9 @@ pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
     s.edit_visibility(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
         for id in &sel {
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.visible = visible;
+            if visible {
+                crate::extra_cmds::show_enclosing_groups(doc, *id);
+            }
         }
         Ok(())
     })?;

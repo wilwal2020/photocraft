@@ -599,7 +599,7 @@ fn build() -> Vec<CommandSpec> {
             "Layer Properties",
             [],
             None,
-            r##"{"layer":id?,"layers":[id,…]? (the same change to each, one step: the Layers panel's controls with several layers selected),"name":str? (one layer only),"visible":bool?,"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all","selection":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
+            r##"{"layer":id?,"layers":[id,…]? (the same change to each, one step: the Layers panel's controls with several layers selected),"name":str? (one layer only),"visible":bool? (true also shows the hidden groups around it),"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all","selection":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
             has_layer,
             |s, p| {
                 // Several layers at once (the Layers panel with several selected, as in Photoshop),
@@ -699,6 +699,12 @@ fn build() -> Vec<CommandSpec> {
                                     return Err(bad("layer.setProps", format!("unknown lock `{k}`")));
                                 }
                             }
+                        }
+                    }
+                    // Showing a layer shows the hidden groups around it, so it shows (user request).
+                    if p.get("visible").and_then(Value::as_bool) == Some(true) {
+                        for &id in &ids {
+                            crate::extra_cmds::show_enclosing_groups(doc, id);
                         }
                     }
                     Ok(())

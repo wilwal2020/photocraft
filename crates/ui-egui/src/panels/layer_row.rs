@@ -471,7 +471,10 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
         if ui.input(|i| i.modifiers.alt) {
             actions.push(("layer.showOnly".into(), json!({"layer": l.id.0})));
         } else {
-            actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "visible": !l.visible})));
+            // Inside a hidden group the eye shows the layer, and the group with it (user
+            // request): its greyed eye would otherwise hide a layer that wasn't showing.
+            let visible = row.parent_hidden || !l.visible;
+            actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "visible": visible})));
         }
     }
     eye_resp.context_menu(|ui| {
