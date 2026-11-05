@@ -196,17 +196,20 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
     });
 }
 
-/// The menu of `l`'s second-mask thumbnail: turn it off or on, delete it, or make it the vector
-/// mask (traced from what it reveals). It acts on `l`, which it selects first.
+/// The menu of `l`'s second-mask thumbnail: turn it off or on, delete it, invert it, or make it
+/// the vector mask (traced from what it reveals). It acts on `l`, which it selects first.
 pub fn show_second_mask(ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {
     use photocraft_engine::second_mask_cmds as second;
     let Some(mask) = &l.second_mask else { return };
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(220.0);
         let toggle = if mask.enabled { tl!("Disable Second Mask") } else { tl!("Enable Second Mask") };
-        let items: [(&str, &str, Value, bool); 3] = [
+        let items: [(&str, &str, Value, bool); 4] = [
             (toggle, second::ENABLED, json!({"layer": l.id.0, "enabled": !mask.enabled}), true),
             (tl!("Delete Second Mask"), second::DELETE, json!({"layer": l.id.0}), true),
+            // User request: Image › Adjustments › Invert on the second mask (inside the selection,
+            // if there is one), without targeting it first.
+            (tl!("Invert Second Mask"), "image.adjustments.invert", json!({"target": "secondMask"}), true),
             (tl!("Convert to Vector Mask"), second::TO_VECTOR, json!({"layer": l.id.0}), l.vector_mask.is_none()),
         ];
         for (label, id, params, enabled) in items {

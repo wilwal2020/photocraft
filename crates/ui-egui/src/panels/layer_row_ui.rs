@@ -501,28 +501,45 @@ const QUEUED_S: f64 = 0.1;
 /// clicks that land in one slow frame (egui then reports one click) are a double-click too.
 /// Both clicks hold the same modifier keys: a ⌘-click (which loads a mask as a selection) and a
 /// plain click after it are two clicks (user report: they opened the mask's settings).
+#[cfg(test)]
 pub(crate) fn second_click(ctx: &egui::Context, tapped: bool, layer: u64, part: u8) -> bool {
+    second_click_at(ctx, tapped, layer, part, None).is_some()
+}
+
+/// How far apart the two taps of a double-tap may land and still count as one part of the row:
+/// a pen's two taps rarely land on the same point (Windows allows a few pixels for a mouse and
+/// more for a pen).
+const DOUBLE_TAP_NEAR: f32 = 8.0;
+
+/// [`second_click`], with where this click landed: a second click within [`DOUBLE_TAP_NEAR`] of
+/// the first counts even on another part of the row (user report, again: double-tapping a Solid
+/// Color thumbnail with a pen sometimes did nothing; one tap on the thumbnail and one just past
+/// its edge were a click on the thumbnail and one on the row). Returns the part the double-click
+/// is on: the first click's.
+pub(crate) fn second_click_at(ctx: &egui::Context, tapped: bool, layer: u64, part: u8, pos: Option<egui::Pos2>) -> Option<u8> {
     if !tapped {
-        return false;
+        return None;
     }
     let id = egui::Id::unique("pc-layer-row-click");
     let (earliest, now) = click_time(ctx);
     let keys = ctx.input(|i| u8::from(i.modifiers.command) | u8::from(i.modifiers.shift) << 1 | u8::from(i.modifiers.alt) << 2);
     let part = part | keys << 5;
-    let last: Option<(f64, u64, u8)> = ctx.data(|d| d.get_temp(id));
+    let last: Option<(f64, u64, u8, Option<egui::Pos2>)> = ctx.data(|d| d.get_temp(id));
     let same_frame = ctx.input(|i| {
         i.pointer.button_clicked(egui::PointerButton::Primary)
             && i.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count() >= 2
     });
-    let double = same_frame || last.is_some_and(|(t, l, p)| l == layer && p == part && now >= t && earliest - t < DOUBLE_CLICK_S);
+    let near = |a: Option<egui::Pos2>| a.zip(pos).is_some_and(|(a, b)| a.distance(b) <= DOUBLE_TAP_NEAR);
+    let paired = last.filter(|&(t, l, p, at)| l == layer && (p == part || (p >> 5 == part >> 5 && near(at))) && now >= t && earliest - t < DOUBLE_CLICK_S);
+    let double = if same_frame { Some(part) } else { paired.map(|(_, _, p, _)| p) };
     ctx.data_mut(|d| {
-        if double {
-            d.remove::<(f64, u64, u8)>(id);
+        if double.is_some() {
+            d.remove::<(f64, u64, u8, Option<egui::Pos2>)>(id);
         } else {
-            d.insert_temp(id, (now, layer, part));
+            d.insert_temp(id, (now, layer, part, pos));
         }
     });
-    double
+    double.map(|p| p & 0x1f)
 }
 
 pub fn begin(ctx: &egui::Context) {

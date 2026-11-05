@@ -599,15 +599,23 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
         None if ts > 0.0 && on(thumb) => 5,
         None => 0,
     };
-    if crate::layer_row_ui::second_click(ctx, rc.tapped, l.id.0, part) {
+    // The part the double-click is on is the first click's: a pen's second tap may land just
+    // past the thumbnail it double-taps.
+    if let Some(part) = crate::layer_row_ui::second_click_at(ctx, rc.tapped, l.id.0, part, pos) {
+        let mask = match part {
+            2 => Some(crate::mask_thumbs_ui::MaskKind::Pixel),
+            3 => Some(crate::mask_thumbs_ui::MaskKind::Second),
+            4 => Some(crate::mask_thumbs_ui::MaskKind::Vector),
+            _ => None,
+        };
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
-        } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
+        } else if part == 1 {
             if let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &l.name) {
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
-        } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
+        } else if let Some(kind) = mask {
             match kind {
                 crate::mask_thumbs_ui::MaskKind::Pixel => actions.push(("ui.maskTarget".into(), json!(true))),
                 crate::mask_thumbs_ui::MaskKind::Second => actions.push(("ui.secondMaskTarget".into(), json!(true))),
@@ -620,11 +628,12 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
                 // Otherwise double-click opens the mask's settings (Density/Feather).
                 actions.push(("ui.properties".into(), json!(true)));
             }
-        } else if pos.and_then(|p| masks.hit(p)).is_none() {
+        } else {
+            let on_thumb = part == 5;
             let id = match &l.content {
-                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if ts > 0.0 && on(thumb) => "layer.layerContentOptions",
-                LayerContent::Smart(_) if ts > 0.0 && on(thumb) => "layer.smartObjects.editContents",
-                LayerContent::Text(_) if ts > 0.0 && on(thumb) => "type.editText",
+                LayerContent::Adjustment(_) | LayerContent::Fill(_) | LayerContent::Shape(_) if on_thumb => "layer.layerContentOptions",
+                LayerContent::Smart(_) if on_thumb => "layer.smartObjects.editContents",
+                LayerContent::Text(_) if on_thumb => "type.editText",
                 _ => "layer.layerStyle.blendingOptions",
             };
             // Null params: run like the menu item, dialog included. When both clicks came in one

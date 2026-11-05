@@ -313,9 +313,9 @@ fn picker_places_actions_above_two_columns_and_web_colors_under_the_field() {
     assert!(hex.left() < lightness.left() && hex.top() > inputs[5].bottom());
 }
 
-/// The whole Color Picker window (title, frame and all) is no bigger than Photoshop's: about
-/// 534 x 376 points (Photoshop 27.11 on macOS, measured from a screenshot at the same scale as
-/// PhotoCraft's, which was 682 x 438).
+/// The whole Color Picker window (title, frame and all) is no bigger than Photoshop's, with its
+/// 256-point colour field (user report: 200 looked small beside it): Photoshop on Windows is
+/// 533 x 403 points (user screenshot; on macOS about 534 x 376).
 #[test]
 fn the_picker_window_is_no_bigger_than_photoshops() {
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
@@ -326,7 +326,8 @@ fn the_picker_window_is_no_bigger_than_photoshops() {
     let id = open(h.state_mut(), "foreground");
     h.run_steps(6);
     let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the picker window");
-    assert!(rect.width() <= 534.0 && rect.height() <= 376.0, "Color Picker window {} x {} points, Photoshop's 534 x 376", rect.width(), rect.height());
+    assert!(rect.width() <= 534.0 && rect.height() <= 406.0, "Color Picker window {} x {} points, Photoshop's 533 x 403", rect.width(), rect.height());
+    assert_eq!(super::FIELD, 256.0, "Photoshop's colour field");
     // Everything still shows: the three actions and all 13 component fields.
     for label in ["OK", "Cancel", "Add to Swatches", "Only Web Colors"] {
         assert!(rect.contains_rect(h.get_by_label(label).rect()), "{label} inside the window");

@@ -577,3 +577,50 @@ fn every_entry_is_a_known_command() {
         assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
     }
 }
+
+/// User request: Invert in the second mask's right-click menu. It inverts that mask (of the
+/// clicked layer, not the active one) and leaves the layer mask alone.
+#[test]
+fn the_second_mask_menu_inverts_it() {
+    use crate::PhotocraftApp;
+    use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    }
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 60})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 60, "y": 0, "width": 40, "height": 60})).unwrap();
+    s.execute(photocraft_engine::second_mask_cmds::ADD, json!({})).unwrap();
+    let masked = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Other active layer"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, masked.0).expect("mask thumbnails drawn");
+    let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Second).expect("the second mask's thumbnail").1.center();
+    click(&mut h, at, PointerButton::Secondary);
+    let at = h.get_by_label("Invert Second Mask").rect().center();
+    click(&mut h, at, PointerButton::Primary);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.active_layer, Some(masked));
+    let l = st.doc.layer(masked).unwrap();
+    let second = l.second_mask.as_ref().unwrap();
+    assert_eq!((second.value(80, 30), second.value(20, 30)), (0.0, 1.0), "the second mask is inverted");
+    assert_eq!((l.mask.as_ref().unwrap().value(80, 30), l.mask.as_ref().unwrap().value(20, 30)), (1.0, 1.0), "the layer mask isn't");
+}

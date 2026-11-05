@@ -238,3 +238,33 @@ fn play_once_for_each_selected_layer() {
     assert!(app.session.execute("actions.setEachLayer", json!({"action": "Half"})).is_err());
     assert!(app.session.execute("actions.play", json!({"action": "Half", "eachLayer": "yes"})).is_err());
 }
+
+/// User report: adding a mask through an action left the layer's pixels targeted, while the
+/// Layers panel's Add Mask button targets the new mask. A played action's new mask (layer mask,
+/// then the second mask) is targeted too, so the action's next brush stroke paints it.
+#[test]
+fn a_mask_an_action_adds_is_targeted_like_the_buttons() {
+    let add = ("layer.addMask".to_string(), json!({}));
+    let mut app = app_with(vec![Action::new("Mask", vec![add])]);
+    app.run("layer.new.layer", json!({"name": "A"})).unwrap();
+    assert!(!app.ui.mask_target);
+    app.run("actions.play", json!({"action": "Mask"})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().mask.is_some());
+    assert!(app.ui.mask_target && !app.ui.second_mask_target, "the new layer mask is targeted");
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+    // Back on the pixels, the action again adds the second mask: that is targeted.
+    app.ui.mask_target = false;
+    app.sync_mask_targets();
+    app.run("actions.play", json!({"action": "Mask"})).unwrap();
+    assert!(app.ui.mask_target && app.ui.second_mask_target, "the new second mask is targeted");
+    assert_eq!(crate::canvas::paint_target(&app), json!("secondMask"));
+    // An action that adds no mask leaves the target alone.
+    let half = ("layer.setProps".to_string(), json!({"opacity": 0.5}));
+    app.session.actions.list.push(Action::new("Half", vec![half]));
+    app.ui.mask_target = false;
+    app.ui.second_mask_target = false;
+    app.sync_mask_targets();
+    app.run("actions.play", json!({"action": "Half"})).unwrap();
+    assert!(!app.ui.mask_target);
+}

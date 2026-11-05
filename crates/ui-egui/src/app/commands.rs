@@ -146,6 +146,9 @@ impl PhotocraftApp {
             show(true);
             self.perf.waiting = true;
         }
+        // An action plays its steps in the engine, so the targeting a Layers panel click adds
+        // after Add Mask doesn't run: compare the active layer's masks after it.
+        let doc_before = (id == "actions.play").then(|| self.session.active().map(|st| std::sync::Arc::clone(&st.doc))).flatten();
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -171,9 +174,21 @@ impl PhotocraftApp {
             .filter(|_| id == photocraft_engine::second_mask_cmds::ADD_MASK && on_active_layer)
             .and_then(|v| v.get("added"))
             .and_then(Value::as_str);
-        let creates_active_mask = creates_active_mask || added == Some("mask");
-        let creates_active_vector_mask = creates_active_vector_mask || added == Some("vectorMask");
+        let gained = doc_before.filter(|_| r.is_ok()).map(|before| self.masks_gained(&before)).unwrap_or_default();
+        let creates_active_mask = creates_active_mask || added == Some("mask") || gained.mask;
+        let creates_active_vector_mask = creates_active_vector_mask || added == Some("vectorMask") || (gained.vector && !gained.mask && !gained.second);
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
+        if gained.second && !gained.mask {
+            // A second mask the action added is targeted, as the button targets it.
+            (self.ui.mask_target, self.ui.second_mask_target, self.ui.vector_mask_target) = (true, true, false);
+            self.target_mask_over_colour_rows();
+            self.sync_mask_targets();
+        } else if let Some(index) = gained.effect.filter(|_| !gained.mask && !gained.second && !gained.vector) {
+            let layer = self.session.active().and_then(|st| st.active_layer).map(|l| l.0);
+            if let Some(layer) = layer {
+                self.select_fx_mask_target(Some((layer, index)));
+            }
+        }
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
         self.perf.command_cost.insert(id.to_string(), self.perf.command_ms);
@@ -215,6 +230,27 @@ impl PhotocraftApp {
     /// tool, `hold_keys::cmd_moves`), else the selected tool.
     pub fn active_tool(&self) -> state::Tool {
         self.tool_override.unwrap_or(self.ui.tool)
+    }
+
+    /// Which masks the active layer has now that it didn't have in `before` (a layer `before`
+    /// lacks had none): what a played action added, to target as the Layers panel's Add Mask does
+    /// (user report: an action's Add Mask left the layer's pixels targeted).
+    fn masks_gained(&self, before: &Document) -> MasksGained {
+        let Some(st) = self.session.active() else { return MasksGained::default() };
+        let Some(l) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return MasksGained::default() };
+        let old = before.layer(l.id);
+        let had = |f: fn(&photocraft_doc::Layer) -> bool| old.is_some_and(f);
+        MasksGained {
+            mask: l.mask.is_some() && !had(|o| o.mask.is_some()),
+            second: l.second_mask.is_some() && !had(|o| o.second_mask.is_some()),
+            vector: l.vector_mask.is_some() && !had(|o| o.vector_mask.is_some()),
+            effect: l
+                .effects
+                .items
+                .iter()
+                .enumerate()
+                .position(|(i, e)| e.mask().is_some() && !old.and_then(|o| o.effects.items.get(i)).is_some_and(|o| o.mask().is_some())),
+        }
     }
 
     fn sync_command_side_effects(
@@ -497,3 +533,13 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+/// The masks an action gave the active layer ([`PhotocraftApp::masks_gained`]).
+#[derive(Default)]
+struct MasksGained {
+    mask: bool,
+    second: bool,
+    vector: bool,
+    /// The first effect that gained its own mask.
+    effect: Option<usize>,
+}

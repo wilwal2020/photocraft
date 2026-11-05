@@ -503,3 +503,31 @@ fn inks_given_to_a_non_cmyk_fill_in_a_cmyk_document_are_an_edit() {
     assert!(!is_edit(&f, original, ColorMode::Rgb));
     assert!(picked_color(&f, original, ColorMode::Cmyk).is_some_and(|c| c.mode == ColorMode::Cmyk && c.c == [0.3, 0.2, 0.1, 0.4]));
 }
+
+/// User report, again: double-tapping a Solid Color thumbnail with a pen sometimes did nothing.
+/// A pen's two taps land a few points apart; one on the thumbnail and one just past its edge
+/// were a click on the thumbnail and one on the row. Within a few points they are one
+/// double-click, on the part the first tap hit; farther apart they are still two clicks.
+#[test]
+fn a_double_tap_whose_second_tap_lands_just_past_the_thumbnail_opens_the_picker() {
+    let opened = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().any(|d| owns(&d.fields));
+    let tap = |h: &mut Harness<'_, PhotocraftApp>, at: Pos2| {
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    };
+    for (name, from, by, opens) in [("below", 1, vec2(0.0, 5.0), true), ("far right", 1, vec2(60.0, 0.0), false)] {
+        let (mut h, id) = harness(1.0);
+        h.run_steps(40);
+        let r = row(&h, id);
+        let thumb = r.thumbnail.expect("a thumbnail");
+        let first = if from == 0 { pos2(thumb.left() + 2.0, thumb.center().y) } else { pos2(thumb.center().x, thumb.bottom() - 2.0) };
+        tap(&mut h, first);
+        tap(&mut h, first + by);
+        assert_eq!(opened(&h), opens, "second tap {name}");
+    }
+}

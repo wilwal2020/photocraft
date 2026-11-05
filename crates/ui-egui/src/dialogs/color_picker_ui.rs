@@ -431,8 +431,8 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
     m
 }
 
-/// Room for both component columns, including units, without overflowing the title's width; with
-/// the frame and title the window fits Photoshop's (about 534 x 376 points).
+/// Room for the colour field and both component columns, including units, without overflowing
+/// the title's width; with the frame and title the window is about Photoshop's (534 x 403 points).
 pub(crate) const CONTENT_WIDTH: f32 = 488.0;
 /// Translated action labels can be substantially wider than their English equivalents.
 pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
@@ -441,8 +441,8 @@ pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
     let translated = widgets::button_width(ui, &labels.map(crate::i18n::t));
     CONTENT_WIDTH + (translated - english).max(0.0)
 }
-/// Side of the colour field (Photoshop's is about 256 points).
-const FIELD: f32 = 200.0;
+/// Side of the colour field: Photoshop's 256 points (user report: 200 looked small beside it).
+const FIELD: f32 = 256.0;
 /// Width of the component fields.
 const VALUE_W: f32 = 42.0;
 
@@ -650,7 +650,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
         ui.vertical(|ui| {
-            egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
+            egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).min_col_width(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
                 let vals = [hsv[0], hsv[1] * 100.0, hsv[2] * 100.0, rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0];
                 let units = ["°", "%", "%", "", "", ""];
                 let ranges = [0.0..=360.0, 0.0..=100.0, 0.0..=100.0, 0.0..=255.0, 0.0..=255.0, 0.0..=255.0];
@@ -726,7 +726,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
             });
         });
-        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
+        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).min_col_width(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
             for (i, (v, range)) in [(lab[0], 0.0..=100.0), (lab[1], -128.0..=127.0), (lab[2], -128.0..=127.0)].into_iter().enumerate() {
                 let (key, label) = LAB_MODES[i];
                 if radio(ui, mode == key, label) {
