@@ -134,3 +134,43 @@ fn gray_fill_converts_with_the_document() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_in_mode(&s, ColorMode::Grayscale, "undo");
 }
+
+/// User report: a Solid Color layer from a PSD kept a square of colour after its mask was
+/// deleted. Photoshop stores a masked fill's pixels only inside the mask's bounds, and the layer
+/// kept compositing those. An edit to its masks draws it from its colour again; other edits keep
+/// Photoshop's pixels.
+#[test]
+fn deleting_a_psd_fill_layers_mask_draws_it_everywhere() {
+    use photocraft_geom::Rect;
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
+    s.execute("layer.newFillLayer.solidColor", json!({"color": [0.0, 0.0, 0.0]})).unwrap();
+    let square = Rect::new(16, 16, 40, 48);
+    s.edit("mask", |doc, a| {
+        let mut m = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        m.fill_rect(square, &[1.0]);
+        doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap().surface = m;
+        Ok(())
+    })
+    .unwrap();
+    s.edit("as a PSD opens it", |doc, a| {
+        let l = doc.layer_mut(a.unwrap()).unwrap();
+        let mut pixels = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        pixels.fill_rect(square, &[0.0, 0.0, 0.0, 1.0]);
+        let LayerContent::Fill(f) = &l.content else { panic!("a fill layer") };
+        l.fill_cache = Some(photocraft_doc::FillCache { fill: f.clone(), surface: pixels });
+        Ok(())
+    })
+    .unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let px = |s: &Session, x: i32, y: i32| photocraft_compose::render(&s.active().unwrap().doc, Rect::new(x, y, x + 1, y + 1)).px[0];
+    s.execute("layer.renameLayer", json!({"layer": id.0, "name": "Black"})).unwrap();
+    assert!(s.active().unwrap().doc.layer(id).unwrap().fill_cache.is_some(), "a rename keeps Photoshop's pixels");
+    assert_eq!(px(&s, 2, 2), [1.0, 1.0, 1.0, 1.0], "the mask hides the corner");
+    s.execute("layer.layerMask.delete", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(id).unwrap().fill_cache.is_none());
+    assert_eq!(px(&s, 2, 2), [0.0, 0.0, 0.0, 1.0], "the colour covers the corner without the mask");
+    assert_eq!(px(&s, 20, 20), [0.0, 0.0, 0.0, 1.0]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(id).unwrap().fill_cache.is_some(), "undo brings the mask and the pixels back");
+}

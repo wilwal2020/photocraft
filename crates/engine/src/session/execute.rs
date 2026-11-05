@@ -225,6 +225,7 @@ impl Session {
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
+        drop_unmasked_fill_caches(&before, &mut doc.layers, 0);
         st.doc = Arc::new(doc);
         st.active_layer = active;
         fix_selection(st);
@@ -314,5 +315,26 @@ impl Session {
         }
         let Some(st) = self.active_mut() else { return };
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+    }
+}
+
+/// Photoshop stores a masked fill layer's pixels only where its masks show it (the masks' bounds),
+/// and a PSD's fill layer keeps those pixels to composite exactly. Once an edit changes its masks
+/// (deletes, disables, paints or moves one) the pixels no longer cover what shows: a Solid Color
+/// layer kept a square of colour after its mask was deleted (user report). Such a layer draws from
+/// its fill again. Layers the edit added keep theirs.
+fn drop_unmasked_fill_caches(before: &Document, layers: &mut [photocraft_doc::Layer], depth: usize) {
+    // Documents can nest deeply; past this the layers keep their pixels.
+    if depth > 256 {
+        return;
+    }
+    for l in layers {
+        if let photocraft_doc::LayerContent::Group(g) = &mut l.content {
+            drop_unmasked_fill_caches(before, &mut g.children, depth + 1);
+        } else if l.fill_cache.is_some()
+            && before.layer(l.id).is_some_and(|b| b.mask != l.mask || b.second_mask != l.second_mask || b.vector_mask != l.vector_mask)
+        {
+            l.fill_cache = None;
+        }
     }
 }
