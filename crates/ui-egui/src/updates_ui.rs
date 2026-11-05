@@ -147,8 +147,11 @@ mod tests {
         let count = calls.clone();
         let sender = Arc::new(Mutex::new(None));
         let tx = sender.clone();
+        // These tests drive the automatic check: switch it on (this build starts with it off).
+        let mut session = Session::new();
+        session.edit_prefs(|p| p.general.automatically_check_updates = true);
         let app = PhotocraftApp::new(
-            Session::new(),
+            session,
             Services {
                 check_updates: Some(Box::new(move || {
                     *count.lock().unwrap() += 1;
@@ -268,6 +271,32 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(app.updates_rt.updater.prompt_open());
+    }
+
+    /// User report: the launch prompt offered the official release every time, and this modified
+    /// build can't take it. A fresh install doesn't check at launch; Help › Check for Updates does.
+    #[test]
+    fn a_fresh_install_does_not_check_at_launch() {
+        let calls = Arc::new(Mutex::new(0));
+        let count = calls.clone();
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                check_updates: Some(Box::new(move || {
+                    *count.lock().unwrap() += 1;
+                    let (_sender, receiver) = mpsc::channel();
+                    Ok(receiver)
+                })),
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        at(&mut app, &ctx, 0.0);
+        at(&mut app, &ctx, 1.0);
+        assert_eq!(*calls.lock().unwrap(), 0, "no check at launch");
+        assert!(!app.ui.updates_open);
+        let _ = check(&mut app, &ctx, serde_json::json!({}));
+        assert_eq!(*calls.lock().unwrap(), 1, "the menu item still checks");
     }
 
     #[test]

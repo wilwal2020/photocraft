@@ -229,7 +229,10 @@ pub struct General {
     pub zoom_resizes_windows: bool,
     pub use_legacy_free_transform: bool,
     pub auto_show_home_screen: bool,
-    /// Desktop: check published stable releases once in the background at launch.
+    /// Desktop: check published stable releases once in the background at launch. Off by default
+    /// in this modified build (user request): the launch prompt offered the official release,
+    /// which can't update this copy and would replace its changes; Help › Check for Updates
+    /// still checks.
     pub automatically_check_updates: bool,
 }
 
@@ -247,7 +250,7 @@ impl Default for General {
             zoom_resizes_windows: false,
             use_legacy_free_transform: false,
             auto_show_home_screen: true,
-            automatically_check_updates: true,
+            automatically_check_updates: false,
         }
     }
 }

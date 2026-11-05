@@ -211,11 +211,11 @@ mod tests {
         s.execute("help.checkForUpdates", json!({})).unwrap();
         assert_eq!(s.execute("updates.status", json!({})).unwrap()["result"]["status"], "failed");
         s.load_prefs_json("{}").unwrap();
-        assert!(s.prefs().general.automatically_check_updates);
-        s.execute("prefs.set", json!({"path": "general.automaticallyCheckUpdates", "value": false})).unwrap();
+        assert!(!s.prefs().general.automatically_check_updates, "off unless turned on (modified build)");
+        s.execute("prefs.set", json!({"path": "general.automaticallyCheckUpdates", "value": true})).unwrap();
         let saved = s.prefs_to_json();
         let mut restored = Session::new();
         restored.load_prefs_json(&saved).unwrap();
-        assert!(!restored.prefs().general.automatically_check_updates);
+        assert!(restored.prefs().general.automatically_check_updates);
     }
 }
