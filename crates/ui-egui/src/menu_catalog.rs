@@ -781,4 +781,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window"], "---", None, "---"),
     (&["Window"], "Options", None, "window.panel.options"),
     (&["Window"], "Tools", None, "window.panel.tools"),
+    // The icon rail beside the canvas (user request: a toggle next to Tools; its right-click
+    // Close was the only way to hide it).
+    (&["Window"], "Panel Icons", None, "window.toggle.rail"),
 ];

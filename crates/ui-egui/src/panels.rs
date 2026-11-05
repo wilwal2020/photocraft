@@ -1644,6 +1644,11 @@ mod embedding_tests {
         assert!(!h.state().ui.panels.rail_closed, "Reset Workspace restores it");
         crate::menus::invoke(h.state_mut(), &ctx, "window.toggle.rail", json!({})).unwrap();
         assert!(h.state().ui.panels.rail_closed, "the toggle command closes it too");
+        // Window › Panel Icons, next to Tools, toggles it.
+        let item = crate::menu_catalog::CATALOG.iter().find(|m| m.3 == "window.toggle.rail").expect("a Window menu item");
+        assert_eq!((item.0, item.1), (&["Window"][..], "Panel Icons"));
+        crate::menus::invoke(h.state_mut(), &ctx, "window.toggle.rail", json!({})).unwrap();
+        assert!(!h.state().ui.panels.rail_closed, "and shows it again");
     }
 
     /// The Tools panel docks at the canvas edge it is dropped near and floats anywhere else,
