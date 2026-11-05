@@ -116,6 +116,35 @@ fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Continue on Error (user request): with `step`, whether playback passes over that step when it
 /// fails; without it, every step of the action (the action's own option).
+/// Stop If Successful on one step: playback ends after it when it succeeds.
+fn stop_if_successful(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.stopIfSuccessful";
+    not_playing(s, cmd)?;
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    let enabled = match p.get("enabled") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
+    };
+    let step = index(p, "step", cmd)?.ok_or_else(|| bad(cmd, "needs `step`"))?;
+    let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
+    if step >= len {
+        return Err(bad(cmd, "step is out of range"));
+    }
+    if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+        flush_recording(s)?;
+    }
+    let action = &mut s.actions.list[idx];
+    if enabled.unwrap_or(!action.stop_steps.contains(&step)) {
+        action.stop_steps.insert(step);
+    } else {
+        action.stop_steps.remove(&step);
+    }
+    let result = json!({"action": action.name, "stopSteps": action.stop_steps});
+    s.actions.touch();
+    Ok(result)
+}
+
 fn continue_on_error(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.continueOnError";
     not_playing(s, cmd)?;
@@ -313,6 +342,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"action":name|index, "step":index?, "enabled":bool?} → {action, continueOnError, continueSteps:[step…]}. Without step, the action's Continue on Error: every step that fails is passed over and playback goes on with the next (listed in actions.play's skipped). With step, only that step is. Omitted enabled flips it. A step refused by Session::authorize or past the playback step limit still stops playback."##,
             enabled: always,
             run: continue_on_error,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.stopIfSuccessful",
+            label: "Stop If Successful",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index, "step":index, "enabled":bool?} → {action, stopSteps:[step…]}. Playback ends after that step when it succeeds (actions.play reports it as stopped); a step that fails goes on as usual. Omitted enabled flips it."##,
+            enabled: always,
+            run: stop_if_successful,
             journal: false,
         },
         CommandSpec {

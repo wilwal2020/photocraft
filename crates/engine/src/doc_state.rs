@@ -172,6 +172,10 @@ pub struct ToolState {
     pub brush_saved_rev: u64,
     /// A layer mask is the edit target ([`ToolState::target_mask`]).
     pub mask_targeted: bool,
+    /// Which mask the shell targets, as a `"target"` (`"mask"`, `"secondMask"`, `"fxMask:N"`,
+    /// `"filterMask"`), or `None` for the layer's pixels: what an action step recorded on "the
+    /// current mask" (`"target":"currentMask"`) edits when it plays.
+    pub mask_target_name: Option<String>,
     /// The foreground/background pair of the edit target that isn't current: the layer pixels'
     /// colours while a mask is targeted, the mask's while the pixels are (#2166).
     pub other_colors: [[f32; 4]; 2],
@@ -269,6 +273,7 @@ impl Default for ToolState {
             brush_rev: 0,
             brush_saved_rev: 0,
             mask_targeted: false,
+            mask_target_name: None,
             other_colors: Self::MASK_COLORS,
             cmyk_picks: Vec::new(),
         }

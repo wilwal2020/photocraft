@@ -274,5 +274,15 @@ impl PhotocraftApp {
         }
         let mask = self.layer_mask_targeted() || self.filter_mask_targeted() || self.fx_mask_targeted().is_some();
         self.session.tools.target_mask(mask);
+        // Which one, for action steps recorded on the current mask.
+        self.session.tools.mask_target_name = if let Some(i) = self.fx_mask_targeted() {
+            Some(photocraft_engine::commands::fx_mask_target(i))
+        } else if self.filter_mask_targeted() {
+            Some("filterMask".into())
+        } else if self.layer_mask_targeted() {
+            Some(self.mask_target_name().into())
+        } else {
+            None
+        };
     }
 }

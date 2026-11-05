@@ -268,3 +268,19 @@ fn a_mask_an_action_adds_is_targeted_like_the_buttons() {
     app.run("actions.play", json!({"action": "Half"})).unwrap();
     assert!(!app.ui.mask_target);
 }
+
+/// User request: Stop If Successful ends the app's own playback after the step too, and a step
+/// recorded on a targeted mask reads "Target: Current Mask" (it plays on whichever mask is
+/// targeted then).
+#[test]
+fn stop_if_successful_in_the_apps_playback_and_current_mask_steps() {
+    let steps = vec![layer("One"), layer("Two"), layer("Three")];
+    let mut app = app_with(vec![Action::new("A", steps)]);
+    app.run("actions.stopIfSuccessful", json!({"action": "A", "step": 0})).unwrap();
+    let r = app.run("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!((r["ran"].clone(), r["stopped"].clone()), (json!(1), json!(0)), "{r}");
+    let names: Vec<String> = app.session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names.last().map(String::as_str), Some("One"));
+    assert!(!names.iter().any(|n| n == "Two"));
+    assert_eq!(crate::panels::actions::param_lines(&json!({"target": "currentMask"})), ["Target: Current Mask"]);
+}

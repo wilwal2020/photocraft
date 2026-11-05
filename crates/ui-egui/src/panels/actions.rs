@@ -303,6 +303,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     let mut failed = None;
     let mut skipped = Vec::new();
     let mut paused = None;
+    let mut stopped = None;
     for (i, (id, p)) in action.enabled_steps().skip_while(|(i, _)| *i < from).take(limit.unwrap_or(usize::MAX)) {
         if !actions_cmds::consume_playback_step(&mut app.session) {
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
@@ -381,6 +382,11 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
                     break;
                 }
                 ran += 1;
+                // Stop If Successful: the action ends after this step.
+                if action.stops_after(i) {
+                    stopped = Some(i);
+                    break;
+                }
             }
             Err(error) if action.continues_past(i) => skipped.push(json!({"step": i, "id": id, "error": error})),
             Err(error) => {
@@ -410,6 +416,9 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         && let Some(p) = paused
     {
         out["paused"] = p;
+    }
+    if let Some(step) = stopped {
+        out["stopped"] = json!(step);
     }
     Ok(out)
 }
@@ -692,7 +701,7 @@ fn layer_text(d: photocraft_engine::layer_refs::Described) -> String {
 }
 
 /// A step's recorded values as Photoshop lists them under an opened step: "Name: Layer 1".
-fn param_lines(params: &Value) -> Vec<String> {
+pub(crate) fn param_lines(params: &Value) -> Vec<String> {
     let Some(o) = params.as_object() else { return Vec::new() };
     o.iter()
         .filter(|(k, _)| !k.starts_with("__") && k.as_str() != "coalesce")
@@ -701,6 +710,7 @@ fn param_lines(params: &Value) -> Vec<String> {
             // Recorded layers: their names, or the current layer.
             let layers = v.as_array().and_then(|a| a.iter().map(describe).collect::<Option<Vec<_>>>()).filter(|l| !l.is_empty());
             let value = match (v, describe(v), layers) {
+                (Value::String(s), ..) if k == "target" && s == photocraft_engine::actions_cmds::CURRENT_MASK => tl!("Current Mask").to_string(),
                 (_, Some(d), _) => layer_text(d),
                 (_, _, Some(l)) => l.into_iter().map(layer_text).collect::<Vec<_>>().join(", "),
                 (Value::String(s), ..) => s.clone(),
@@ -1460,6 +1470,8 @@ struct Row {
     /// Continue on Error: the whole action, and the steps marked on their own.
     continue_on_error: bool,
     continue_steps: std::collections::BTreeSet<usize>,
+    /// Stop If Successful steps.
+    stop_steps: std::collections::BTreeSet<usize>,
     set: Option<String>,
     color: String,
     check: Tri,
@@ -1485,6 +1497,7 @@ impl Row {
             dialogs: a.dialogs.clone(),
             continue_on_error: a.continue_on_error,
             continue_steps: a.continue_steps.clone(),
+            stop_steps: a.stop_steps.clone(),
             set: a.set.clone(),
             color: a.color.clone(),
             check,
@@ -1518,7 +1531,12 @@ enum Click {
     CheckAction(usize),
     DialogAction(usize, Option<Tri>),
     Play(usize),
-    Step { action: usize, step: usize, ctrl: bool, shift: bool },
+    Step {
+        action: usize,
+        step: usize,
+        ctrl: bool,
+        shift: bool,
+    },
     ToggleStep(usize, usize),
     CheckStep(usize, usize),
     DialogStep(usize, usize),
@@ -1526,6 +1544,8 @@ enum Click {
     RecordAgain(usize, usize),
     ContinueAction(usize),
     ContinueStep(usize, usize),
+    /// Stop If Successful on a step (its right-click menu).
+    StopStep(usize, usize),
 }
 
 fn apply(app: &mut PhotocraftApp, click: Click) {
@@ -1620,6 +1640,9 @@ fn apply(app: &mut PhotocraftApp, click: Click) {
         }
         Click::ContinueStep(action, step) => {
             let _ = app.run("actions.continueOnError", json!({"action": action, "step": step}));
+        }
+        Click::StopStep(action, step) => {
+            let _ = app.run("actions.stopIfSuccessful", json!({"action": action, "step": step}));
         }
         Click::PlayStep(action, step) => {
             if let Some(name) = app.session.actions.list.get(action).map(|a| a.name.clone()) {
@@ -1801,7 +1824,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             for i in members {
                 let Some(row) = rows.get(i) else { continue };
-                let Row { name, count, steps, disabled, dialogs, color: swatch, continue_on_error, continue_steps, .. } = row;
+                let Row { name, count, steps, disabled, dialogs, color: swatch, continue_on_error, continue_steps, stop_steps, .. } = row;
                 let indent = if set.is_some() && !button_mode { 14.0 } else { 0.0 };
                 let row_h = if button_mode { BUTTON_H } else { ROW_H };
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
@@ -1980,8 +2003,16 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.painter().text(pos2(sx + 18.0, r.center().y), Align2::LEFT_CENTER, &label, egui::FontId::proportional(11.5), color);
                     // Continue on Error: a step playback passes over when it fails.
                     let continues = *continue_on_error || continue_steps.contains(&step);
-                    if continues {
-                        ui.painter().text(pos2(r.right() - 8.0, r.center().y), Align2::RIGHT_CENTER, "»", egui::FontId::proportional(12.0), t.text_faint);
+                    // Stop If Successful: playback ends after the step (a stop square, left of »).
+                    let stops = stop_steps.contains(&step);
+                    let marks = match (continues, stops) {
+                        (true, true) => Some("■ »"),
+                        (true, false) => Some("»"),
+                        (false, true) => Some("■"),
+                        (false, false) => None,
+                    };
+                    if let Some(marks) = marks {
+                        ui.painter().text(pos2(r.right() - 8.0, r.center().y), Align2::RIGHT_CENTER, marks, egui::FontId::proportional(12.0), t.text_faint);
                     }
                     // Photoshop's check column: unchecked steps are skipped by playback, Batch and droplets.
                     let check = ui.interact(
@@ -2030,6 +2061,14 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             .on_disabled_hover_text(tl!("The whole action continues on error (its own right-click menu)"));
                         if item.clicked() {
                             clicks.push(Click::ContinueStep(i, step));
+                            ui.close();
+                        }
+                        let mut stop = stops;
+                        let item = ui
+                            .checkbox(&mut stop, tl!("Stop If Successful"))
+                            .on_hover_text(tl!("Playback ends after this step when it succeeds; if it fails, playback goes on as usual"));
+                        if item.clicked() {
+                            clicks.push(Click::StopStep(i, step));
                             ui.close();
                         }
                     });

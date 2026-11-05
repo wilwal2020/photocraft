@@ -68,6 +68,11 @@ pub struct Action {
     /// Indices of steps passed over when they fail, as [`Action::continue_on_error`] does for all.
     #[serde(default, rename = "continueSteps", skip_serializing_if = "BTreeSet::is_empty")]
     pub continue_steps: BTreeSet<usize>,
+    /// Stop If Successful (user request): indices of steps after which playback ends when they
+    /// succeed (a step that fails goes on as usual: stops, or with Continue on Error is passed
+    /// over). Playback reports the step as `stopped`.
+    #[serde(default, rename = "stopSteps", skip_serializing_if = "BTreeSet::is_empty")]
+    pub stop_steps: BTreeSet<usize>,
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
@@ -85,6 +90,7 @@ impl Action {
             each_layer: false,
             continue_on_error: false,
             continue_steps: BTreeSet::new(),
+            stop_steps: BTreeSet::new(),
         }
     }
 
@@ -93,6 +99,12 @@ impl Action {
         self.disabled = self.disabled.iter().filter_map(|&i| f(i)).collect();
         self.dialogs = self.dialogs.iter().filter_map(|&i| f(i)).collect();
         self.continue_steps = self.continue_steps.iter().filter_map(|&i| f(i)).collect();
+        self.stop_steps = self.stop_steps.iter().filter_map(|&i| f(i)).collect();
+    }
+
+    /// Whether playback ends after `step` when it succeeds (Stop If Successful).
+    pub fn stops_after(&self, step: usize) -> bool {
+        self.stop_steps.contains(&step)
     }
 
     /// Whether playback goes on past `step` when it fails: the whole action continues on error,
@@ -209,6 +221,16 @@ pub struct ActionState {
 /// current one) keeps that, and a relative recording names no layer: the current one's eye stays
 /// the current layer's.
 pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
+    if s.actions.recording.is_some()
+        && crate::channel_cmds::follows_target(id)
+        && let Some(o) = p.as_object_mut()
+        && o.get("target").and_then(Value::as_str).is_some_and(is_mask_name)
+    {
+        // A step that edited the targeted mask records "the current mask" (user request: an
+        // Invert recorded which mask it inverted): it plays on whichever mask is targeted then.
+        o.insert("target".into(), json!(CURRENT_MASK));
+        return p;
+    }
     if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
         return p;
     }
@@ -226,9 +248,39 @@ pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
     p
 }
 
+/// The `"target"` an action step records for whichever mask is targeted when it plays.
+pub const CURRENT_MASK: &str = "currentMask";
+
+/// A `"target"` naming one of a layer's masks.
+fn is_mask_name(t: &str) -> bool {
+    matches!(t, "mask" | "secondMask" | "filterMask") || t.starts_with("fxMask:")
+}
+
+/// The mask a step recorded on the current mask edits: the one the shell targets
+/// ([`crate::ToolState::mask_target_name`]) if the active layer has it, else the layer mask.
+fn current_mask(s: &Session, id: &str) -> Result<String> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = st.active_layer.and_then(|l| st.doc.layer(l)).ok_or_else(|| bad(id, "no active layer"))?;
+    let has = |t: &str| match t {
+        "filterMask" => matches!(&layer.content, photocraft_doc::LayerContent::Smart(sm) if sm.filter_mask.is_some()),
+        t => layer.mask_in(crate::commands::mask_slot(&json!({ "target": t }))).is_some(),
+    };
+    match s.tools.mask_target_name.as_deref().filter(|t| is_mask_name(t) && has(t)) {
+        Some(t) => Ok(t.to_string()),
+        None if layer.mask.is_some() => Ok("mask".into()),
+        None => Err(bad(id, "the current layer has no mask")),
+    }
+}
+
 /// Resolve the recorded visibility target identically in engine and shell playback.
 pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
     let mut p = p.clone();
+    if p.get("target").and_then(Value::as_str) == Some(CURRENT_MASK) {
+        let t = current_mask(s, id)?;
+        if let Some(o) = p.as_object_mut() {
+            o.insert("target".into(), json!(t));
+        }
+    }
     if id == "layer.setProps"
         && let Some(target) = p.get("_actionLayer")
     {
@@ -518,7 +570,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let action = &s.actions.list[idx];
     let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
     Ok(
-        json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color, "eachLayer": action.each_layer, "continueOnError": action.continue_on_error, "continueSteps": action.continue_steps}),
+        json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color, "eachLayer": action.each_layer, "continueOnError": action.continue_on_error, "continueSteps": action.continue_steps, "stopSteps": action.stop_steps}),
     )
 }
 
@@ -650,6 +702,8 @@ struct Played {
     ran: u64,
     failed: Option<Value>,
     skipped: Vec<Value>,
+    /// The Stop If Successful step that ended playback.
+    stopped: Option<usize>,
 }
 
 /// The result of a playback of `action`: `{action, ran, failed?, skipped?}`.
@@ -691,7 +745,13 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize, limit: Option<usi
             Err(e) => Some(e.to_string()),
         };
         match error {
-            None => *ran += 1,
+            None => {
+                *ran += 1;
+                if action.stops_after(i) {
+                    played.stopped = Some(i);
+                    break;
+                }
+            }
             // Continue on Error passes over the failed step and plays the next.
             Some(error) if action.continues_past(i) => skipped.push(json!({"step": i, "id": id, "error": error})),
             Some(error) => {
@@ -823,7 +883,11 @@ fn play_once(s: &mut Session, p: &Value) -> Result<Value> {
     let recording = begin_playback(s, &action)?;
     let played = run_recorded(s, &action, from, limit);
     finish_playback(s, recording, &action, from, limit);
-    Ok(played_result(&action.name, played.ran, played.failed, played.skipped))
+    let mut out = played_result(&action.name, played.ran, played.failed, played.skipped);
+    if let Some(step) = played.stopped {
+        out["stopped"] = json!(step);
+    }
+    Ok(out)
 }
 
 pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {

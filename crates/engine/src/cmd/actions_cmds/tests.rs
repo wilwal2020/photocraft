@@ -1331,3 +1331,77 @@ fn relative_recording_replays_by_rows_from_the_current_layer() {
     assert_eq!(s.actions.list[1].steps, vec![("layer.setProps".to_string(), json!({"layer": {"name": "L4"}, "visible": false}))]);
     assert!(s.execute("actions.options", json!({"relativeLayers": 1})).is_err());
 }
+
+/// User request: an Invert recorded with a mask targeted named that mask (`"target":"secondMask"`);
+/// it records "the current mask" and plays on whichever mask is targeted then (the second mask,
+/// an effect's own mask, or with none targeted the layer mask).
+#[test]
+fn a_step_on_the_targeted_mask_records_and_plays_on_the_current_mask() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute(crate::second_mask_cmds::ADD, json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "Invert"})).unwrap();
+    s.execute("image.adjustments.invert", json!({"target": "secondMask"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let action = s.actions.list.iter().find(|a| a.name == "Invert").unwrap();
+    assert_eq!(action.steps.len(), 1);
+    assert_eq!(action.steps[0].1["target"], CURRENT_MASK, "{:?}", action.steps[0]);
+    let values = |s: &Session| {
+        let l = &s.active().unwrap().doc.layers[1];
+        (l.mask.as_ref().unwrap().value(2, 2), l.second_mask.as_ref().unwrap().value(2, 2))
+    };
+    // Recording inverted the second mask; with it still targeted, playing inverts it back.
+    assert_eq!(values(&s), (1.0, 0.0));
+    s.tools.mask_target_name = Some("secondMask".into());
+    s.execute("actions.play", json!({"action": "Invert"})).unwrap();
+    assert_eq!(values(&s), (1.0, 1.0));
+    // With the layer mask targeted, or none (headless playback), it inverts the layer mask.
+    s.tools.mask_target_name = Some("mask".into());
+    s.execute("actions.play", json!({"action": "Invert"})).unwrap();
+    assert_eq!(values(&s), (0.0, 1.0));
+    s.tools.mask_target_name = None;
+    s.execute("actions.play", json!({"action": "Invert"})).unwrap();
+    assert_eq!(values(&s), (1.0, 1.0));
+    // A layer without a mask: the step fails instead of inverting the pixels.
+    s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "Invert"}));
+    assert!(r.is_err() || r.as_ref().unwrap().get("failed").is_some(), "{r:?}");
+}
+
+/// User request: Stop If Successful on a step. Playback ends after the step when it succeeds and
+/// reports it; when it fails, playback goes on as usual (stops, or with Continue on Error is passed
+/// over). The flag follows the step when steps move and is saved with the action.
+#[test]
+fn stop_if_successful_ends_playback_after_a_step_that_succeeds() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let steps = vec![
+        ("layer.new.layer".to_string(), json!({"name": "One"})),
+        ("layer.new.layer".to_string(), json!({"name": "Two"})),
+        ("layer.new.layer".to_string(), json!({"name": "Three"})),
+    ];
+    s.actions.list.push(Action::new("A", steps));
+    let names = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert_eq!(s.execute("actions.stopIfSuccessful", json!({"action": "A", "step": 1})).unwrap()["stopSteps"], json!([1]));
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!((r["ran"].clone(), r["stopped"].clone()), (json!(2), json!(1)), "{r}");
+    assert_eq!(names(&s)[1..], ["One", "Two"], "the third step didn't play");
+    // A failing step marked to stop doesn't stop: with Continue on Error it is passed over.
+    s.actions.list[0].steps[1] = ("layer.select".to_string(), json!({"layer": 999_999}));
+    s.execute("actions.continueOnError", json!({"action": "A", "step": 1})).unwrap();
+    let before = names(&s).len();
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(r.get("stopped").is_none() && r["skipped"].as_array().is_some_and(|a| a.len() == 1), "{r}");
+    assert_eq!(names(&s).len(), before + 2, "steps one and three played");
+    // Moving the step moves the flag; it is saved and flips off.
+    s.actions.list[0].remap_steps(|i| Some(2 - i));
+    assert_eq!(s.actions.list[0].stop_steps.iter().copied().collect::<Vec<_>>(), [1]);
+    let saved = serde_json::to_value(&s.actions.list[0]).unwrap();
+    assert_eq!(saved["stopSteps"], json!([1]));
+    let back: Action = serde_json::from_value(saved).unwrap();
+    assert!(back.stops_after(1));
+    assert_eq!(s.execute("actions.stopIfSuccessful", json!({"action": "A", "step": 1})).unwrap()["stopSteps"], json!([]));
+    assert!(s.execute("actions.stopIfSuccessful", json!({"action": "A", "step": 9})).is_err());
+}
