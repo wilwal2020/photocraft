@@ -349,3 +349,18 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
     assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
 }
+
+/// User report: a mask looked blurry. Shown zoomed in, a full-size mask or channel view keeps its
+/// pixels crisp, as the canvas image does; a reduced one (a huge document) stays filtered.
+#[test]
+fn a_full_size_view_is_sharp_zoomed_in() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.sync_views();
+    app.run("channel.target", json!({"channel": "green"})).unwrap();
+    let ctx = egui::Context::default();
+    let id = ensure(&mut app, &ctx, 0).unwrap();
+    let options = ctx.tex_manager().read().meta(id).map(|m| m.options);
+    assert_eq!(options.map(|o| o.magnification), Some(egui::TextureFilter::Nearest));
+    assert_eq!(sampling(2).magnification, egui::TextureFilter::Linear);
+}

@@ -16,6 +16,12 @@ use photocraft_raster::{Surface, from_rgba, to_rgba};
 
 use crate::PhotocraftApp;
 
+/// A view's sampling: the canvas image's, so a mask or channel shown zoomed in keeps its pixels
+/// crisp instead of smoothing them (user report: a mask looked blurry).
+fn sampling(factor: u32) -> TextureOptions {
+    crate::canvas::canvas_texture_options(factor)
+}
+
 /// Largest overlay texture side; bigger documents show a downsampled overlay.
 const MAX_SIDE: u32 = 4096;
 /// Limit the sampled float composite to 128 MiB across open documents.
@@ -345,7 +351,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
             && let Some(px) = render(&doc, &view, r, factor, look, active)
         {
             let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
-            c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
+            c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, sampling(factor));
         }
         c.revision = revision;
         c.preview_key = preview_key;
@@ -360,7 +366,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let img = egui::ColorImage::new(size, px);
     match app.channel_views.get_mut(&id) {
         Some(c) if c.tex.size() == size => {
-            c.tex.set(img, TextureOptions::LINEAR);
+            c.tex.set(img, sampling(factor));
             c.revision = revision;
             c.preview_key = preview_key;
             c.key = key;
@@ -371,7 +377,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
             }
         }
         _ => {
-            let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
+            let tex = ctx.load_texture(format!("channel-view-{id}"), img, sampling(factor));
             let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels });
             app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex, source });
         }

@@ -48,6 +48,7 @@ mod start_screen;
 mod strokes;
 mod tabs;
 mod textures;
+pub(crate) use textures::canvas_texture_options;
 pub(super) mod tile_overlay;
 pub(super) mod tool_cursor;
 pub mod tool_feedback;

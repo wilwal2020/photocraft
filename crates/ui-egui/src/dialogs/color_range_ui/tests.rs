@@ -723,3 +723,23 @@ fn a_preview_failure_is_shown_not_silent() {
     set(&mut h, "select", json!("reds"));
     assert!(h.state().color_range.as_ref().unwrap().error.is_none(), "and cleared once the preview works again");
 }
+
+/// User report: the Selection Preview looked smoothed. Zoomed in, the canvas overlay is the full
+/// size mask and keeps its pixels crisp, as the canvas image does.
+#[test]
+fn the_selection_preview_is_sharp_zoomed_in() {
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app_with_doc()
+    });
+    h.state_mut().ui.views[0].zoom = 20.0;
+    h.state_mut().ui.views[0].center = [20.0, 15.0];
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.run_steps(3);
+    open(h.state_mut());
+    set(&mut h, "__selectionPreview", json!("grayscale"));
+    h.run_steps(3);
+    let id = h.state().color_range.as_ref().and_then(|p| p.overlay.as_ref()).map(|t| t.id()).expect("the canvas overlay");
+    let options = h.ctx.tex_manager().read().meta(id).map(|m| m.options);
+    assert_eq!(options.map(|o| o.magnification), Some(egui::TextureFilter::Nearest));
+}

@@ -793,10 +793,14 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
         }
         let pixels = mask.into_iter().map(|v| overlay_pixel(mode, v)).collect();
         let img = egui::ColorImage::new(size, pixels);
+        // Sampled as the canvas image is: crisp pixels zoomed in when the mask is full size
+        // (user report: the Selection Preview looked smoothed).
+        let full = app.session.active().is_some_and(|st| size[0] >= st.doc.size.width as usize && size[1] >= st.doc.size.height as usize);
+        let sampling = crate::canvas::canvas_texture_options(if full { 1 } else { 2 });
         if let Some(p) = app.color_range.as_mut() {
             match &mut p.overlay {
-                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-                None => p.overlay = Some(ctx.load_texture("color-range-canvas-preview", img, egui::TextureOptions::LINEAR)),
+                Some(t) => t.set(img, sampling),
+                None => p.overlay = Some(ctx.load_texture("color-range-canvas-preview", img, sampling)),
             }
             p.overlay_key = shown;
         }
