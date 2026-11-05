@@ -975,8 +975,9 @@ const MAX_EFFECTS: usize = 256;
 /// Replaces a layer's whole effect list in one history step: the Layer Style dialog's
 /// apply. Each entry builds an effect from `params`, or edits the snapshot it carried
 /// (`fx`: the effect JSON as the dialog loaded it, kept verbatim for everything the
-/// dialog doesn't model) with the params present. Unknown kinds, kind/snapshot
-/// mismatches and malformed snapshots are errors, never panics.
+/// dialog doesn't model) with the params present. An entry with `from` keeps the own mask
+/// (`FxCommon::mask`) of the layer's effect at that index, which the JSON snapshot can't carry.
+/// Unknown kinds, kind/snapshot mismatches and malformed snapshots are errors, never panics.
 fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.replace";
     crate::commands::check_f32_values(CMD, p)?;
@@ -987,7 +988,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut list = Vec::with_capacity(entries.len());
     let mut pats = Vec::new();
+    let mut froms: Vec<Option<usize>> = Vec::with_capacity(entries.len());
     for e in entries {
+        froms.push(e.get("from").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()));
         let kind = e.get("kind").and_then(Value::as_str).ok_or_else(|| bad(CMD, "each effect needs a `kind` string"))?;
         let mut params = match e.get("params") {
             None | Some(Value::Null) => json!({}),
@@ -1039,10 +1042,20 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
             crate::extra_cmds::background_to_layer(doc, id);
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        let masks: Vec<Option<photocraft_doc::LayerMask>> =
+            froms.iter().map(|f| f.and_then(|i| l.effects.items.get(i)).and_then(Effect::mask).cloned()).collect();
         // The list's master switch (`layer.setEffectsVisible`, the Layers panel's "Effects" eye)
         // survives the edit: the dialog models per-effect state, not the switch (#3648). A layer
         // with no effects yet still has the default `enabled: true`, so its style shows.
-        l.effects.items = list.into_iter().map(|e| e.in_mode(mode)).collect();
+        l.effects.items = list
+            .into_iter()
+            .zip(masks)
+            .map(|(e, m)| {
+                let mut e = e.in_mode(mode);
+                *e.mask_mut() = m;
+                e
+            })
+            .collect();
         Ok(())
     })?;
     Ok(json!({ "layer": id.0, "effects": count }))

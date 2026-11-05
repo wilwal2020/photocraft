@@ -506,7 +506,7 @@ fn layer_block(s: &Session, p: &Value, r: Reference) -> Result<Option<Vec<u8>>> 
             Ok(Some(rgba8_image(surf, d.doc.bounds()).iter().map(|px| px[3]).collect()))
         }
         Edits::Mask if matches!(l.content, LayerContent::Fill(_)) => {
-            let Some(m) = l.pixel_mask(crate::commands::is_second_mask_target(p)).filter(|m| m.enabled) else { return Ok(None) };
+            let Some(m) = l.mask_in(crate::commands::mask_slot(p)).filter(|m| m.enabled) else { return Ok(None) };
             Ok(Some(rgba8_image(&m.surface, d.doc.bounds()).iter().map(|px| px[0]).collect()))
         }
         _ => Ok(None),

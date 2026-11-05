@@ -333,8 +333,20 @@ pub(crate) fn mask_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rec
 
 /// Photoshop shows a layer's effects as indented sub-rows ("Effects", then each effect). The eye
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
-pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
+///
+/// Clicking an effect's row selects it: Add Mask then gives that effect a mask of its own (a
+/// PhotoCraft extension), shown as a thumbnail at the row's end. Clicking the thumbnail targets
+/// it for painting, ⇧-click turns it off or on, ⌘-click loads it as the selection.
+pub(super) fn effect_rows(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    doc: &photocraft_doc::Document,
+    l: &Layer,
+    depth: usize,
+    actions: &mut Vec<(String, Value)>,
+) {
     let t = Tokens::get(ui.ctx());
+    let active = app.session.active().is_some_and(|st| st.active_layer == Some(l.id));
     let indent = 30.0 + depth as f32 * 14.0 + 34.0;
     // English `Effect::label` keys stay for kind matching; display goes through `tl!` (catalogs
     // already have Drop Shadow → 投影, Effects → 效果, …).
@@ -352,7 +364,12 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         if !ui.is_rect_visible(rect) {
             continue;
         }
-        if resp.hovered() {
+        let index = i.checked_sub(1);
+        let effect = index.and_then(|k| l.effects.items.get(k));
+        let selected = active && index.is_some_and(|k| app.ui.fx_selected == Some((l.id.0, k)));
+        if selected {
+            ui.painter().rect_filled(rect, 0.0, if t.pro { t.row_selected } else { t.hover });
+        } else if resp.hovered() {
             ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.35));
         }
         ui.painter().line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
@@ -375,7 +392,30 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         if i == 0 {
             icons::paint(ui, Rect::from_center_size(pos2(x - 12.0, rect.center().y), vec2(14.0, 14.0)), "sparkles", 11.0, t.text_dim);
         }
-        let right = rect.right() - crate::layer_row_ui::RIGHT_PAD;
+        let mut right = rect.right() - crate::layer_row_ui::RIGHT_PAD;
+        // The effect's own mask, at the row's end.
+        if let (Some(k), Some(mask)) = (index, effect.and_then(photocraft_doc::Effect::mask)) {
+            let thumb = Rect::from_center_size(pos2(right - 8.0, rect.center().y), vec2(16.0, 16.0));
+            right = thumb.left() - 4.0;
+            fx_mask_thumb(app, ui, doc, l, k, mask, thumb, &t);
+            let tr = ui.interact(thumb.expand(2.0), ui.scope_id().with(("fx-mask", l.id.0, k)), Sense::click());
+            tr.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Effect mask")));
+            if tr.clicked() {
+                actions.extend(fx_mask_click(l, k, mask.enabled, active, ui.input(|i| i.modifiers)));
+            }
+            tr.context_menu(|ui| {
+                crate::widgets::style_spectrum_popup_menu(ui);
+                let (label, on) = if mask.enabled { (tl!("Disable Effect Mask"), false) } else { (tl!("Enable Effect Mask"), true) };
+                if ui.button(label).clicked() {
+                    actions.push((photocraft_engine::fx_mask_cmds::ENABLED.into(), json!({"layer": l.id.0, "index": k, "enabled": on})));
+                    ui.close();
+                }
+                if ui.button(tl!("Delete Effect Mask")).clicked() {
+                    actions.push((photocraft_engine::fx_mask_cmds::DELETE.into(), json!({"layer": l.id.0, "index": k})));
+                    ui.close();
+                }
+            });
+        }
         crate::layer_row_ui::label(
             ui.painter(),
             x,
@@ -385,14 +425,85 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
             egui::FontId::proportional(11.5),
             if on { t.text_dim } else { t.text_faint },
         );
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name.clone()));
+        if resp.clicked()
+            && let Some(k) = index
+        {
+            if !active {
+                actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+            }
+            actions.push(("ui.fxSelect".into(), json!([l.id.0, k])));
+        }
         if resp.double_clicked() {
             crate::layer_style::open_for_layer(app, l.id, kind);
         }
         // #2846: right-click opens the layer style menu (Create Layer, Copy Layer Style…), as in Photoshop.
         resp.context_menu(|ui| {
             crate::widgets::style_spectrum_popup_menu(ui);
+            if let Some(k) = index.filter(|_| effect.is_some_and(|e| e.mask().is_none())) {
+                if ui.button(tl!("Add Effect Mask")).clicked() {
+                    if !active {
+                        actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                    }
+                    actions.push((photocraft_engine::fx_mask_cmds::ADD.into(), json!({"layer": l.id.0, "index": k})));
+                    actions.push(("ui.fxMaskTarget".into(), json!([l.id.0, k])));
+                    ui.close();
+                }
+                ui.separator();
+            }
             crate::layer_menu_ui::show_effects(app, ui, l, actions);
         });
     }
+}
+
+/// Draws effect `k`'s own `mask` of layer `l` in `r`: crossed out in red while off, bracketed
+/// while targeted.
+#[allow(clippy::too_many_arguments)]
+fn fx_mask_thumb(
+    app: &mut PhotocraftApp,
+    ui: &egui::Ui,
+    doc: &photocraft_doc::Document,
+    l: &Layer,
+    k: usize,
+    mask: &photocraft_doc::LayerMask,
+    r: Rect,
+    t: &Tokens,
+) {
+    let painter = ui.painter();
+    if k < crate::mask_thumbs_ui::FX_MASK_THUMBS {
+        let tex = app.mask_thumb_kind(ui.ctx(), doc, l.id, mask, crate::mask_thumbs_ui::THUMB_FX_MASK + k as u8);
+        painter.image(tex, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+    } else {
+        painter.rect_filled(r, 0.0, egui::Color32::WHITE);
+    }
+    if !mask.enabled {
+        painter.line_segment([r.left_top(), r.right_bottom()], Stroke::new(1.0, t.danger));
+        painter.line_segment([r.right_top(), r.left_bottom()], Stroke::new(1.0, t.danger));
+    }
+    painter.rect_stroke(r, 1.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+    if app.ui.fx_mask_target == Some((l.id.0, k)) && app.fx_mask_targeted() == Some(k) {
+        crate::mask_thumbs_ui::paint_brackets(painter, r, t.text);
+    }
+}
+
+/// What a click on effect `k`'s mask thumbnail of layer `l` does: ⌘ loads the mask as the
+/// selection, ⇧ turns it off or on, a plain click targets it (turning a disabled mask back on, as a
+/// layer mask's thumbnail does).
+pub(crate) fn fx_mask_click(l: &Layer, k: usize, enabled: bool, active: bool, m: egui::Modifiers) -> Vec<(String, Value)> {
+    let layer = l.id.0;
+    if m.command {
+        return vec![(photocraft_engine::visible_cmds::ID.into(), json!({"layer": layer, "source": photocraft_engine::commands::fx_mask_target(k)}))];
+    }
+    if m.shift {
+        return vec![(photocraft_engine::fx_mask_cmds::ENABLED.into(), json!({"layer": layer, "index": k, "enabled": !enabled}))];
+    }
+    let mut out = Vec::new();
+    if !active {
+        out.push(("layer.select".into(), json!({"layer": layer})));
+    }
+    if !enabled {
+        out.push((photocraft_engine::fx_mask_cmds::ENABLED.into(), json!({"layer": layer, "index": k, "enabled": true})));
+    }
+    out.push(("ui.fxMaskTarget".into(), json!([layer, k])));
+    out
 }

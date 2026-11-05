@@ -26,6 +26,11 @@ impl PhotocraftApp {
                 if matches!(&layer.content, photocraft_doc::LayerContent::Smart(sm) if sm.filter_mask.is_some()) {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_SMART_MASK));
                 }
+                for (i, e) in layer.effects.items.iter().enumerate().take(mask_thumbs_ui::FX_MASK_THUMBS) {
+                    if e.mask().is_some() {
+                        live.insert((layer.id, mask_thumbs_ui::THUMB_FX_MASK + i as u8));
+                    }
+                }
                 if let Some(children) = layer.children() {
                     pending.extend(children);
                 }

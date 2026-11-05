@@ -559,6 +559,8 @@ pub fn initial_fields_with(layer: &Layer, select: Option<&str>, light: f32, user
             "on": e.enabled(),
             "params": values_of(e, light),
             "fx": serde_json::to_value(e).unwrap_or(Value::Null),
+            // The layer's effect this one is: it keeps that effect's own mask.
+            "from": i,
         }));
     }
     f.insert("effects".into(), Value::Array(effects));
@@ -680,7 +682,11 @@ fn effect_entry(e: &Value, kind: &str, mut params: Value, initial_light_angle: O
                     }
                 }
             }
-            json!({"kind": kind, "fx": fx, "params": params})
+            let mut entry = json!({"kind": kind, "fx": fx, "params": params});
+            if let Some(from) = e.get("from").filter(|v| v.is_u64()) {
+                entry["from"] = from.clone();
+            }
+            entry
         }
         None => {
             // A new instance: the page shows the factory defaults merged with

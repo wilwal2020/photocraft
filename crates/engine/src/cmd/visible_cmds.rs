@@ -32,6 +32,8 @@ pub enum Source {
     Mask,
     SecondMask,
     VectorMask,
+    /// The own mask of the effect at that index.
+    FxMask(usize),
 }
 
 impl Source {
@@ -41,7 +43,7 @@ impl Source {
             "mask" => Source::Mask,
             "secondMask" => Source::SecondMask,
             "vectorMask" => Source::VectorMask,
-            _ => return None,
+            t => Source::FxMask(t.strip_prefix("fxMask:")?.parse().ok()?),
         })
     }
 }
@@ -102,6 +104,7 @@ fn probe(doc: &Document, id: LayerId, source: Source, shade: f32) -> Option<Docu
     match source {
         Source::Mask => l.mask = Some(mask?),
         Source::SecondMask => l.mask = Some(second?),
+        Source::FxMask(i) => l.mask = Some(l.effects.items.get(i)?.mask()?.clone()),
         _ => l.vector_mask = Some(vector?),
     }
     if let Some(m) = l.mask.as_mut() {
@@ -201,9 +204,10 @@ fn load_visible(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let source = match p.get("source") {
         None | Some(Value::Null) => Source::Layer,
-        Some(v) => {
-            v.as_str().and_then(Source::parse).ok_or_else(|| bad(format!("`source` = {v} must be \"layer\", \"mask\", \"secondMask\" or \"vectorMask\"")))?
-        }
+        Some(v) => v
+            .as_str()
+            .and_then(Source::parse)
+            .ok_or_else(|| bad(format!("`source` = {v} must be \"layer\", \"mask\", \"secondMask\", \"vectorMask\" or \"fxMask:N\"")))?,
     };
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let id = match (p.get("layer").and_then(Value::as_u64), p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {

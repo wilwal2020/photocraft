@@ -199,6 +199,10 @@ pub struct EffectsM {
     pub psd_raw: Option<Hash>,
     #[serde(default)]
     pub reference: Option<(f64, f64)>,
+    /// The effects' own masks (`FxCommon::mask`, which the effect JSON leaves out), by index in
+    /// `items`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masks: Vec<(usize, MaskM)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

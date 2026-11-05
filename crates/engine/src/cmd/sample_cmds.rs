@@ -245,6 +245,10 @@ fn target_gray<'a>(d: &'a crate::DocState, p: &Value) -> Result<Option<&'a photo
             "secondMask" => layer().and_then(|l| l.second_mask.as_ref()).map(|m| &m.surface),
             "quickMask" => d.doc.quick_mask.as_ref().map(|q| &q.surface),
             "pixels" | "filterMask" => None,
+            t if t.starts_with("fxMask:") => {
+                let slot = crate::commands::mask_slot(p);
+                layer().and_then(|l| l.mask_in(slot)).map(|m| &m.surface)
+            }
             other => return Err(bad(CMD, format!("unknown target `{other}` (pixels|mask|secondMask|quickMask|{{channel}})"))),
         },
         Some(Value::Object(o)) => match o.get("channel") {

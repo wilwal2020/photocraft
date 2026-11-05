@@ -780,6 +780,10 @@ impl<'a> Planner<'a> {
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
         let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
         check_effect_gradients(&items)?;
+        // An effect's own mask (a PhotoCraft extension) is drawn by the CPU compositor.
+        if items.iter().any(|e| e.active_mask().is_some()) {
+            return Err(Unsupported("an effect's own mask".into()));
+        }
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));

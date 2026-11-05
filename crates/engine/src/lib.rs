@@ -23,6 +23,7 @@ pub mod doc_path;
 pub mod fill_tool_cmds;
 pub mod filters;
 pub mod filters_ext;
+pub mod fx_mask_cmds;
 pub mod generative;
 pub mod gigapixel_cmds;
 mod group_options;

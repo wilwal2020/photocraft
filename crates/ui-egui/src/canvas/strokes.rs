@@ -843,6 +843,10 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     if app.filter_mask_targeted() {
         return json!("filterMask");
     }
+    // An effect's own mask, its thumbnail on the effect's row clicked.
+    if let Some(i) = app.fx_mask_targeted() {
+        return json!(photocraft_engine::commands::fx_mask_target(i));
+    }
     let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
     // Viewing the mask (⌥-click its thumbnail, #196) paints the mask.
     let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);

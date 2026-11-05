@@ -265,7 +265,7 @@ mod tests {
                 effects: vec![
                     bevel,
                     Effect::PatternOverlay {
-                        common: FxCommon { enabled: true, blend: BlendMode::Normal, opacity: 1.0 },
+                        common: FxCommon { enabled: true, blend: BlendMode::Normal, opacity: 1.0, mask: Default::default() },
                         name: "Grid".into(),
                         id: "pat-1".into(),
                         scale: 2.0,

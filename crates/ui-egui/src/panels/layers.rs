@@ -303,7 +303,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     crate::layer_reveal::scroll_to_row(ui, top);
                 }
                 if !l.effects.items.is_empty() && fx_collapsed.iter().all(|id| *id != l.id) {
-                    effect_rows(app, ui, l, depth, &mut actions);
+                    effect_rows(app, ui, &doc, l, depth, &mut actions);
                 }
                 if !fx_collapsed.contains(&l.id) {
                     crate::smart_ui::filter_rows(app, ui, &doc, l, depth, &mut actions);
@@ -488,7 +488,13 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // second pixel mask (PhotoCraft; Photoshop adds the vector mask there), then a vector
         // mask, and with all of them it is greyed.
         let alt = ui.input(|i| i.modifiers.alt);
+        // An effect row selected (clicked) on the active layer: Add Mask masks that effect alone.
+        let fx_pick =
+            app.ui.fx_selected.filter(|(id, i)| active_layer.is_some_and(|l| l.id.0 == *id && l.effects.items.get(*i).is_some_and(|e| e.mask().is_none())));
         let mut mask_cmd = crate::layer_menu_ui::mask_button_command(active_layer, doc.selection.is_some(), alt);
+        if fx_pick.is_some() {
+            mask_cmd = Some(photocraft_engine::fx_mask_cmds::ADD);
+        }
         // A path selected in the Paths panel asks for the vector mask: it comes before the second
         // pixel mask then.
         if mask_cmd == Some(photocraft_engine::second_mask_cmds::ADD)
@@ -497,7 +503,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         {
             mask_cmd = Some(if alt { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" });
         }
-        let mask_tip = if mask_cmd == Some(photocraft_engine::second_mask_cmds::ADD) {
+        let mask_tip = if fx_pick.is_some() {
+            crate::i18n::fmt(tl!("Add a mask to the selected effect  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
+        } else if mask_cmd == Some(photocraft_engine::second_mask_cmds::ADD) {
             crate::i18n::fmt(tl!("Add a second mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
         } else if active_layer.is_some_and(|l| l.mask.is_some()) {
             tl!("Add vector mask").to_string()
@@ -513,13 +521,19 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Alt still inverts it.
             // Otherwise one Add Mask command (user request): an action records "Add Mask", not
             // the mask it happened to add, and adds whichever one the layer lacks when played.
-            match crate::vector_ui::selected_document_path(app).filter(|_| cmd.starts_with("layer.vectorMask.")) {
-                Some(name) => actions.push(("layer.vectorMask.currentPath".into(), json!({"name": name, "hide": alt}))),
-                None => {
-                    actions.push((photocraft_engine::second_mask_cmds::ADD_MASK.into(), json!({"hide": alt})));
-                    if cmd == photocraft_engine::second_mask_cmds::ADD {
-                        // The new mask is targeted, as a new layer mask is.
-                        actions.push(("ui.secondMaskTarget".into(), json!(true)));
+            if let Some((layer, index)) = fx_pick {
+                actions.push((photocraft_engine::fx_mask_cmds::ADD.into(), json!({"layer": layer, "index": index, "hide": alt})));
+                // The new mask is targeted, as a new layer mask is.
+                actions.push(("ui.fxMaskTarget".into(), json!([layer, index])));
+            } else {
+                match crate::vector_ui::selected_document_path(app).filter(|_| cmd.starts_with("layer.vectorMask.")) {
+                    Some(name) => actions.push(("layer.vectorMask.currentPath".into(), json!({"name": name, "hide": alt}))),
+                    None => {
+                        actions.push((photocraft_engine::second_mask_cmds::ADD_MASK.into(), json!({"hide": alt})));
+                        if cmd == photocraft_engine::second_mask_cmds::ADD {
+                            // The new mask is targeted, as a new layer mask is.
+                            actions.push(("ui.secondMaskTarget".into(), json!(true)));
+                        }
                     }
                 }
             }
@@ -551,6 +565,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();
+            // The layer's own thumbnails take the target and the selection from its effect rows.
+            app.ui.fx_mask_target = None;
+            app.ui.fx_selected = None;
             app.ui.mask_target = p.as_bool().unwrap_or(false);
             app.ui.second_mask_target = false;
             app.ui.vector_mask_target = false;
@@ -590,6 +607,18 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         if id == "ui.filterMaskTarget" {
             app.select_filter_mask_target(p.as_u64());
+            continue;
+        }
+        // An effect's own mask thumbnail ([layer, index]), or `null` to stop targeting it.
+        if id == "ui.fxMaskTarget" {
+            let pick = p.as_array().and_then(|a| Some((a.first()?.as_u64()?, usize::try_from(a.get(1)?.as_u64()?).ok()?)));
+            app.select_fx_mask_target(pick);
+            continue;
+        }
+        // An effect row clicked ([layer, index]): Add Mask then masks that effect.
+        if id == "ui.fxSelect" {
+            app.ui.fx_selected = p.as_array().and_then(|a| Some((a.first()?.as_u64()?, usize::try_from(a.get(1)?.as_u64()?).ok()?)));
+            app.select_fx_mask_target(None);
             continue;
         }
         // Double-clicking a mask thumbnail opens its settings: show Properties.

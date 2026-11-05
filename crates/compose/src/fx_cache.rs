@@ -70,6 +70,13 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
         format!("{vm:?}").hash(h);
     }
     format!("{:?}", layer.effects).hash(h);
+    // The effects' own masks (their Debug names settings, not pixels): a styled group's maps come
+    // from its children's composite, their masked effects included.
+    for (i, e) in layer.effects.items.iter().enumerate() {
+        if let Some(m) = e.mask() {
+            (3u8, i, surface_fp(&m.surface, pin), m.enabled, m.density.to_bits()).hash(h);
+        }
+    }
     // Transparency Shapes Layer picks the shape (content or the whole layer); a group child's
     // Blend If and knockout change the composite a styled group's shape comes from.
     layer.advanced.hash(h);

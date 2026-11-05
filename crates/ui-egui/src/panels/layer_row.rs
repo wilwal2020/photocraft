@@ -495,6 +495,9 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
         let target = if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
             // The Smart Filters row's filter mask thumbnail carries the brackets.
             None
+        } else if app.ui.fx_mask_target.is_some_and(|(id, _)| id == l.id.0) && app.fx_mask_targeted().is_some() {
+            // So does the effect row's mask thumbnail.
+            None
         } else if app.ui.vector_mask_target && vector_rect.is_some() {
             vector_rect
         } else if app.ui.mask_target && app.ui.second_mask_target && second_rect.is_some() {

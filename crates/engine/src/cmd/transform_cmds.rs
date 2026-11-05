@@ -200,7 +200,7 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            let m = l.pixel_mask(crate::commands::is_second_mask_target(p)).ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
+            let m = l.mask_in(crate::commands::mask_slot(p)).ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
             Ok((!m.linked).then_some(&m.surface))
         }
         // A filter mask is not transformed on its own: the smart object transforms, as in Photoshop.

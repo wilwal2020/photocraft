@@ -18,8 +18,14 @@ impl PhotocraftApp {
         }
         // A filter mask is painted, filled and filtered in place; it doesn't float or move, and
         // Edit › Transform, Apply Image and the dialog filters act on the smart object.
-        let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
-            "filterMask"
+        let pastes_or_copies =
+            matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside" | "edit.copy");
+        let target: String = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
+            "filterMask".into()
+        } else if let Some(i) = self.fx_mask_targeted().filter(|_| !pastes_or_copies) {
+            // An effect's own mask is painted, filled, filtered and moved like a layer mask; Copy
+            // and Paste keep to the layer.
+            photocraft_engine::commands::fx_mask_target(i)
         } else if self.layer_mask_targeted() {
             // Paste makes a new layer even with a mask targeted (an adjustment layer's, a mask
             // thumbnail clicked, or ⌘\), as in Photoshop: only a mask shown on its own (⌥-click,
@@ -42,7 +48,7 @@ impl PhotocraftApp {
                     p => p,
                 };
             }
-            self.mask_target_name()
+            self.mask_target_name().into()
         } else {
             return params;
         };
@@ -128,6 +134,41 @@ impl PhotocraftApp {
 
     /// Explicitly targeting a filter mask ends any conflicting mask view; untargeting it ends its
     /// own view too.
+    /// The effect whose own mask the Layers panel targets on the active layer (`"fxMask:N"`), if
+    /// that effect has a mask and no alpha channel, Quick Mask or mask shown alone takes over.
+    pub fn fx_mask_targeted(&self) -> Option<usize> {
+        let (layer, index) = self.ui.fx_mask_target?;
+        let st = self.session.active()?;
+        let l = st.active_layer.filter(|id| id.0 == layer).and_then(|id| st.doc.layer(id))?;
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+            && st.doc.quick_mask.is_none()
+            && photocraft_engine::mask_view_cmds::current(st).is_none();
+        (composite && l.effects.items.get(index)?.mask().is_some()).then_some(index)
+    }
+
+    /// Target the own mask of effect `index` of layer `layer` (its thumbnail clicked, or a mask just
+    /// added to it), or with `None` stop targeting it. The layer's other masks lose the target.
+    pub(crate) fn select_fx_mask_target(&mut self, target: Option<(u64, usize)>) {
+        if target.is_some() {
+            self.end_filter_mask_view();
+            if let Some(st) = self.session.active_mut()
+                && matches!(
+                    st.channel_view.target,
+                    photocraft_engine::channel_cmds::ChannelTarget::LayerMask | photocraft_engine::channel_cmds::ChannelTarget::VectorMask
+                )
+            {
+                st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+            }
+            self.ui.mask_target = false;
+            self.ui.second_mask_target = false;
+            self.ui.vector_mask_target = false;
+            self.ui.filter_mask_target = None;
+            self.ui.fx_selected = target;
+        }
+        self.ui.fx_mask_target = target;
+        self.sync_mask_targets();
+    }
+
     pub(crate) fn select_filter_mask_target(&mut self, layer: Option<u64>) {
         if layer.is_none() {
             self.end_filter_mask_view();
@@ -217,7 +258,21 @@ impl PhotocraftApp {
         if self.ui.filter_mask_target.is_some() && !self.filter_mask_targeted() {
             self.ui.filter_mask_target = None;
         }
-        let mask = self.layer_mask_targeted() || self.filter_mask_targeted();
+        // Another mask targeted, another layer active or the effect's mask gone: the effect's mask
+        // is no longer the target. A selected effect row stays with its layer.
+        let other = self.ui.mask_target || self.ui.vector_mask_target || self.ui.filter_mask_target.is_some();
+        if self.ui.fx_mask_target.is_some() && (other || self.fx_mask_targeted().is_none()) {
+            self.ui.fx_mask_target = None;
+        }
+        if let Some((layer, index)) = self.ui.fx_selected {
+            let st = self.session.active();
+            let kept =
+                st.and_then(|st| st.active_layer.filter(|id| id.0 == layer).and_then(|id| st.doc.layer(id))).is_some_and(|l| index < l.effects.items.len());
+            if !kept {
+                self.ui.fx_selected = None;
+            }
+        }
+        let mask = self.layer_mask_targeted() || self.filter_mask_targeted() || self.fx_mask_targeted().is_some();
         self.session.tools.target_mask(mask);
     }
 }

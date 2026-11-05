@@ -23,6 +23,7 @@ pub(crate) fn target_of(p: &Value) -> Target {
     match p.get("target") {
         Some(Value::String(s)) => match s.as_str() {
             "mask" | "secondMask" => Target::Mask,
+            t if t.starts_with("fxMask:") => Target::Mask,
             "filterMask" => Target::FilterMask,
             "quickMask" => Target::QuickMask,
             _ => Target::Pixels,
@@ -80,8 +81,8 @@ pub fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Va
         }
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-            let second = crate::commands::is_second_mask_target(p);
-            doc.layer(id).and_then(|l| l.pixel_mask(second)).map(|m| &m.surface).ok_or(EngineError::NoLayer(id))
+            let slot = crate::commands::mask_slot(p);
+            doc.layer(id).and_then(|l| l.mask_in(slot)).map(|m| &m.surface).ok_or(EngineError::NoLayer(id))
         }
         Target::FilterMask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
@@ -129,8 +130,8 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
             Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
         }
         Target::Mask if edits_mask(id) => {
-            let second = crate::commands::is_second_mask_target(p);
-            Some(crate::active_layer_of(s).and_then(|l| if l.pixel_mask(second).is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+            let slot = crate::commands::mask_slot(p);
+            Some(crate::active_layer_of(s).and_then(|l| if l.mask_in(slot).is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
         }
         _ => None,
     }

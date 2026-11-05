@@ -32,8 +32,8 @@ pub use analysis::{CountGroup, Measurement, MeasurementScale, Note, Ruler};
 pub use blend_if::{BlendIf, BlendRange};
 pub use comps::{Artboard, ArtboardBackground, CompAppearance, CompLayerState, LayerComp};
 pub use effects::{
-    Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
-    GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
+    Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxMask, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique,
+    Gradient, GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
@@ -252,6 +252,15 @@ mod label_color_tests {
         }
         assert!(serde_json::from_value::<LabelColor>(serde_json::json!("Unknown")).is_err());
     }
+}
+
+/// Which of a layer's pixel masks: the layer mask, PhotoCraft's second mask, or the own mask of
+/// the effect at that index of `Layer::effects.items`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MaskSlot {
+    Layer,
+    Second,
+    Effect(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -736,8 +745,29 @@ impl Layer {
 
     /// The layer's pixel masks (the layer mask, then the second one): what moves, resizes and
     /// turns with it.
+    ///
+    /// The effects' own masks ([`effects::FxCommon::mask`]) come last: they're laid over the
+    /// document like the layer mask, so they move, resize and turn with it too.
     pub fn pixel_masks_mut(&mut self) -> impl Iterator<Item = &mut LayerMask> {
-        self.mask.iter_mut().chain(self.second_mask.iter_mut())
+        self.mask.iter_mut().chain(self.second_mask.iter_mut()).chain(self.effects.items.iter_mut().filter_map(|e| e.mask_mut().as_mut()))
+    }
+
+    /// The pixel mask in `slot`: the layer mask, the second mask or an effect's own mask.
+    pub fn mask_in(&self, slot: MaskSlot) -> Option<&LayerMask> {
+        match slot {
+            MaskSlot::Layer => self.mask.as_ref(),
+            MaskSlot::Second => self.second_mask.as_ref(),
+            MaskSlot::Effect(i) => self.effects.items.get(i).and_then(Effect::mask),
+        }
+    }
+
+    /// [`Layer::mask_in`], mutably.
+    pub fn mask_in_mut(&mut self, slot: MaskSlot) -> Option<&mut LayerMask> {
+        match slot {
+            MaskSlot::Layer => self.mask.as_mut(),
+            MaskSlot::Second => self.second_mask.as_mut(),
+            MaskSlot::Effect(i) => self.effects.items.get_mut(i).and_then(|e| e.mask_mut().as_mut()),
+        }
     }
 
     /// [`Layer::pixel_mask`], mutably.

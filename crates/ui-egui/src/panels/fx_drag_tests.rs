@@ -172,3 +172,50 @@ fn dragging_a_mask_onto_a_layer_moves_it_and_alt_copies() {
     // The layers kept their order: c above b above a.
     assert!(row(&h, c).row.top() < row(&h, b).row.top() && row(&h, b).row.top() < row(&h, a).row.top());
 }
+
+/// A plain left click at `at`.
+fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+}
+
+/// The Layers panel footer's button whose label starts with `label`.
+fn footer_button(h: &Harness<'_, PhotocraftApp>, label: &str) -> Option<Pos2> {
+    h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with(label))).map(|n| n.rect().center())
+}
+
+/// User request: a layer style gets a mask of its own, so a stroke can run along part of the
+/// layer only. Clicking the effect's row selects it, Add Mask masks that effect (and targets the
+/// new mask, so the Brush paints into it), and the row shows the mask's thumbnail.
+#[test]
+fn add_mask_with_an_effect_row_selected_masks_that_effect() {
+    let (mut h, a, _) = harness();
+    assert!(footer_button(&h, "Add a mask to the selected effect").is_none(), "no effect row is selected yet");
+    let at = effect_row(&h, a, "Color Overlay").center();
+    click(&mut h, at);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(a), "the click selects the effect's layer");
+    assert_eq!(h.state().ui.fx_selected, Some((a.0, 1)));
+    let add = footer_button(&h, "Add a mask to the selected effect").expect("Add Mask masks the selected effect");
+    click(&mut h, add);
+    let st = h.state().session.active().unwrap();
+    let l = st.doc.layer(a).unwrap();
+    assert!(l.effects.items[1].mask().is_some() && l.effects.items[0].mask().is_none(), "only the Color Overlay got a mask");
+    assert!(l.mask.is_none(), "and the layer no layer mask");
+    assert_eq!(h.state().fx_mask_targeted(), Some(1), "the new mask is targeted");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("fxMask:1"));
+    assert_eq!(h.state().with_mask_target("filter.blur.gaussianBlur", json!({}))["target"], "fxMask:1");
+    let thumb = h.get_by_label("Effect mask").rect().center();
+    // Clicking the layer's own thumbnail goes back to its pixels; the effect mask's thumbnail
+    // targets the mask again.
+    let layer_thumb = row(&h, a).thumbnail.expect("a thumbnail").center();
+    click(&mut h, layer_thumb);
+    assert_eq!(h.state().fx_mask_targeted(), None);
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
+    click(&mut h, thumb);
+    assert_eq!(h.state().fx_mask_targeted(), Some(1));
+}

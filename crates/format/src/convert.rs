@@ -208,6 +208,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             items: l.effects.items.clone(),
             psd_raw: opt_blob(&l.effects.psd_raw, sink),
             reference: l.effects.reference,
+            masks: l.effects.items.iter().enumerate().filter_map(|(i, e)| Some((i, mask_m(e.mask()?, sink)))).collect(),
         },
         label: l.label,
         content,
@@ -278,7 +279,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
-    EffectsM { enabled: e.enabled, items: e.items.clone(), psd_raw: opt_blob(&e.psd_raw, sink), reference: e.reference }
+    EffectsM { enabled: e.enabled, items: e.items.clone(), psd_raw: opt_blob(&e.psd_raw, sink), reference: e.reference, masks: Vec::new() }
 }
 
 fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
@@ -553,6 +554,13 @@ impl Loader<'_> {
             Some(fc) => Some(FillCache { fill: fc.fill.clone(), surface: self.surface(&fc.surface)? }),
             None => None,
         };
+        let mut items = m.effects.items.clone();
+        for (i, mm) in &m.effects.masks {
+            let mask = self.mask(mm)?;
+            if let Some(e) = items.get_mut(*i) {
+                *e.mask_mut() = Some(mask);
+            }
+        }
         let mut psd_blocks = Vec::with_capacity(m.psd_blocks.len());
         for (k, h) in &m.psd_blocks {
             psd_blocks.push((key4(k)?, self.fetch.blob(h)?));
@@ -569,12 +577,7 @@ impl Loader<'_> {
             mask,
             vector_mask: m.vector_mask.clone(),
             second_mask,
-            effects: Effects {
-                enabled: m.effects.enabled,
-                items: m.effects.items.clone(),
-                psd_raw: self.opt_blob(&m.effects.psd_raw)?,
-                reference: m.effects.reference,
-            },
+            effects: Effects { enabled: m.effects.enabled, items, psd_raw: self.opt_blob(&m.effects.psd_raw)?, reference: m.effects.reference },
             label: m.label,
             content,
             psd_blocks,

@@ -56,7 +56,7 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
     }
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if is_mask_target(p) {
-        l.pixel_mask_mut(is_second_mask_target(p)).map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
+        l.mask_in_mut(mask_slot(p)).map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
     } else {
         l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))
     }
@@ -82,9 +82,30 @@ pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 }
 
 /// The params target a grayscale mask of the layer: its layer mask (`"mask"`), its second pixel
-/// mask (`"secondMask"`) or, on a smart object, its filter mask (`"filterMask"`).
+/// mask (`"secondMask"`), an effect's own mask (`"fxMask:N"`) or, on a smart object, its filter
+/// mask (`"filterMask"`).
 pub(crate) fn is_mask_target(p: &Value) -> bool {
-    matches!(p.get("target").and_then(Value::as_str), Some("mask" | "secondMask" | "filterMask"))
+    matches!(p.get("target").and_then(Value::as_str), Some("mask" | "secondMask" | "filterMask")) || fx_mask_index(p).is_some()
+}
+
+/// The target naming the own mask of the layer's effect `index` (of `Layer::effects.items`).
+pub fn fx_mask_target(index: usize) -> String {
+    format!("fxMask:{index}")
+}
+
+/// The effect whose own mask the params target (`"target":"fxMask:N"`), if they do.
+pub fn fx_mask_index(p: &Value) -> Option<usize> {
+    p.get("target")?.as_str()?.strip_prefix("fxMask:")?.parse().ok()
+}
+
+/// Which pixel mask a mask target ([`is_mask_target`]) edits: an effect's own mask, the second
+/// mask or the layer mask.
+pub(crate) fn mask_slot(p: &Value) -> photocraft_doc::MaskSlot {
+    match fx_mask_index(p) {
+        Some(i) => photocraft_doc::MaskSlot::Effect(i),
+        None if is_second_mask_target(p) => photocraft_doc::MaskSlot::Second,
+        None => photocraft_doc::MaskSlot::Layer,
+    }
 }
 
 /// The params target the layer's second pixel mask (`"target":"secondMask"`): a mask target

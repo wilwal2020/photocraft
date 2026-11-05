@@ -334,12 +334,12 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
 /// grayscale clip, inside the selection or the whole canvas — an untouched mask copies at its
 /// default value, so a plain Reveal All / Hide All mask transfers too. Paste then writes into
 /// another layer's mask (targeted, #1035), in this or another document.
-fn copy_mask(s: &mut Session, filter: bool, second: bool) -> Result<Value> {
+fn copy_mask(s: &mut Session, filter: bool, slot: photocraft_doc::MaskSlot) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
     let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let mask = if second { layer.pixel_mask(true) } else { crate::mask_view_cmds::viewed_mask(layer, filter) }
+    let mask = if slot != photocraft_doc::MaskSlot::Layer { layer.mask_in(slot) } else { crate::mask_view_cmds::viewed_mask(layer, filter) }
         .ok_or_else(|| EngineError::Other(if filter { "the active layer has no filter mask" } else { "the active layer has no layer mask" }.into()))?;
     let sel = d.doc.selection.as_ref();
     let area = sel.map_or(canvas, |m| m.content_bounds().intersect(&canvas));
@@ -1075,7 +1075,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     let id = active_id(s)?;
                     crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
                     let filter = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::FilterMask;
-                    let result = copy_mask(s, filter, crate::commands::is_second_mask_target(p))?;
+                    let result = copy_mask(s, filter, crate::commands::mask_slot(p))?;
                     let bg = s.tools.background;
                     s.edit("Cut Mask", |doc, _| clear_mask(doc, id, bg, p))?;
                     return Ok(result);
@@ -1116,11 +1116,7 @@ pub fn specs() -> Vec<CommandSpec> {
             can_copy,
             |s, p| {
                 if crate::commands::is_mask_target(p) {
-                    return copy_mask(
-                        s,
-                        crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::FilterMask,
-                        crate::commands::is_second_mask_target(p),
-                    );
+                    return copy_mask(s, crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::FilterMask, crate::commands::mask_slot(p));
                 }
                 match crate::channel_clip::copy(s, p)? {
                     Some(r) => Ok(r),

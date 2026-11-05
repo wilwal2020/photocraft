@@ -170,11 +170,30 @@ pub struct FxCommon {
     pub enabled: bool,
     pub blend: BlendMode,
     pub opacity: f32,
+    /// The effect's own mask (a PhotoCraft extension; Photoshop has none): where it is black the
+    /// effect doesn't show. Bevel & Emboss keeps it in its `highlight`. Saved by `.pcraft` beside
+    /// the effect list, never in presets, styles or PSD files.
+    #[serde(skip)]
+    pub mask: FxMask,
 }
 
 impl FxCommon {
     pub fn new(blend: BlendMode, opacity: f32) -> Self {
-        FxCommon { enabled: true, blend, opacity }
+        FxCommon { enabled: true, blend, opacity, mask: FxMask::default() }
+    }
+}
+
+/// An effect's mask ([`FxCommon::mask`]), in document coordinates like a layer mask. Its `Debug`
+/// names the mask's settings, not its pixels: effect lists are formatted into cache keys.
+#[derive(Clone, Default, PartialEq)]
+pub struct FxMask(pub Option<crate::LayerMask>);
+
+impl std::fmt::Debug for FxMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            None => f.write_str("FxMask(None)"),
+            Some(m) => write!(f, "FxMask(enabled {}, density {}, tiles {})", m.enabled, m.density, m.surface.tile_count()),
+        }
     }
 }
 
@@ -426,6 +445,44 @@ impl Effect {
             Effect::Satin(s) => s.common.enabled = on,
             Effect::BevelEmboss(b) => b.enabled = on,
         }
+    }
+
+    /// The settings the effect's mask lives in: its own, or Bevel & Emboss's highlight.
+    fn mask_home(&self) -> &FxCommon {
+        match self {
+            Effect::DropShadow(s) | Effect::InnerShadow(s) => &s.common,
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => &g.common,
+            Effect::Stroke(s) => &s.common,
+            Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => common,
+            Effect::Satin(s) => &s.common,
+            Effect::BevelEmboss(b) => &b.highlight,
+        }
+    }
+
+    fn mask_home_mut(&mut self) -> &mut FxCommon {
+        match self {
+            Effect::DropShadow(s) | Effect::InnerShadow(s) => &mut s.common,
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => &mut g.common,
+            Effect::Stroke(s) => &mut s.common,
+            Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => common,
+            Effect::Satin(s) => &mut s.common,
+            Effect::BevelEmboss(b) => &mut b.highlight,
+        }
+    }
+
+    /// The effect's own mask, if it has one ([`FxCommon::mask`]).
+    pub fn mask(&self) -> Option<&crate::LayerMask> {
+        self.mask_home().mask.0.as_ref()
+    }
+
+    /// The effect's mask slot: set it to add or remove the mask.
+    pub fn mask_mut(&mut self) -> &mut Option<crate::LayerMask> {
+        &mut self.mask_home_mut().mask.0
+    }
+
+    /// The effect's mask, if it has one and it is switched on: what limits where it shows.
+    pub fn active_mask(&self) -> Option<&crate::LayerMask> {
+        self.mask().filter(|m| m.enabled)
     }
 
     /// Short label for UIs.

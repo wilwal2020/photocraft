@@ -180,7 +180,12 @@ fn contour_value(c: &Contour) -> Value {
 }
 
 fn common(d: &Descriptor, blend: BlendMode, opacity: f32) -> FxCommon {
-    FxCommon { enabled: !matches!(d.get("enab"), Some(Value::Boolean(false))), blend: blend_of(d, "Md  ", blend), opacity: pct(d, "Opct", opacity) }
+    FxCommon {
+        enabled: !matches!(d.get("enab"), Some(Value::Boolean(false))),
+        blend: blend_of(d, "Md  ", blend),
+        opacity: pct(d, "Opct", opacity),
+        mask: Default::default(),
+    }
 }
 
 fn gradient_from(d: &Descriptor) -> Gradient {
@@ -289,9 +294,9 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
         use_global_light: !matches!(d.get("uglg"), Some(Value::Boolean(false))),
         gloss_contour: contour(d, "TrnS"),
         gloss_anti_alias: bool_of(d, "antialiasGloss"),
-        highlight: FxCommon { enabled: true, blend: blend_of(d, "hglM", BlendMode::Screen), opacity: pct(d, "hglO", 0.75) },
+        highlight: FxCommon { enabled: true, blend: blend_of(d, "hglM", BlendMode::Screen), opacity: pct(d, "hglO", 0.75), mask: Default::default() },
         highlight_color: get_desc(d, "hglC").and_then(color_from_desc).unwrap_or(Color::WHITE),
-        shadow: FxCommon { enabled: true, blend: blend_of(d, "sdwM", BlendMode::Multiply), opacity: pct(d, "sdwO", 0.75) },
+        shadow: FxCommon { enabled: true, blend: blend_of(d, "sdwM", BlendMode::Multiply), opacity: pct(d, "sdwO", 0.75), mask: Default::default() },
         shadow_color: color(d, "sdwC"),
         contour: bool_of(d, "useShape").then(|| BevelContour { contour: contour(d, "MpgS"), range: pct(d, "Inpr", 0.5), anti_alias: bool_of(d, "AntA") }),
         texture: bool_of(d, "useTexture").then(|| {
@@ -639,7 +644,7 @@ pub fn parse_lrfx(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
                 let use_global = *data.get(b + 39)? != 0;
                 let opacity = f32::from(*data.get(b + 40)?) / 255.0;
                 let s = Shadow {
-                    common: FxCommon { enabled, blend, opacity },
+                    common: FxCommon { enabled, blend, opacity, mask: Default::default() },
                     color,
                     angle,
                     use_global_light: use_global,
@@ -660,7 +665,7 @@ pub fn parse_lrfx(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
                 let enabled = *data.get(b + 30)? != 0;
                 let opacity = f32::from(*data.get(b + 31)?) / 255.0;
                 let g = Glow {
-                    common: FxCommon { enabled, blend, opacity },
+                    common: FxCommon { enabled, blend, opacity, mask: Default::default() },
                     paint: FxPaint::Color(color),
                     technique: GlowTechnique::Softer,
                     spread: 0.0,
@@ -679,7 +684,7 @@ pub fn parse_lrfx(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
                 let color = color_at(b + 12)?;
                 let opacity = f32::from(*data.get(b + 22)?) / 255.0;
                 let enabled = *data.get(b + 23)? != 0;
-                out.push(Effect::ColorOverlay { common: FxCommon { enabled, blend, opacity }, color });
+                out.push(Effect::ColorOverlay { common: FxCommon { enabled, blend, opacity, mask: Default::default() }, color });
             }
             _ => {}
         }

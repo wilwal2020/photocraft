@@ -322,6 +322,16 @@ pub struct UiState {
     /// (FILE-215-3). Never set together with `mask_target` or `vector_mask_target`.
     #[serde(default)]
     pub filter_mask_target: Option<u64>,
+    /// The layer (id) and effect (index in its style) whose own mask is targeted (its thumbnail
+    /// on the effect's row in the Layers panel clicked): painting, fills, filters and adjustments
+    /// edit that mask. Never set together with `mask_target`, `vector_mask_target` or
+    /// `filter_mask_target`.
+    #[serde(default, skip_deserializing)]
+    pub fx_mask_target: Option<(u64, usize)>,
+    /// The effect row selected in the Layers panel (layer id, effect index): Add Mask adds a mask
+    /// for that effect alone.
+    #[serde(default, skip_deserializing)]
+    pub fx_selected: Option<(u64, usize)>,
     /// The adjustment or fill layer (id) whose own settings Properties shows although its mask
     /// is targeted: set when that layer is created, as in Photoshop (#3369). Targeting the mask
     /// thumbnail, the layer's pixels or another layer clears it.
@@ -589,6 +599,8 @@ impl Default for UiState {
             second_mask_target: false,
             vector_mask_target: false,
             filter_mask_target: None,
+            fx_mask_target: None,
+            fx_selected: None,
             properties_layer: None,
             brush_picker: None,
             brush_mode_menu: None,

@@ -28,6 +28,10 @@ pub const THUMB_LAYER_BOUNDS: u8 = 3;
 pub const THUMB_SECOND: u8 = 4;
 /// A smart object's smart filter mask (the Smart Filters row).
 pub const THUMB_SMART_MASK: u8 = 5;
+/// An effect's own mask: this plus the effect's index (up to [`FX_MASK_THUMBS`] of them).
+pub const THUMB_FX_MASK: u8 = 16;
+/// How many effects of a layer get a mask thumbnail of their own.
+pub const FX_MASK_THUMBS: usize = 200;
 
 /// Which of a layer's masks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

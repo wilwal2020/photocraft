@@ -39,7 +39,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             b.locks.all = true;
             b.effects.enabled = true;
             b.effects.items.push(photocraft_doc::Effect::ColorOverlay {
-                common: photocraft_doc::FxCommon { enabled: true, blend: BlendMode::Normal, opacity: 0.3 },
+                common: photocraft_doc::FxCommon { enabled: true, blend: BlendMode::Normal, opacity: 0.3, mask: Default::default() },
                 color: photocraft_color::Color::WHITE,
             });
             let mut hidden = pixel(&doc, "Hidden", Rect::new(50, 40, 58, 44), [0.2, 0.9, 0.3, 1.0]);

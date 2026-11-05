@@ -205,7 +205,8 @@ pub(crate) fn composite_with_effects_prepared(
             *lp = psblend::composite_gamma(layer.blend, *wp, *lp, 1.0, gamma);
         }
     }
-    let strokes: Vec<&photocraft_doc::StrokeFx> = pass.items.iter().filter_map(|e| if let Effect::Stroke(s) = e { Some(s) } else { None }).collect();
+    let strokes: Vec<(usize, &photocraft_doc::StrokeFx)> =
+        pass.items.iter().enumerate().filter_map(|(i, e)| if let Effect::Stroke(s) = e { Some((i, s)) } else { None }).collect();
     let fields = pass.stroke_fields(!strokes.is_empty());
     pass.paint_interior(&mut lay, &shape);
     pass.paint_vector_stroke(&mut lay, &shape);
@@ -271,6 +272,9 @@ struct EffectPass<'a> {
     anchor: (f64, f64),
     /// The enabled effects. Multiple instances: the first listed is on top, so paint in reverse.
     items: Vec<&'a Effect>,
+    /// Per enabled effect (as `items`): its own mask's values over `big` (`Effect::active_mask`),
+    /// which the effect's coverage is multiplied by; `None` without one.
+    own_masks: Vec<Option<Vec<f32>>>,
 }
 
 impl<'a> EffectPass<'a> {
@@ -283,6 +287,17 @@ impl<'a> EffectPass<'a> {
         vstroke: Option<&'a VectorStroke<'a>>,
     ) -> Self {
         let sb = layer_bounds;
+        let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+        let own_masks = items
+            .iter()
+            .map(|e| {
+                e.active_mask().map(|m| {
+                    let mut v = Vec::new();
+                    m.values_into(big, &mut v);
+                    v
+                })
+            })
+            .collect();
         Self {
             layer,
             maps,
@@ -293,7 +308,29 @@ impl<'a> EffectPass<'a> {
             h: big.height() as usize,
             sb,
             anchor: layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0))),
-            items: layer.effects.items.iter().filter(|e| e.enabled()).collect(),
+            items,
+            own_masks,
+        }
+    }
+
+    /// Coverage `m` of effect `i` within its own mask.
+    fn own(&self, i: usize, mut m: Map) -> Map {
+        if let Some(Some(k)) = self.own_masks.get(i) {
+            m.v.iter_mut().zip(k).for_each(|(v, k)| *v *= k);
+        }
+        m
+    }
+
+    /// Effect `i`'s own mask value at pixel `p` of the region (1 without one).
+    fn own_at(&self, i: usize, p: usize) -> f32 {
+        self.own_masks.get(i).and_then(Option::as_ref).and_then(|k| k.get(p)).copied().unwrap_or(1.0)
+    }
+
+    /// Coverage `m` shared by several effects, within effect `i`'s own mask.
+    fn own_of<'m>(&self, i: usize, m: &'m Map) -> std::borrow::Cow<'m, Map> {
+        match self.own_masks.get(i) {
+            Some(Some(_)) => std::borrow::Cow::Owned(self.own(i, m.clone())),
+            _ => std::borrow::Cow::Borrowed(m),
         }
     }
 
@@ -344,7 +381,7 @@ impl<'a> EffectPass<'a> {
     fn paint_exterior(&self, work: &mut Buffer, shape: &Map) {
         for (i, e) in self.rev() {
             if let Effect::DropShadow(s) = e {
-                let mut m = self.fx(i, 0);
+                let mut m = self.own(i, self.fx(i, 0));
                 if s.knocks_out {
                     // The layer hides the shadow beneath it where its fill is see-through (at 100 %
                     // fill in a normal mode it covers it anyway; at 0 % the shape shows the bare
@@ -356,7 +393,7 @@ impl<'a> EffectPass<'a> {
         }
         for (i, e) in self.rev() {
             if let Effect::OuterGlow(g) = e {
-                let mut m = self.fx(i, 0);
+                let mut m = self.own(i, self.fx(i, 0));
                 // The glow is behind the shape, not painted across its interior when Fill is 0 %.
                 // Preserve the existing anti-aliased edge when the fill is fully opaque.
                 knock_out_exterior(&mut m, shape, self.layer.fill_opacity);
@@ -392,30 +429,40 @@ impl<'a> EffectPass<'a> {
     fn paint_interior(&self, lay: &mut Buffer, shape: &Map) {
         let (w, h, big, sb, anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.patterns);
         let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
-        for (_, e) in self.rev() {
+        for (i, e) in self.rev() {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-                paint_pattern(lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
+                paint_pattern(
+                    lay,
+                    &self.own_of(i, &full),
+                    patterns,
+                    name,
+                    id,
+                    Placement::anchored(anchor, *link, *phase, *scale, *angle),
+                    big,
+                    common.blend,
+                    common.opacity,
+                );
             }
         }
-        for (_, e) in self.rev() {
+        for (i, e) in self.rev() {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                paint_fx(lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
+                paint_fx(lay, &self.own_of(i, &full), &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
             }
         }
-        for (_, e) in self.rev() {
+        for (i, e) in self.rev() {
             if let Effect::ColorOverlay { common, color } = e {
-                paint_color(lay, &full, rgb(color), common.blend, common.opacity);
+                paint_color(lay, &self.own_of(i, &full), rgb(color), common.blend, common.opacity);
             }
         }
         for (i, e) in self.rev() {
             if let Effect::Satin(s) = e {
-                let m = relative_to_shape(self.fx(i, 0), shape);
+                let m = self.own(i, relative_to_shape(self.fx(i, 0), shape));
                 paint_color(lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
             }
         }
         for (i, e) in self.rev() {
             if let Effect::InnerGlow(g) = e {
-                paint_glow(lay, &relative_to_shape(self.fx(i, 0), shape), g, sb, anchor, big, patterns);
+                paint_glow(lay, &self.own(i, relative_to_shape(self.fx(i, 0), shape)), g, sb, anchor, big, patterns);
             }
         }
         if self.interior_group() {
@@ -425,7 +472,7 @@ impl<'a> EffectPass<'a> {
         }
         for (i, e) in self.rev() {
             if let Effect::InnerShadow(s) = e {
-                let m = relative_to_shape(self.fx(i, 0), shape);
+                let m = self.own(i, relative_to_shape(self.fx(i, 0), shape));
                 paint_color(lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
             }
         }
@@ -472,8 +519,8 @@ impl<'a> EffectPass<'a> {
 
     /// Strokes. Inside parts are painted over the layer (bottom instance first); outside parts
     /// are slid beneath it, so the first listed (top) instance is processed first.
-    fn paint_inside_strokes(&self, lay: &mut Buffer, shape: &Map, strokes: &[&photocraft_doc::StrokeFx], fields: &StrokeFields) {
-        for st in strokes.iter().rev().copied() {
+    fn paint_inside_strokes(&self, lay: &mut Buffer, shape: &Map, strokes: &[(usize, &photocraft_doc::StrokeFx)], fields: &StrokeFields) {
+        for &(fx, st) in strokes.iter().rev() {
             let (in_w, _) = stroke_widths(st);
             if in_w <= 0.0 {
                 continue;
@@ -482,6 +529,7 @@ impl<'a> EffectPass<'a> {
             for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&fields.din) {
                 *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
             }
+            let m = self.own(fx, m);
             paint_fx(lay, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
         }
     }
@@ -493,9 +541,14 @@ impl<'a> EffectPass<'a> {
             if let Effect::BevelEmboss(b) = e
                 && self.maps.bevel_paint[i] == kind
             {
-                let map = |k: usize| match shape {
-                    Some(shape) => relative_to_shape(self.fx(i, k), shape),
-                    None => self.fx(i, k),
+                let map = |k: usize| {
+                    self.own(
+                        i,
+                        match shape {
+                            Some(shape) => relative_to_shape(self.fx(i, k), shape),
+                            None => self.fx(i, k),
+                        },
+                    )
                 };
                 paint_color(target, &map(0), rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
                 paint_color(target, &map(1), rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
@@ -508,20 +561,20 @@ impl<'a> EffectPass<'a> {
     /// above a wider Normal stroke multiplies the backdrop, not the lower stroke). Each stroke's
     /// share is its coverage × opacity not yet taken by strokes above; for Normal strokes this
     /// equals stacking them top over bottom.
-    fn paint_outside_strokes(&self, work: &mut Buffer, lay: &Buffer, shape: &Map, strokes: &[&photocraft_doc::StrokeFx], fields: &StrokeFields) {
-        if !strokes.iter().any(|st| stroke_widths(st).1 > 0.0) {
+    fn paint_outside_strokes(&self, work: &mut Buffer, lay: &Buffer, shape: &Map, strokes: &[(usize, &photocraft_doc::StrokeFx)], fields: &StrokeFields) {
+        if !strokes.iter().any(|(_, st)| stroke_widths(st).1 > 0.0) {
             return;
         }
         let (w, h) = (self.w, self.h);
         let base = work.clone();
         let mut acc = vec![[0.0f32; 4]; w * h]; // premultiplied Σ share·blended
         let mut cover = vec![0.0f32; w * h];
-        for st in strokes.iter().copied() {
+        for &(fx, st) in strokes {
             let (_, out_w) = stroke_widths(st);
             if out_w <= 0.0 {
                 continue;
             }
-            let share = self.outside_share(st, out_w, shape, lay, fields, &mut cover);
+            let share = self.outside_share(fx, st, out_w, shape, lay, fields, &mut cover);
             // The stroke blended over the backdrop at full coverage.
             let mut blended = base.clone();
             let ones = Map { w, h, v: share.iter().map(|&s| if s > 0.0 { 1.0 } else { 0.0 }).collect() };
@@ -549,9 +602,20 @@ impl<'a> EffectPass<'a> {
         }
     }
 
-    /// The share of each pixel an outside stroke `st` (outside width `out_w`) takes: its coverage
-    /// × opacity not yet taken by the strokes above, which `cover` accumulates.
-    fn outside_share(&self, st: &photocraft_doc::StrokeFx, out_w: f32, shape: &Map, lay: &Buffer, fields: &StrokeFields, cover: &mut [f32]) -> Vec<f32> {
+    /// The share of each pixel an outside stroke `st` (effect `fx`, outside width `out_w`) takes:
+    /// its coverage × opacity within its own mask, not yet taken by the strokes above, which
+    /// `cover` accumulates.
+    #[allow(clippy::too_many_arguments)]
+    fn outside_share(
+        &self,
+        fx: usize,
+        st: &photocraft_doc::StrokeFx,
+        out_w: f32,
+        shape: &Map,
+        lay: &Buffer,
+        fields: &StrokeFields,
+        cover: &mut [f32],
+    ) -> Vec<f32> {
         let (w, big) = (self.w, self.big);
         // Shape layers without a filled outline stroke their vector outline, estimated from local
         // coverage; every other layer strokes its shape. The width then picks the field.
@@ -572,7 +636,7 @@ impl<'a> EffectPass<'a> {
         for (i, sh) in share.iter_mut().enumerate() {
             let band = (out_w + 0.5 - d[i]).clamp(0.0, 1.0);
             let k = if inside(shape.v[i]) { if vector_outline { 0.0 } else { band * outline_share(shape.v[i], lay.px[i][3]) } } else { band };
-            let mut k = k * st.common.opacity;
+            let mut k = k * st.common.opacity * self.own_at(fx, i);
             if st.common.blend == BlendMode::Dissolve {
                 let (x, y) = (i64::from(big.x0) + (i % w) as i64, i64::from(big.y0) + (i / w) as i64);
                 k = if k > 0.0 && dissolves_in(x, y, k) { 1.0 } else { 0.0 };
