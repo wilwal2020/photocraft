@@ -68,8 +68,14 @@ pub const KINDS: &[(&str, &str)] = &[
 /// Effect kinds Photoshop offers several instances of (stored as `…Multi` lists in the PSD).
 const MULTI: &[&str] = &["stroke", "dropShadow", "innerShadow", "colorOverlay", "gradientOverlay"];
 
-/// Field holding the user defaults (Make Default) that new instances start from.
+/// Field holding the user defaults (Make Default): Reset to Default goes back to them, and new
+/// instances start from them when no settings were used yet.
 const USER_DEFAULTS: &str = "userDefaults";
+/// Field holding the settings each kind was last applied with (`kind` → params): new instances
+/// start from them (user request: a new Stroke took the defaults again, not the last one used).
+const LAST_USED: &str = "lastUsed";
+/// Where [`LAST_USED`] is kept between sessions (`Preferences::dialogs`).
+pub const LAST_USED_PREF: &str = "layer.layerStyle.lastUsed";
 
 fn multi(kind: &str) -> bool {
     MULTI.contains(&kind)
@@ -475,7 +481,7 @@ fn next_id(f: &Map<String, Value>) -> String {
 fn add_instance(f: &mut Map<String, Value>, kind: &str) {
     let light = f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0) as f32;
     let id = next_id(f);
-    let user = f.get(USER_DEFAULTS).and_then(|d| d.get(kind));
+    let user = f.get(LAST_USED).and_then(|d| d.get(kind)).filter(|v| v.is_object()).or_else(|| f.get(USER_DEFAULTS).and_then(|d| d.get(kind)));
     let new = json!({"id": id, "kind": kind, "on": true, "params": fresh_params(kind, light, user)});
     if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
         let pos = a.iter().rposition(|e| e.get("kind").and_then(Value::as_str) == Some(kind)).map_or(a.len(), |i| i + 1);
@@ -545,8 +551,21 @@ pub fn initial_fields(layer: &Layer, select: Option<&str>, light: f32) -> Map<St
 
 /// The dialog's fields, with the user defaults (`kind` → params) new instances start from.
 pub fn initial_fields_with(layer: &Layer, select: Option<&str>, light: f32, user_defaults: Map<String, Value>) -> Map<String, Value> {
+    initial_fields_remembering(layer, select, light, user_defaults, Map::new())
+}
+
+/// [`initial_fields_with`], with the settings each kind was last applied with
+/// (`kind` → params), which new instances start from before the user defaults.
+pub fn initial_fields_remembering(
+    layer: &Layer,
+    select: Option<&str>,
+    light: f32,
+    user_defaults: Map<String, Value>,
+    last_used: Map<String, Value>,
+) -> Map<String, Value> {
     let mut f = Map::new();
     f.insert(USER_DEFAULTS.into(), Value::Object(user_defaults));
+    f.insert(LAST_USED.into(), Value::Object(last_used));
     f.insert("layer".into(), json!(layer.id.0));
     f.insert("globalLight".into(), json!(light));
     f.insert("preview".into(), json!(true));
@@ -605,7 +624,8 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<u64> {
     let light = st.doc.global_light.angle;
     let mode = st.doc.mode;
     let user = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let mut f = initial_fields_with(&layer, select, light, user);
+    let last = app.session.prefs().dialogs.get(LAST_USED_PREF).and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut f = initial_fields_remembering(&layer, select, light, user, last);
     // Channels and Blend If list the document's own colour channels.
     set_blending_fields(&mut f, &layer, mode);
     f.insert("__document".into(), json!(st.doc.id));
@@ -638,7 +658,28 @@ pub fn pattern_list(app: &PhotocraftApp) -> Value {
 
 /// Apply the dialog: replace the layer's effects with the dialog's instances.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    apply(f, |id, p| app.run(id, p))
+    let r = apply(f, |id, p| app.run(id, p))?;
+    remember_last_used(app, f);
+    Ok(r)
+}
+
+/// After OK: each kind's settings as applied (the last instance of a kind that is on), for the
+/// next new instance of it, in this or a later session. Kinds the dialog didn't use keep theirs.
+fn remember_last_used(app: &mut PhotocraftApp, f: &Map<String, Value>) {
+    let mut used = Map::new();
+    for e in effects_of(f).iter().filter(|e| e.get("on").and_then(Value::as_bool).unwrap_or(false)) {
+        if let (Some(kind), Some(params)) = (e.get("kind").and_then(Value::as_str), e.get("params").filter(|p| p.is_object())) {
+            used.insert(kind.to_string(), params.clone());
+        }
+    }
+    if used.is_empty() {
+        return;
+    }
+    app.session.edit_prefs(|p| {
+        let mut all = p.dialogs.get(LAST_USED_PREF).and_then(Value::as_object).cloned().unwrap_or_default();
+        all.extend(used);
+        p.dialogs.insert(LAST_USED_PREF.into(), Value::Object(all));
+    });
 }
 
 /// Every parameter group is edited as an object. Validate before preview or confirmation so
@@ -1125,9 +1166,11 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     {
         split_flags[nearest(pos.x) / 2] = true;
     }
-    if resp.drag_started()
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
+    // The handle moves from the press itself (user report: it waited for egui's drag threshold, so
+    // a small drag did nothing), by as much as the pointer moves: the point grabbed stays under it.
+    let down = resp.is_pointer_button_down_on();
+    let pressed = down && ui.input(|i| i.pointer.primary_pressed());
+    if pressed && let Some(pos) = resp.interact_pointer_pos() {
         let near = nearest(pos.x);
         // Between two coinciding halves, pick by the side of the pointer.
         let near = match near {
@@ -1140,13 +1183,14 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
         if split {
             split_flags[pair / 2] = true;
         }
-        ui.data_mut(|d| d.insert_temp(drag_key, (near, split)));
+        let grab = q.get(near).map_or(0.0, |v| x_of(*v) - pos.x);
+        ui.data_mut(|d| d.insert_temp(drag_key, (near, split, grab)));
     }
-    if resp.dragged()
-        && let (Some((h, split)), Some(pos)) = (ui.data(|d| d.get_temp::<(usize, bool)>(drag_key)), resp.interact_pointer_pos())
+    if down
+        && let (Some((h, split, grab)), Some(pos)) = (ui.data(|d| d.get_temp::<(usize, bool, f32)>(drag_key)), resp.interact_pointer_pos())
         && let Some(cur) = q.get(h).copied()
     {
-        let target = v_of(pos.x);
+        let target = v_of(pos.x + grab);
         let mut n = *q;
         let pair = if h < 2 { 0 } else { 2 };
         if split {
@@ -1174,9 +1218,13 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
             changed = true;
         }
     }
-    // Halves dragged back together join again once released.
-    if resp.drag_stopped() {
-        split_flags = rejoined(split_flags, q);
+    // Halves dragged back together join again once released (not after an ⌥-click, which splits
+    // a handle in place).
+    if !down && ui.data(|d| d.get_temp::<(usize, bool, f32)>(drag_key)).is_some() {
+        ui.data_mut(|d| d.remove::<(usize, bool, f32)>(drag_key));
+        if resp.drag_stopped() {
+            split_flags = rejoined(split_flags, q);
+        }
     }
     ui.data_mut(|d| d.insert_temp(split_key, split_flags));
     let base = ramp.bottom() + 1.0;

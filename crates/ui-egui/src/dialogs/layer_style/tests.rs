@@ -172,6 +172,44 @@ fn new_effects_start_from_the_made_default() {
     assert_eq!(shadow["params"]["size"], defaults("dropShadow")["size"]);
 }
 
+/// A new effect starts from the settings that kind was last applied with (user request), on any
+/// layer and before Make Default's; Reset to Default still goes back to the defaults.
+#[test]
+fn a_new_effect_starts_from_the_settings_last_used() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": {"size": 7}})).unwrap();
+    let id = open(&mut app, Some("stroke")).unwrap();
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    let sel = f["selected"].as_str().unwrap().to_string();
+    assert_eq!(entry(&f, &sel).unwrap()["params"]["size"], json!(7), "nothing used yet: Make Default's");
+    set_param(&mut f, &sel, "size", json!(13));
+    set_param(&mut f, &sel, "color", json!("#00ff00"));
+    confirm(&mut app, &f).unwrap();
+    app.ui.close_dialog(id);
+
+    // Another layer: its new stroke is the one just used.
+    app.run("layer.new.layer", json!({})).unwrap();
+    let id = open(&mut app, Some("stroke")).unwrap();
+    let f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    let sel = f["selected"].as_str().unwrap().to_string();
+    let p = &entry(&f, &sel).unwrap()["params"];
+    assert_eq!((&p["size"], &p["color"]), (&json!(13), &json!("#00ff00")));
+    // The + button too, and kinds not used yet keep their defaults.
+    let mut f = f.clone();
+    add_instance(&mut f, "stroke");
+    add_instance(&mut f, "dropShadow");
+    let fx = effects_of(&f);
+    assert!(fx.iter().filter(|e| e["kind"] == json!("stroke")).all(|e| e["params"]["size"] == json!(13)));
+    let shadow = fx.iter().find(|e| e["kind"] == json!("dropShadow")).unwrap();
+    assert_eq!(shadow["params"]["size"], defaults("dropShadow")["size"]);
+    // Remembered in the preferences, so a later session starts there too.
+    assert_eq!(app.session.prefs().dialogs[LAST_USED_PREF]["stroke"]["size"], json!(13));
+    let reset = app.run("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();
+    assert_eq!(reset["params"]["size"], json!(7), "Reset to Default is still Make Default's");
+}
+
 #[test]
 fn every_kind_has_spec_and_defaults() {
     for &(kind, _) in KINDS {
@@ -1141,4 +1179,57 @@ fn style_click_does_not_mutate_document_until_confirm() {
     // Confirm commits the style.
     confirm(&mut app, &f).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().effects.items.len(), 1);
+}
+
+/// A Blend If handle moves from the press (user report: it needed a drag past egui's threshold
+/// first), the point grabbed staying under the pointer, and an ⌥-click still splits it in place.
+#[test]
+fn blend_if_handles_move_from_the_first_point_of_a_drag() {
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 60.0)).build_ui_state(
+        |ui, q: &mut [u8; 4]| {
+            ui.set_width(268.0);
+            blend_if_bar(ui, egui::Id::unique("bar"), q);
+        },
+        [0u8, 0, 255, 255],
+    );
+    h.run();
+    // The bar is 268 wide from x = 8 (the frame margin): its ramp from 14 to 270.
+    let ramp = (8.0 + 6.0, 8.0 + 268.0 - 6.0);
+    let x_of = |v: f32| ramp.0 + (ramp.1 - ramp.0) * v / 255.0;
+    let y = 8.0 + 18.0;
+    // Grab the black handle 2 points right of its tip and move 2 points: below the drag threshold.
+    let at = pos2(x_of(0.0) + 2.0, y);
+    h.event(Event::PointerMoved(at));
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    assert_eq!(*h.state(), [0, 0, 255, 255], "the press alone moves nothing (no jump to the pointer)");
+    h.event(Event::PointerMoved(at + vec2(2.0, 0.0)));
+    h.run();
+    let q = *h.state();
+    assert!(q[0] > 0 && q[0] == q[1] && q[0] <= 3, "a 2-point drag moved the handle: {q:?}");
+    h.event(Event::PointerButton { pos: at + vec2(2.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    // ⌥-click on the white handle splits it in place: a drag then moves one half only.
+    let white = pos2(x_of(255.0) - 1.0, y);
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    h.event(Event::PointerMoved(white));
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: white, button: PointerButton::Primary, pressed, modifiers: Modifiers::ALT });
+        h.run();
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+    let grab = pos2(x_of(255.0) - 3.0, y);
+    h.event(Event::PointerMoved(grab));
+    h.event(Event::PointerButton { pos: grab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(grab - vec2(10.0 * k as f32, 0.0)));
+        h.run();
+    }
+    h.event(Event::PointerButton { pos: grab - vec2(40.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    let q = *h.state();
+    assert!(q[2] < 230 && q[3] == 255, "the split white handle moved one half: {q:?}");
 }
