@@ -241,7 +241,9 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
             }
             json!("filterMask")
         }
-        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some() => {
+            json!(crate::mask_view_cmds::current(st).map_or_else(|| "mask".to_string(), |v| v.target()))
+        }
         ChannelTarget::Color(_) => match crate::color_channels::selected(s).filter(|c| c.len() > 1) {
             Some(c) => c.params(),
             None => return params,
@@ -254,7 +256,9 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
             }
             json!("filterMask")
         }
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => {
+            json!(crate::mask_view_cmds::current(st).map_or_else(|| "mask".to_string(), |v| v.target()))
+        }
         _ => return params,
     };
     match params {

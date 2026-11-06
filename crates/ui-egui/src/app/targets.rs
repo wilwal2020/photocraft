@@ -89,9 +89,12 @@ impl PhotocraftApp {
     /// targets the active layer's second mask (and the first isn't viewed alone), else `"mask"`.
     pub fn mask_target_name(&self) -> &'static str {
         let Some(st) = self.session.active() else { return "mask" };
-        let viewing = photocraft_engine::mask_view_cmds::current(st).is_some();
+        // A mask shown alone is the one edited.
+        if let Some(v) = photocraft_engine::mask_view_cmds::current(st).filter(|v| !v.filter) {
+            return if v.slot == photocraft_doc::MaskSlot::Second { "secondMask" } else { "mask" };
+        }
         let has_second = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.second_mask.is_some());
-        if self.ui.mask_target && self.ui.second_mask_target && !viewing && has_second { "secondMask" } else { "mask" }
+        if self.ui.mask_target && self.ui.second_mask_target && has_second { "secondMask" } else { "mask" }
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer
@@ -221,8 +224,10 @@ impl PhotocraftApp {
                     self.ui.mask_target = false;
                     self.ui.vector_mask_target = false;
                 }
-                Some(_) => {
+                Some(v) => {
                     self.ui.mask_target = true;
+                    // The second mask shown alone is targeted, as its thumbnail targets it.
+                    self.ui.second_mask_target = v.slot == photocraft_doc::MaskSlot::Second;
                     self.ui.vector_mask_target = false;
                     self.ui.filter_mask_target = None;
                 }

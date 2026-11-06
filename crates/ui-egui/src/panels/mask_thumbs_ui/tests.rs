@@ -674,6 +674,7 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
         layer: photocraft_doc::LayerId(u64::MAX),
         mode: photocraft_engine::mask_view_cmds::MaskViewMode::Gray,
         filter: false,
+        slot: photocraft_doc::MaskSlot::Layer,
     });
     assert!(canvas_px(&h).is_none());
     h.run_steps(2);
@@ -911,6 +912,36 @@ fn the_second_mask_has_a_thumbnail_that_targets_it() {
     h.run_steps(2);
     let l = layer(&h, masked);
     assert!(l.second_mask.is_none() && l.vector_mask.is_some());
+}
+
+/// ⌥-click on the second mask's thumbnail shows that mask alone, as on the layer mask's: the
+/// canvas shows it, painting and Invert edit it (not the first), and ⌥-click again returns.
+#[test]
+fn alt_click_views_the_second_mask() {
+    let (mut s, masked, _) = dotted();
+    s.execute("layer.vectorMask.delete", json!({"layer": masked})).unwrap();
+    s.execute(photocraft_engine::second_mask_cmds::ADD, json!({"layer": masked})).unwrap();
+    // The second mask hides the right half; the first only the dot at (50, 50).
+    s.execute("select.rect", json!({"x": 100, "y": 0, "width": 100, "height": 100})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#000000", "target": "secondMask"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let r = mask_rect(&h, masked, MaskKind::Second);
+    click_with(&mut h, r.center(), Modifiers::ALT);
+    assert_eq!(mask_view(&h), json!({"layer": masked, "mode": "gray", "mask": "second"}));
+    assert!(h.state().ui.mask_target && h.state().ui.second_mask_target, "viewing the second mask targets it");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("secondMask"));
+    let px = canvas_px(&h).expect("the canvas shows the second mask");
+    assert_eq!(px[50 * 200 + 50], egui::Color32::WHITE, "the first mask's dot isn't shown");
+    assert_eq!(px[50 * 200 + 150], egui::Color32::BLACK, "the second mask's black half is");
+    let before = layer(&h, masked);
+    let p = h.state().with_mask_target("image.adjustments.invert", json!({}));
+    h.state_mut().run("image.adjustments.invert", p).unwrap();
+    let after = layer(&h, masked);
+    assert_eq!(after.mask, before.mask, "the first mask is untouched");
+    assert!(after.second_mask.as_ref().unwrap().value(150, 50) > 0.9, "the second mask is inverted");
+    click_with(&mut h, r.center(), Modifiers::ALT);
+    assert_eq!(mask_view(&h), serde_json::Value::Null, "⌥-click again: back to the composite");
 }
 
 /// User report: a Solid Color layer's colour square sometimes couldn't be clicked. With the mask

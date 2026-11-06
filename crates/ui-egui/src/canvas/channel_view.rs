@@ -141,8 +141,10 @@ fn render_with_source(
     // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
     // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
     // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
+    // Only for the layer mask itself: a shown second or filter mask is not that mask.
     let feathered_mask = v
         .layer_mask
+        .filter(|view| !view.filter && view.slot == photocraft_doc::MaskSlot::Layer)
         .and_then(|view| doc.layer(view.layer))
         .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
         .and_then(|layer| {

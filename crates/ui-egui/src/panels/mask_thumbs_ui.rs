@@ -229,15 +229,22 @@ fn paint_chain(painter: &Painter, c: Pos2, color: Color32) {
 }
 
 /// The command a click on mask thumbnail `kind` issues with modifiers `m`, if it is one that
-/// replaces the normal click: ⇧ toggles the mask on/off; ⌥ views a layer mask alone in
-/// grayscale and ⇧⌥ as a rubylith overlay (again: back to the composite), like Photoshop.
+/// replaces the normal click: ⇧ toggles the mask on/off; ⌥ views a layer mask (or the second
+/// mask) alone in grayscale and ⇧⌥ as a rubylith overlay (again: back to the composite), like
+/// Photoshop.
 pub fn click_command(l: &Layer, kind: MaskKind, m: egui::Modifiers) -> Option<(String, Value)> {
     if m.command {
         return None;
     }
     if m.alt {
         let mode = if m.shift { "toggleOverlay" } else { "toggleGray" };
-        return (kind == MaskKind::Pixel && l.mask.is_some()).then(|| (photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": mode})));
+        return match kind {
+            MaskKind::Pixel if l.mask.is_some() => Some((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": mode}))),
+            MaskKind::Second if l.second_mask.is_some() => {
+                Some((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": mode, "mask": "second"})))
+            }
+            _ => None,
+        };
     }
     if !m.shift {
         return None;

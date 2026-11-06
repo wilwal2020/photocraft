@@ -563,7 +563,7 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
     // Clicking the layer thumbnail leaves mask view (#196).
     let viewing = app.session.active().and_then(photocraft_engine::mask_view_cmds::current).filter(|v| v.layer == l.id);
     if let Some(v) = viewing.filter(|_| on_thumb) {
-        let mask = if v.filter { "filter" } else { "layer" };
+        let mask = v.mask_param();
         actions.push((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": "off", "mask": mask})));
     }
     let content_less = matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Fill(_));

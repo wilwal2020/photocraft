@@ -10,6 +10,7 @@
 //!
 //! With `"mask":"filter"` the same view shows a smart object's filter mask (⌥-click the filter
 //! mask thumbnail on its Smart Filters row), and painting while it's shown paints that mask.
+//! With `"mask":"second"` it shows the layer's second mask (⌥-click its thumbnail).
 
 use photocraft_doc::LayerId;
 use serde::Serialize;
@@ -40,6 +41,40 @@ pub struct LayerMaskView {
     pub mode: MaskViewMode,
     /// The smart object's filter mask is shown, not its layer mask.
     pub filter: bool,
+    /// Which of the layer's pixel masks is shown (the layer mask unless `filter`).
+    #[serde(skip)]
+    pub slot: photocraft_doc::MaskSlot,
+}
+
+impl LayerMaskView {
+    /// The `"target"` naming the shown mask: what pixel commands edit while it shows.
+    pub fn target(&self) -> String {
+        match (self.filter, self.slot) {
+            (true, _) => "filterMask".into(),
+            (false, photocraft_doc::MaskSlot::Layer) => "mask".into(),
+            (false, photocraft_doc::MaskSlot::Second) => "secondMask".into(),
+            (false, photocraft_doc::MaskSlot::Effect(i)) => crate::commands::fx_mask_target(i),
+        }
+    }
+
+    /// The `"mask"` param of [`ID`] that names the shown mask.
+    pub fn mask_param(&self) -> &'static str {
+        match (self.filter, self.slot) {
+            (true, _) => "filter",
+            (false, photocraft_doc::MaskSlot::Second) => "second",
+            _ => "layer",
+        }
+    }
+
+    /// Whether this view shows `l`'s mask in `slot` (or its filter mask).
+    fn shows(&self, layer: LayerId, filter: bool, slot: photocraft_doc::MaskSlot) -> bool {
+        self.layer == layer && self.filter == filter && (filter || self.slot == slot)
+    }
+}
+
+/// The mask view `v` shows on `l`.
+pub fn view_mask<'a>(l: &'a photocraft_doc::Layer, v: &LayerMaskView) -> Option<&'a photocraft_doc::LayerMask> {
+    if v.filter { viewed_mask(l, true) } else { l.mask_in(v.slot) }
 }
 
 /// The mask a view of `l` shows: its layer mask, or (`filter`) its smart filter mask.
@@ -64,7 +99,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// The mask view of `st` when it is live: its layer is the active layer and still has a mask.
 pub fn current(st: &DocState) -> Option<LayerMaskView> {
     let v = st.channel_view.layer_mask?;
-    let live = st.active_layer == Some(v.layer) && st.doc.layer(v.layer).is_some_and(|l| viewed_mask(l, v.filter).is_some());
+    let live = st.active_layer == Some(v.layer) && st.doc.layer(v.layer).is_some_and(|l| view_mask(l, &v).is_some());
     live.then_some(v)
 }
 
@@ -88,20 +123,22 @@ fn mode_name(v: Option<LayerMaskView>) -> &'static str {
 /// off); part of `document.inspect`.
 pub fn view_json(st: &DocState) -> Value {
     match current(st) {
-        Some(v) if v.filter => json!({"layer": v.layer.0, "mode": mode_name(Some(v)), "mask": "filter"}),
+        Some(v) if v.filter || v.slot != photocraft_doc::MaskSlot::Layer => json!({"layer": v.layer.0, "mode": mode_name(Some(v)), "mask": v.mask_param()}),
         Some(v) => json!({"layer": v.layer.0, "mode": mode_name(Some(v))}),
         None => Value::Null,
     }
 }
 
-/// `{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"="layer"}`.
+/// `{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"|"second"="layer"}`.
 fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
-    let filter = match p.get("mask") {
-        None | Some(Value::Null) => false,
+    use photocraft_doc::MaskSlot;
+    let (filter, slot) = match p.get("mask") {
+        None | Some(Value::Null) => (false, MaskSlot::Layer),
         Some(v) => match v.as_str() {
-            Some("layer") => false,
-            Some("filter") => true,
-            _ => return Err(bad("`mask` must be \"layer\" or \"filter\"")),
+            Some("layer") => (false, MaskSlot::Layer),
+            Some("filter") => (true, MaskSlot::Layer),
+            Some("second") => (false, MaskSlot::Second),
+            _ => return Err(bad("`mask` must be \"layer\", \"filter\" or \"second\"")),
         },
     };
     let mode = match p.get("mode") {
@@ -114,9 +151,9 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => LayerId(v.as_u64().ok_or_else(|| bad("`layer` must be a layer id"))?),
     };
     let l = st.doc.layer(layer).ok_or(EngineError::NoLayer(layer))?;
-    let has_mask = viewed_mask(l, filter).is_some();
+    let has_mask = if filter { viewed_mask(l, true).is_some() } else { l.mask_in(slot).is_some() };
     let name = l.name.clone();
-    let shown = current(st).filter(|v| v.layer == layer && v.filter == filter).map(|v| v.mode);
+    let shown = current(st).filter(|v| v.shows(layer, filter, slot)).map(|v| v.mode);
     let want = match mode {
         "off" => None,
         "gray" => Some(MaskViewMode::Gray),
@@ -126,16 +163,21 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(bad(format!("unknown mode `{other}` (off|gray|overlay|toggleGray|toggleOverlay)"))),
     };
     if want.is_some() && !has_mask {
-        return Err(bad(format!("layer \"{name}\" has no {}", if filter { "filter mask" } else { "layer mask" })));
+        let what = match (filter, slot) {
+            (true, _) => "filter mask",
+            (false, MaskSlot::Second) => "second mask",
+            _ => "layer mask",
+        };
+        return Err(bad(format!("layer \"{name}\" has no {what}")));
     }
     // ⌥-clicking another layer's mask selects that layer, as in Photoshop.
     if want.is_some() && s.active().and_then(|st| st.active_layer) != Some(layer) {
         s.select_layer(layer)?;
     }
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let next = want.map(|mode| LayerMaskView { layer, mode, filter });
+    let next = want.map(|mode| LayerMaskView { layer, mode, filter, slot: if filter { MaskSlot::Layer } else { slot } });
     // "off" for a layer whose mask isn't the one shown leaves the other view alone.
-    let applies = next.is_some() || st.channel_view.layer_mask.is_some_and(|v| v.layer == layer && v.filter == filter);
+    let applies = next.is_some() || st.channel_view.layer_mask.is_some_and(|v| v.shows(layer, filter, slot));
     if applies && st.channel_view.layer_mask != next {
         st.channel_view.layer_mask = next;
         // Hiding the mask while every colour channel is off would leave a blank canvas.
@@ -149,7 +191,12 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
     }
     let v = current(st);
-    Ok(json!({"layer": layer.0, "mode": mode_name(v.filter(|v| v.layer == layer && v.filter == filter)), "mask": if filter { "filter" } else { "layer" }}))
+    let mask = match (filter, slot) {
+        (true, _) => "filter",
+        (false, MaskSlot::Second) => "second",
+        _ => "layer",
+    };
+    Ok(json!({"layer": layer.0, "mode": mode_name(v.filter(|v| v.shows(layer, filter, slot))), "mask": mask}))
 }
 
 /// `\` needs a layer mask on the active layer; without one Photoshop's key does nothing.
@@ -176,7 +223,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "View Layer Mask",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"="layer" (filter: a smart object's filter mask)} (gray: the mask alone, ⌥-click its thumbnail; overlay: red rubylith over the composite, ⇧⌥-click or `\`; view state, not an undo step; painting while shown paints the mask)"##,
+            params: r##"{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"|"second"="layer" (filter: a smart object's filter mask; second: the layer's second mask)} (gray: the mask alone, ⌥-click its thumbnail; overlay: red rubylith over the composite, ⇧⌥-click or `\`; view state, not an undo step; painting while shown paints the mask)"##,
             enabled: has_doc,
             run: set_view,
             journal: false,
