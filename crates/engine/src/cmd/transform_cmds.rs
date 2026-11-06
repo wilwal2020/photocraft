@@ -77,53 +77,10 @@ fn mask_shown_bounds(doc: &Document, mask: &Surface) -> Rect {
     if mask.default_pixel().first().is_some_and(|v| *v > 0.0) { shown_in_canvas(mask, doc.bounds()) } else { photocraft_compose::bounds::content_bounds(mask) }
 }
 
-/// The bounds of `mask`'s non-black pixels within `canvas`: its tiles' own, and the whole of each
-/// tile it hasn't painted (those read as its default, which isn't black here).
+/// The bounds of `mask`'s non-black pixels within `canvas` (cached per tile, as the Move tool's
+/// transform controls ask every frame).
 fn shown_in_canvas(mask: &Surface, canvas: Rect) -> Rect {
-    use photocraft_geom::TileCoord;
-    if canvas.is_empty() {
-        return Rect::EMPTY;
-    }
-    // Black encodes as zero bytes in every sample type.
-    let black = vec![0u8; mask.format().bytes_per_pixel()];
-    let (a, b) = (TileCoord::containing(canvas.x0, canvas.y0), TileCoord::containing(canvas.x1 - 1, canvas.y1 - 1));
-    let mut out = Rect::EMPTY;
-    for ty in a.ty..=b.ty {
-        for tx in a.tx..=b.tx {
-            let c = TileCoord::new(tx, ty);
-            let o = c.rect();
-            let inside = o.intersect(&canvas);
-            let r = match mask.tile(c) {
-                None => inside,
-                // A tile across the canvas edge also holds pixels past it: look at its canvas part.
-                Some(_) if inside != o => nonzero_bounds(mask, inside),
-                Some(t) => match t.content_bounds(&black) {
-                    Some((x0, y0, x1, y1)) => Rect::new(o.x0 + i32::from(x0), o.y0 + i32::from(y0), o.x0 + i32::from(x1), o.y0 + i32::from(y1)),
-                    None => continue,
-                },
-            };
-            if !r.is_empty() {
-                out = if out.is_empty() { r } else { out.union(&r) };
-            }
-        }
-    }
-    out
-}
-
-/// The bounds of `mask`'s non-black pixels in `area` (one tile at most), by reading them.
-fn nonzero_bounds(mask: &Surface, area: Rect) -> Rect {
-    let Ok(v) = crate::allocation::read_region(mask, area, "framing a mask") else { return area };
-    let w = area.width() as usize;
-    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
-    for (i, row) in v.chunks(w.max(1)).enumerate() {
-        if let (Some(a), Some(b)) = (row.iter().position(|v| *v > 0.0), row.iter().rposition(|v| *v > 0.0)) {
-            (x0, x1, y0, y1) = (x0.min(a), x1.max(b + 1), y0.min(i), i + 1);
-        }
-    }
-    if x0 == usize::MAX {
-        return Rect::EMPTY;
-    }
-    Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32)
+    photocraft_compose::bounds::differing_within(mask, canvas, &[0.0])
 }
 
 /// `mask` as it reads on `canvas`, black everywhere past it: what a fill or adjustment layer's
