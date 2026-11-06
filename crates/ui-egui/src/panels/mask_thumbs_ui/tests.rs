@@ -963,3 +963,18 @@ fn the_colour_square_wins_over_a_mask_targeted_from_the_channels() {
     assert!(!h.state().ui.mask_target, "the colour square is targeted");
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
 }
+
+/// A second mask shown alone keeps the paint with the Channels panel's colour rows targeted (they
+/// stay selected across layer switches): painting edited the first mask then.
+#[test]
+fn a_shown_second_mask_takes_the_paint_with_colour_rows_targeted() {
+    let (mut s, masked, _) = dotted();
+    s.execute("layer.vectorMask.delete", json!({"layer": masked})).unwrap();
+    s.execute(photocraft_engine::second_mask_cmds::ADD, json!({"layer": masked})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let r = mask_rect(&h, masked, MaskKind::Second);
+    click_with(&mut h, r.center(), Modifiers::ALT);
+    h.state_mut().session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("secondMask"));
+    assert_eq!(h.state().with_mask_target("image.adjustments.invert", json!({}))["target"], "secondMask");
+}

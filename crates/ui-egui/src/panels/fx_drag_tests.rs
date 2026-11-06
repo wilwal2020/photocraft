@@ -219,3 +219,39 @@ fn add_mask_with_an_effect_row_selected_masks_that_effect() {
     click(&mut h, thumb);
     assert_eq!(h.state().fx_mask_targeted(), Some(1));
 }
+
+/// ⌥-click on an effect mask's thumbnail shows that mask alone on the canvas, targeted (a brush
+/// paints it), and ⌥-click again returns to the composite, as on a layer mask's thumbnail.
+#[test]
+fn alt_click_views_an_effect_mask_alone() {
+    let (mut h, a, _) = harness();
+    h.state_mut().run("layer.select", json!({"layer": a.0})).unwrap();
+    h.state_mut().run(photocraft_engine::fx_mask_cmds::ADD, json!({"layer": a.0, "index": 1})).unwrap();
+    h.run_steps(4);
+    let thumb = h.get_by_label("Effect mask").rect().center();
+    let alt_click = |h: &mut Harness<'_, PhotocraftApp>| {
+        h.hover_at(thumb);
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: thumb, button: PointerButton::Primary, pressed, modifiers: Modifiers::ALT });
+            h.run_steps(1);
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+    };
+    alt_click(&mut h);
+    let view = photocraft_engine::inspect::document(h.state().session.active().unwrap())["layerMaskView"].clone();
+    assert_eq!(view, json!({"layer": a.0, "mode": "gray", "mask": "fxMask:1"}));
+    assert_eq!(h.state().fx_mask_targeted(), Some(1), "the shown mask is targeted");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("fxMask:1"));
+    assert!(!h.state().layer_mask_targeted(), "not the layer mask (the layer has none)");
+    // With the colour rows targeted in the Channels panel, too.
+    let colors = photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+    h.state_mut().session.active_mut().unwrap().channel_view.target = colors;
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("fxMask:1"));
+    h.state_mut().session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+    alt_click(&mut h);
+    let view = photocraft_engine::inspect::document(h.state().session.active().unwrap())["layerMaskView"].clone();
+    assert_eq!(view, serde_json::Value::Null, "⌥-click again: back to the composite");
+}

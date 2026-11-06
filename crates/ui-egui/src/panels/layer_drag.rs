@@ -494,6 +494,14 @@ pub(crate) fn fx_mask_click(l: &Layer, k: usize, enabled: bool, active: bool, m:
     if m.command {
         return vec![(photocraft_engine::visible_cmds::ID.into(), json!({"layer": layer, "source": photocraft_engine::commands::fx_mask_target(k)}))];
     }
+    // ⌥: the mask alone on the canvas (⇧⌥ as a rubylith), as on a layer mask's thumbnail.
+    if m.alt {
+        let mode = if m.shift { "toggleOverlay" } else { "toggleGray" };
+        return vec![(
+            photocraft_engine::mask_view_cmds::ID.into(),
+            json!({"layer": layer, "mode": mode, "mask": photocraft_engine::commands::fx_mask_target(k)}),
+        )];
+    }
     if m.shift {
         return vec![(photocraft_engine::fx_mask_cmds::ENABLED.into(), json!({"layer": layer, "index": k, "enabled": !enabled}))];
     }

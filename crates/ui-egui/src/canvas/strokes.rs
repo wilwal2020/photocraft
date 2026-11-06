@@ -827,7 +827,8 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
         ChannelTarget::LayerMask => return json!(app.mask_target_name()),
         ChannelTarget::Color(_) => {
             if let Some(view) = photocraft_engine::mask_view_cmds::current(st) {
-                return json!(if view.filter { "filterMask" } else { "mask" });
+                // The mask shown alone: the layer mask, the second mask, an effect's or the filter mask.
+                return json!(view.target());
             }
             // A colour set edits a raster layer's own pixels. The rows stay selected across layer
             // switches, so an adjustment layer's mask and a layer that needs rasterizing first

@@ -90,7 +90,7 @@ impl PhotocraftApp {
     pub fn mask_target_name(&self) -> &'static str {
         let Some(st) = self.session.active() else { return "mask" };
         // A mask shown alone is the one edited.
-        if let Some(v) = photocraft_engine::mask_view_cmds::current(st).filter(|v| !v.filter) {
+        if let Some(v) = photocraft_engine::mask_view_cmds::current(st).filter(|v| !v.filter && !matches!(v.slot, photocraft_doc::MaskSlot::Effect(_))) {
             return if v.slot == photocraft_doc::MaskSlot::Second { "secondMask" } else { "mask" };
         }
         let has_second = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.second_mask.is_some());
@@ -108,6 +108,11 @@ impl PhotocraftApp {
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
         let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
+        // A shown effect mask is targeted as the effect's ([`Self::fx_mask_targeted`]).
+        let fx_view = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| matches!(v.slot, photocraft_doc::MaskSlot::Effect(_)));
+        if fx_view {
+            return false;
+        }
         if matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
             && photocraft_engine::mask_view_cmds::current(st).is_some()
         {
@@ -143,10 +148,11 @@ impl PhotocraftApp {
         let (layer, index) = self.ui.fx_mask_target?;
         let st = self.session.active()?;
         let l = st.active_layer.filter(|id| id.0 == layer).and_then(|id| st.doc.layer(id))?;
-        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
-            && st.doc.quick_mask.is_none()
-            && photocraft_engine::mask_view_cmds::current(st).is_none();
-        (composite && l.effects.items.get(index)?.mask().is_some()).then_some(index)
+        // Shown alone (⌥-click), it stays targeted whichever channel rows are selected.
+        let viewing = photocraft_engine::mask_view_cmds::current(st);
+        let shown = viewing.is_some_and(|v| !v.filter && v.layer == l.id && v.slot == photocraft_doc::MaskSlot::Effect(index));
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none() && viewing.is_none();
+        ((composite || shown) && l.effects.items.get(index)?.mask().is_some()).then_some(index)
     }
 
     /// Target the own mask of effect `index` of layer `layer` (its thumbnail clicked, or a mask just
@@ -223,6 +229,17 @@ impl PhotocraftApp {
                     self.ui.filter_mask_target = Some(v.layer.0);
                     self.ui.mask_target = false;
                     self.ui.vector_mask_target = false;
+                }
+                Some(v) if matches!(v.slot, photocraft_doc::MaskSlot::Effect(_)) => {
+                    // An effect's mask shown alone targets it, as its thumbnail does.
+                    if let photocraft_doc::MaskSlot::Effect(i) = v.slot {
+                        self.ui.fx_mask_target = Some((v.layer.0, i));
+                        self.ui.fx_selected = Some((v.layer.0, i));
+                    }
+                    self.ui.mask_target = false;
+                    self.ui.second_mask_target = false;
+                    self.ui.vector_mask_target = false;
+                    self.ui.filter_mask_target = None;
                 }
                 Some(v) => {
                     self.ui.mask_target = true;

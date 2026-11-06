@@ -10,7 +10,8 @@
 //!
 //! With `"mask":"filter"` the same view shows a smart object's filter mask (⌥-click the filter
 //! mask thumbnail on its Smart Filters row), and painting while it's shown paints that mask.
-//! With `"mask":"second"` it shows the layer's second mask (⌥-click its thumbnail).
+//! With `"mask":"second"` it shows the layer's second mask, and with `"mask":"fxMask:N"` the own
+//! mask of the layer's effect N (⌥-click their thumbnails).
 
 use photocraft_doc::LayerId;
 use serde::Serialize;
@@ -58,17 +59,23 @@ impl LayerMaskView {
     }
 
     /// The `"mask"` param of [`ID`] that names the shown mask.
-    pub fn mask_param(&self) -> &'static str {
-        match (self.filter, self.slot) {
-            (true, _) => "filter",
-            (false, photocraft_doc::MaskSlot::Second) => "second",
-            _ => "layer",
-        }
+    pub fn mask_param(&self) -> String {
+        mask_param(self.filter, self.slot)
     }
 
     /// Whether this view shows `l`'s mask in `slot` (or its filter mask).
     fn shows(&self, layer: LayerId, filter: bool, slot: photocraft_doc::MaskSlot) -> bool {
         self.layer == layer && self.filter == filter && (filter || self.slot == slot)
+    }
+}
+
+/// The `"mask"` param of [`ID`] naming the filter mask, or else the pixel mask in `slot`.
+fn mask_param(filter: bool, slot: photocraft_doc::MaskSlot) -> String {
+    match (filter, slot) {
+        (true, _) => "filter".into(),
+        (false, photocraft_doc::MaskSlot::Layer) => "layer".into(),
+        (false, photocraft_doc::MaskSlot::Second) => "second".into(),
+        (false, photocraft_doc::MaskSlot::Effect(i)) => crate::commands::fx_mask_target(i),
     }
 }
 
@@ -138,7 +145,8 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
             Some("layer") => (false, MaskSlot::Layer),
             Some("filter") => (true, MaskSlot::Layer),
             Some("second") => (false, MaskSlot::Second),
-            _ => return Err(bad("`mask` must be \"layer\", \"filter\" or \"second\"")),
+            Some(t) if crate::commands::fx_mask_index(&json!({ "target": t })).is_some() => (false, crate::commands::mask_slot(&json!({ "target": t }))),
+            _ => return Err(bad("`mask` must be \"layer\", \"filter\", \"second\" or \"fxMask:N\"")),
         },
     };
     let mode = match p.get("mode") {
@@ -166,6 +174,7 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         let what = match (filter, slot) {
             (true, _) => "filter mask",
             (false, MaskSlot::Second) => "second mask",
+            (false, MaskSlot::Effect(_)) => "mask on that effect",
             _ => "layer mask",
         };
         return Err(bad(format!("layer \"{name}\" has no {what}")));
@@ -191,11 +200,7 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
     }
     let v = current(st);
-    let mask = match (filter, slot) {
-        (true, _) => "filter",
-        (false, MaskSlot::Second) => "second",
-        _ => "layer",
-    };
+    let mask = mask_param(filter, slot);
     Ok(json!({"layer": layer.0, "mode": mode_name(v.filter(|v| v.shows(layer, filter, slot))), "mask": mask}))
 }
 
@@ -223,7 +228,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "View Layer Mask",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"|"second"="layer" (filter: a smart object's filter mask; second: the layer's second mask)} (gray: the mask alone, ⌥-click its thumbnail; overlay: red rubylith over the composite, ⇧⌥-click or `\`; view state, not an undo step; painting while shown paints the mask)"##,
+            params: r##"{"layer":id?,"mode":"off"|"gray"|"overlay"|"toggleGray"|"toggleOverlay"="toggleGray","mask":"layer"|"filter"|"second"|"fxMask:N"="layer" (filter: a smart object's filter mask; second: the layer's second mask; fxMask:N: the own mask of effect N)} (gray: the mask alone, ⌥-click its thumbnail; overlay: red rubylith over the composite, ⇧⌥-click or `\`; view state, not an undo step; painting while shown paints the mask)"##,
             enabled: has_doc,
             run: set_view,
             journal: false,
