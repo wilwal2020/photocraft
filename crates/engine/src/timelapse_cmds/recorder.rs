@@ -78,6 +78,11 @@ pub struct Settings {
     pub ffmpeg: String,
     /// The export box's last choices.
     pub export: ExportSettings,
+    /// Export dialogs start in [`Settings::export_folder`] (user request).
+    pub remember_export_folder: bool,
+    /// The folder the last export went to: the video's folder, or the JPEG sequence's folder
+    /// (empty until something is exported).
+    pub export_folder: String,
 }
 
 impl Default for Settings {
@@ -91,6 +96,8 @@ impl Default for Settings {
             auto_record: false,
             ffmpeg: String::new(),
             export: ExportSettings::default(),
+            remember_export_folder: true,
+            export_folder: String::new(),
         }
     }
 }

@@ -198,3 +198,39 @@ fn layer_rows_do_not_move_when_no_layer_is_selected() {
         assert_eq!(none, selected, "{theme:?}: the row moved with no layer selected");
     }
 }
+
+/// A drag moves Opacity and Fill in whole percents (user report: half percents showed while
+/// dragging, and the number shifted as its ".5" came and went).
+#[test]
+fn dragging_opacity_and_fill_stays_on_whole_percents() {
+    for (name, value) in [("Opacity", (|l: &photocraft_doc::Layer| l.opacity) as fn(&photocraft_doc::Layer) -> f32), ("Fill", |l| l.fill_opacity)] {
+        let mut h = harness();
+        let arrow = by_role(&h, name, Role::Button).unwrap_or_else(|| panic!("missing {name} popup arrow"));
+        let with_colon = format!("{name}:");
+        let rect = h
+            .query_all_by_role(Role::Label)
+            .filter(|node| {
+                let text = node.accesskit_node().value();
+                (text.as_deref() == Some(name) || text.as_deref() == Some(with_colon.as_str())) && (node.rect().center().y - arrow.center().y).abs() < 10.0
+            })
+            .map(|node| node.rect())
+            .next()
+            .unwrap_or_else(|| panic!("missing {name} text label"));
+        let from = rect.center();
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        // Odd distances: half a percent per point.
+        for dx in [-3.0, -7.0, -11.0, -25.0] {
+            h.hover_at(from + vec2(dx, 0.0));
+            h.run_steps(1);
+            let pct = value(&layer(&h)) * 100.0;
+            assert!((pct - pct.round()).abs() < 1e-3, "{name}: {pct} % while dragging {dx}");
+        }
+        h.drop_at(from + vec2(-25.0, 0.0));
+        h.run_steps(3);
+        let pct = value(&layer(&h)) * 100.0;
+        assert!((pct - pct.round()).abs() < 1e-3 && pct < 95.0, "{name}: {pct} % after the drag");
+    }
+}

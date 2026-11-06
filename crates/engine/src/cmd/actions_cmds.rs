@@ -248,6 +248,40 @@ pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
     p
 }
 
+/// A recorded Save As, Save a Copy or Export As keeps the folder it wrote to and the file type,
+/// not the file name (user request: an action that saved a PNG wrote every document it was
+/// played on to the recorded file). Played, it saves the active document under its own name in
+/// that folder ([`save_path_in`]). File › Save has no path: it writes the document's own file.
+pub fn folder_only(id: &str, mut p: Value) -> Value {
+    if !shell_save_command(id) || id == "file.save" {
+        return p;
+    }
+    let Some(o) = p.as_object_mut() else { return p };
+    let Some(path) = o.get("path").and_then(Value::as_str).map(std::path::PathBuf::from) else { return p };
+    let Some(folder) = path.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_string_lossy().into_owned()) else { return p };
+    let ext = path.extension().map(|e| e.to_string_lossy().into_owned());
+    o.remove("path");
+    o.insert("folder".into(), json!(folder));
+    if let Some(ext) = ext {
+        o.insert("extension".into(), json!(ext));
+    }
+    p
+}
+
+/// Where a step recorded by [`folder_only`] saves: `folder`, the active document's name without
+/// its extension, then `extension` (the document's own extension when none was recorded).
+fn save_path_in(s: &Session, folder: &str, extension: Option<&str>) -> Option<String> {
+    let name = &s.active()?.doc.name;
+    let named = std::path::Path::new(name);
+    let stem = named.file_stem().map_or_else(|| name.clone(), |n| n.to_string_lossy().into_owned());
+    let ext = extension.map(str::to_string).or_else(|| named.extension().map(|e| e.to_string_lossy().into_owned()));
+    let file = match ext.filter(|e| !e.is_empty()) {
+        Some(e) => format!("{stem}.{e}"),
+        None => stem,
+    };
+    Some(std::path::Path::new(folder).join(file).to_string_lossy().into_owned())
+}
+
 /// The `"target"` an action step records for whichever mask is targeted when it plays.
 pub const CURRENT_MASK: &str = "currentMask";
 
@@ -275,6 +309,17 @@ fn current_mask(s: &Session, id: &str) -> Result<String> {
 /// Resolve the recorded visibility target identically in engine and shell playback.
 pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
     let mut p = p.clone();
+    if shell_save_command(id)
+        && p.get("path").is_none()
+        && let Some(folder) = p.get("folder").and_then(Value::as_str).filter(|f| !f.is_empty())
+    {
+        let path = save_path_in(s, folder, p.get("extension").and_then(Value::as_str)).ok_or_else(|| bad(id, "no document to save"))?;
+        if let Some(o) = p.as_object_mut() {
+            o.remove("folder");
+            o.remove("extension");
+            o.insert("path".into(), json!(path));
+        }
+    }
     if p.get("target").and_then(Value::as_str) == Some(CURRENT_MASK) {
         let t = current_mask(s, id)?;
         if let Some(o) = p.as_object_mut() {
@@ -647,7 +692,13 @@ pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
-    let steps: Vec<_> = pending_steps(s, idx).cloned().collect();
+    let steps: Vec<_> = pending_steps(s, idx)
+        .cloned()
+        .map(|(id, p)| {
+            let p = folder_only(&id, p);
+            (id, p)
+        })
+        .collect();
     let at = pending_at(s, idx);
     s.actions.recording = Some((s.journal.len(), idx));
     if !steps.is_empty() {

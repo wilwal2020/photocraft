@@ -326,7 +326,8 @@ fn the_picker_window_is_no_bigger_than_photoshops() {
     let id = open(h.state_mut(), "foreground");
     h.run_steps(6);
     let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the picker window");
-    assert!(rect.width() <= 534.0 && rect.height() <= 406.0, "Color Picker window {} x {} points, Photoshop's 533 x 403", rect.width(), rect.height());
+    // A little wider than Photoshop's, whose actions are narrower (about 116 points).
+    assert!(rect.width() <= 552.0 && rect.height() <= 406.0, "Color Picker window {} x {} points, Photoshop's 533 x 403", rect.width(), rect.height());
     assert_eq!(super::FIELD, 256.0, "Photoshop's colour field");
     // Everything still shows: the three actions and all 13 component fields.
     for label in ["OK", "Cancel", "Add to Swatches", "Only Web Colors"] {
@@ -338,6 +339,13 @@ fn the_picker_window_is_no_bigger_than_photoshops() {
     let widths: Vec<f32> = ["OK", "Cancel", "Add to Swatches"].iter().map(|l| h.get_by_label(l).rect().width()).collect();
     assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5), "one width for all three actions: {widths:?}");
     assert!(widths[0] <= 136.0, "actions {} points wide, Photoshop's about 116", widths[0]);
+    // …and they stay clear of the new/current swatch and the warnings beside it (user report:
+    // the buttons ran over the swatch and were cut off).
+    let swatch = h.get_by_label("Click to restore the current colour").rect();
+    for label in ["OK", "Cancel", "Add to Swatches"] {
+        let b = h.get_by_label(label).rect();
+        assert!(b.left() >= swatch.right() + 22.0, "{label} {b:?} clear of the swatch {swatch:?} and its warnings");
+    }
 }
 
 #[test]

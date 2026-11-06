@@ -434,13 +434,29 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
 /// Room for the colour field and both component columns, including units, without overflowing
 /// the title's width; with the frame and title the window is about Photoshop's (534 x 403 points).
 pub(crate) const CONTENT_WIDTH: f32 = 488.0;
-/// Translated action labels can be substantially wider than their English equivalents.
+/// At least [`CONTENT_WIDTH`], and wide enough that the actions sit beside the new/current
+/// swatch and its warnings rather than over them (user report: with the 256-point field they ran
+/// over the swatch and were cut off). Translated action labels can be much wider than English.
 pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
-    let labels = ["OK", "Cancel", "Add to Swatches"];
-    let english = crate::i18n::with_language(crate::i18n::Lang::EN, || widgets::button_width(ui, &labels));
-    let translated = widgets::button_width(ui, &labels.map(crate::i18n::t));
-    CONTENT_WIDTH + (translated - english).max(0.0)
+    let buttons = action_width(ui);
+    let left = FIELD + FIELD_GAP + STRIP_W + COLUMN_GAP;
+    let right = SWATCH_AREA_W + SWATCH_GAP + buttons;
+    CONTENT_WIDTH.max(left + right)
 }
+/// The actions' width: the longest label's.
+fn action_width(ui: &egui::Ui) -> f32 {
+    widgets::button_width(ui, &[tl!("OK"), tl!("Cancel"), tl!("Add to Swatches")]).max(96.0)
+}
+/// Between the colour field and its slider.
+const FIELD_GAP: f32 = 6.0;
+/// The component slider beside the field.
+const STRIP_W: f32 = 18.0;
+/// Between the field column and the swatch column.
+const COLUMN_GAP: f32 = 12.0;
+/// The new/current swatch with its warnings beside it.
+const SWATCH_AREA_W: f32 = 56.0 + 24.0;
+/// Between the swatch's warnings and the actions.
+const SWATCH_GAP: f32 = 8.0;
 /// Side of the colour field: Photoshop's 256 points (user report: 200 looked small beside it).
 const FIELD: f32 = 256.0;
 /// Width of the component fields.
@@ -452,10 +468,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     ui.spacing_mut().item_spacing.y = 4.0;
     let mut outcome = None;
     ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
         ui.vertical(|ui| {
             ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = FIELD_GAP;
                 color_field(ui, f);
             });
             ui.add_space(8.0);
@@ -473,9 +489,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
         });
         ui.vertical(|ui| {
             ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = SWATCH_GAP;
                 swatches(ui, f);
                 // As wide as the longest label, at the right edge like Photoshop's.
-                let button_width = widgets::button_width(ui, &[tl!("OK"), tl!("Cancel"), tl!("Add to Swatches")]).max(96.0);
+                let button_width = action_width(ui);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     if widgets::primary_button(ui, tl!("OK"), button_width).clicked() {
                         outcome = Some(true);
@@ -534,7 +551,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         set_rgb(f, c, keep);
     }
     // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
-    let (strip, sresp) = ui.allocate_exact_size(vec2(18.0, FIELD), Sense::click_and_drag());
+    let (strip, sresp) = ui.allocate_exact_size(vec2(STRIP_W, FIELD), Sense::click_and_drag());
     sresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, tl!("Color slider")));
     ui.painter().add(mesh(strip, &|_, y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
     let sy = strip.top() + (1.0 - fz) * strip.height();
@@ -562,7 +579,7 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let rgb = current(f).rgb;
     let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
-    let (area, _) = ui.allocate_exact_size(vec2(56.0 + 24.0, 92.0), Sense::hover());
+    let (area, _) = ui.allocate_exact_size(vec2(SWATCH_AREA_W, 92.0), Sense::hover());
     // new / current swatches, labelled above and below.
     let sw = Rect::from_min_size(area.min + vec2(0.0, 16.0), vec2(56.0, 64.0));
     let p = ui.painter();

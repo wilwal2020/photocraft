@@ -2775,17 +2775,19 @@ fn an_adjustment_layers_mask_shows_while_it_is_transformed() {
             let m = doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap();
             m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
             m.surface.fill_rect(photocraft_geom::Rect::new(16, 16, 32, 32), &[1.0]);
+            m.surface.fill_rect(photocraft_geom::Rect::new(22, 22, 26, 26), &[0.0]);
             Ok(())
         })
         .unwrap();
     app.ui.mask_target = true;
     begin(&mut app, &gpu_ctx()).unwrap();
     let r = app.ui.transform.as_ref().unwrap().rect;
+    assert_eq!(r, [16.0, 16.0, 32.0, 32.0], "the box frames where the mask shows");
     let p = app.transform_preview.as_ref().unwrap();
     let (img, _) = p.texture.level_image(0).unwrap();
     let at = |x: f64, y: f64| img.pixels[(y - r[1]) as usize * img.size[0] + (x - r[0]) as usize];
-    assert_eq!(at(20.0, 20.0), Color32::WHITE, "the mask's white shows");
-    assert_eq!(at(r[0] + 2.0, r[1] + 2.0).a(), 0, "its black is clear");
+    assert_eq!(at(18.0, 18.0), Color32::WHITE, "the mask's white shows");
+    assert_eq!(at(23.0, 23.0).a(), 0, "its black is clear");
     assert!(p.opacity < 1.0, "over the image, not hiding it");
 }
 
@@ -3421,5 +3423,40 @@ fn a_fill_layer_masked_with_a_hole_shows_while_it_is_transformed() {
         assert_eq!(at(2, 2), Color32::BLACK, "the fill shows round the hole");
         assert_eq!(at(24, 30).a(), 0, "the hole stays clear");
         cancel(&mut app);
+    }
+}
+
+/// Free Transform on a Solid Color layer's mask moves what shows on the canvas (user report: the
+/// box reached the canvas edges, the commit reset a new Solid Color, and making the box smaller
+/// painted the fill in round the edges): a new layer's all-white mask shrinks to a white box in
+/// black, and a mask filled black with a white square frames the square and shrinks it.
+#[test]
+fn free_transform_on_a_fill_layers_mask_moves_what_shows() {
+    for painted in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        app.run("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})).unwrap();
+        app.ui.mask_target = true;
+        app.sync_mask_targets();
+        if painted {
+            app.run("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
+            app.session.execute("select.rect", json!({"x": 16, "y": 16, "width": 32, "height": 32})).unwrap();
+            app.run("edit.fill", json!({"contents": "color", "color": "#ffffff"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+        }
+        begin(&mut app, &egui::Context::default()).unwrap();
+        let want = if painted { [16.0, 16.0, 48.0, 48.0] } else { [0.0, 0.0, 64.0, 64.0] };
+        assert_eq!(app.ui.transform.as_ref().unwrap().rect, want, "painted {painted}: the box frames what shows");
+        scale_about_pivot(&mut app, 0.5, 0.5);
+        commit(&mut app);
+        assert!(app.ui.transform.is_none(), "committed: {}", app.ui.status);
+        let st = app.session.active().unwrap();
+        let m = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+        let at = |x, y| m.pixel(x, y).first().copied().unwrap_or(-1.0);
+        let (centre, edge) = if painted { ((32, 32), (20, 20)) } else { ((32, 32), (8, 8)) };
+        assert!(at(centre.0, centre.1) > 0.9, "painted {painted}: the middle still shows");
+        assert!(at(edge.0, edge.1) < 0.1 && at(2, 2) < 0.1, "painted {painted}: where the box left is hidden, not filled in");
+        assert!(at(-10, -10) < 0.1, "and so is past the canvas");
     }
 }

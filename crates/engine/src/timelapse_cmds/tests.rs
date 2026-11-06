@@ -746,3 +746,30 @@ fn a_folder_that_cannot_be_written_never_panics() {
     settle(&mut s, &mut t);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn export_records_the_current_state_first_and_remembers_its_folder() {
+    let dir = temp_dir("final-frame");
+    let mut s = recording(&dir);
+    let mut t = recorder::mono_ms();
+    settle(&mut s, &mut t);
+    let before = track(&s).rec.meta.frames.len();
+    // A last edit the recorder hasn't taken a frame of yet.
+    s.execute("edit.fill", json!({"contents": "color", "color": "#0000ff"})).unwrap();
+    let out = dir.join("out");
+    let r = s.execute(EXPORT, json!({"path": out.to_string_lossy(), "encoder": "frames", "lengthSec": 1})).unwrap();
+    assert_eq!(track(&s).rec.meta.frames.len(), before + 1, "the finished picture is a frame");
+    let last = r["videoFrames"].as_u64().unwrap();
+    let (_, _, rgb) = export::decode_frame(&out.join(format!("frame_{last:06}.jpg"))).unwrap();
+    assert!(rgb[2] > 200 && rgb[0] < 60, "ends blue: {:?}", &rgb[..3]);
+    let st = s.timelapse_settings();
+    assert!(st.remember_export_folder, "on by default");
+    assert_eq!(st.export_folder, out.to_string_lossy());
+
+    // Off: a later export leaves the remembered folder alone.
+    s.execute(SETTINGS, json!({"rememberExportFolder": false})).unwrap();
+    let other = dir.join("other");
+    s.execute(EXPORT, json!({"path": other.to_string_lossy(), "encoder": "frames", "lengthSec": 1})).unwrap();
+    assert_eq!(s.timelapse_settings().export_folder, out.to_string_lossy());
+    let _ = std::fs::remove_dir_all(&dir);
+}

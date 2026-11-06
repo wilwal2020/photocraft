@@ -701,8 +701,12 @@ pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
 
 /// The `layer.setProps` edit of a Layers panel Opacity or Fill (`key`) field at `pct` percent. A
 /// drag of the pop-up slider (`drag`) coalesces into one history step, as in Photoshop.
+/// A drag (the scrubby label, the number, the ▾ or its slider) moves in whole percents, as
+/// Photoshop's does (user report: half percents shown while dragging made the number shift and
+/// flicker); a typed value keeps its decimals.
 pub(super) fn pct_action(target: &Value, key: &str, pct: f32, drag: Option<u64>) -> (String, Value) {
     let mut p = target.clone();
+    let pct = if drag.is_some() { pct.round() } else { pct };
     p[key] = json!(pct / 100.0);
     if let Some(n) = drag {
         p["coalesce"] = json!(format!("layer-{key}-slider:{n}"));

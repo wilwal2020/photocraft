@@ -924,12 +924,14 @@ fn save_a_copy_is_recorded_and_replayed_as_a_copy() {
     menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
     answer(&mut app);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list[0].steps.last(), Some(&("file.saveACopy".to_string(), json!({"path": "/pics/copy.png"}))));
+    // The folder and file type, not the name: played, the copy is named after the document.
+    assert_eq!(app.session.actions.list[0].steps.last(), Some(&("file.saveACopy".to_string(), json!({"folder": "/pics", "extension": "png"}))));
     assert_eq!(crate::actions::label_of("file.saveACopy"), "Save a Copy");
     written.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(written.borrow().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["/pics/copy.png"]);
+    let want = std::path::Path::new("/pics").join("work.png").to_string_lossy().into_owned();
+    assert_eq!(written.borrow().iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(), [want]);
     let st = app.session.active().unwrap();
     assert_eq!(st.path.as_deref(), Some("/pics/work.pcraft"), "the document keeps its file");
     assert!(st.is_dirty(), "and its unsaved changes");
@@ -967,15 +969,19 @@ fn export_as_is_recorded_and_replayed() {
     assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(70))]);
     let (step_id, step) = app.session.actions.list[0].steps.last().cloned().unwrap();
     assert_eq!(step_id, "file.export.exportAs");
-    assert_eq!((&step["path"], &step["format"], &step["quality"], &step["scale"]), (&json!("/pics/out.jpg"), &json!("jpg"), &json!(70), &json!(50)));
+    assert_eq!(
+        (&step["folder"], &step["extension"], &step["format"], &step["quality"], &step["scale"]),
+        (&json!("/pics"), &json!("jpg"), &json!("jpg"), &json!(70), &json!(50))
+    );
     assert!(step.as_object().unwrap().keys().all(|k| !k.starts_with("__")), "only the destination and the dialog's settings: {step}");
     assert_eq!(crate::actions::label_of("file.export.exportAs"), "Export As");
 
-    app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+    app.run("file.new", json!({"width": 100, "height": 60, "name": "Other"})).unwrap();
     exported.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 50, 30, Some(70))], "the played document, scaled as recorded");
+    let want = std::path::Path::new("/pics").join("Other.jpg").to_string_lossy().into_owned();
+    assert_eq!(*exported.borrow(), [(want, 50, 30, Some(70))], "the played document, under its own name, scaled as recorded");
     assert!(app.ui.dialogs.is_empty(), "no dialog on playback");
 }
 

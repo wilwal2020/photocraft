@@ -266,6 +266,12 @@ fn settings_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = get_str(p, "ffmpeg", cmd)? {
         st.ffmpeg = v.trim().into();
     }
+    if let Some(v) = get_bool(p, "rememberExportFolder", cmd)? {
+        st.remember_export_folder = v;
+    }
+    if let Some(v) = get_str(p, "exportFolder", cmd)? {
+        st.export_folder = v.trim().into();
+    }
     if let Some(e) = p.get("export") {
         if !e.is_object() {
             return Err(bad(cmd, "`export` must be an object"));
@@ -406,6 +412,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     let rec = match get_str(p, "recording", cmd)? {
         Some(id) => match s.timelapse.tracks.iter().find(|t| t.rec.meta.id == id).map(|t| t.doc) {
             Some(doc) => {
+                capture_final(s, doc, now);
                 s.timelapse.flush(doc, now)?;
                 s.timelapse.track(doc).map(|t| t.rec.clone())
             }
@@ -415,6 +422,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, format!("no recording with id `{id}`")))?,
         None => {
             let doc = s.active_doc_id()?;
+            capture_final(s, doc, now);
             s.timelapse.flush(doc, now)?;
             s.timelapse.track(doc).map(|t| t.rec.clone()).ok_or_else(|| EngineError::Other("this document has no timelapse recording".into()))?
         }
@@ -422,8 +430,22 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     if export::usable_frames(&rec, settings.hide_undone).is_empty() {
         return Err(EngineError::Other("this recording doesn't have any frames yet".into()));
     }
+    let mut changed = false;
     if get_bool(p, "remember", cmd)?.unwrap_or(true) && o != settings.export {
         settings.export = o.clone();
+        changed = true;
+    }
+    // Remember where it went, for the next export dialog.
+    let path = std::path::Path::new(out);
+    let folder = if o.encoder == "frames" { Some(path) } else { path.parent() }.map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty());
+    if settings.remember_export_folder
+        && let Some(folder) = folder
+        && folder != settings.export_folder
+    {
+        settings.export_folder = folder;
+        changed = true;
+    }
+    if changed {
         store_settings(s, settings.clone());
     }
     let id = rec.meta.id.clone();
@@ -446,6 +468,18 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(r.to_json())
         },
     )
+}
+
+/// Before an export: record how `doc` looks now, so the video ends on the finished picture (user
+/// request) rather than on the last frame the recorder happened to take. Only while it records;
+/// a frame identical to the last one isn't stored twice.
+fn capture_final(s: &mut Session, doc: photocraft_doc::DocId, now: f64) {
+    let Session { docs, timelapse, .. } = &mut *s;
+    if let Some(st) = docs.iter().find(|d| d.doc.id == doc)
+        && timelapse.track(doc).is_some_and(|t| t.recording)
+    {
+        let _ = timelapse.capture_now(st, now);
+    }
 }
 
 /// Layers named with the reference tag stay visible to you but are hidden in every frame. Adds
@@ -537,7 +571,7 @@ pub fn specs() -> Vec<CommandSpec> {
             SETTINGS,
             "Timelapse Settings",
             &[],
-            r##"{"folder":path?,"quality":"low|default|high"?,"hideUndone":bool?,"referenceTag":str?,"idleSec":5..3600?,"autoRecord":bool?,"ffmpeg":path?,"export":{…export options}?} → status (persisted in the preferences)"##,
+            r##"{"folder":path?,"quality":"low|default|high"?,"hideUndone":bool?,"referenceTag":str?,"idleSec":5..3600?,"autoRecord":bool?,"ffmpeg":path?,"rememberExportFolder":bool?,"exportFolder":path?,"export":{…export options}?} → status (persisted in the preferences; an export sets exportFolder while rememberExportFolder is on)"##,
             always,
             true,
             settings_cmd

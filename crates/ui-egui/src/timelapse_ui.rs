@@ -125,12 +125,17 @@ fn choose_output(app: &mut PhotocraftApp, o: ExportSettings) -> Result<Value, St
         app.timelapse.result = None;
         app.run(tc::EXPORT, params)
     };
+    // Settings › Remember export folder: the dialog starts where the last export went.
+    let settings = app.session.timelapse_settings();
+    let remembered = Some(settings.export_folder).filter(|d| settings.remember_export_folder && !d.is_empty() && std::path::Path::new(d).is_dir());
     if o.encoder == "frames" {
-        app.ask_folder(run)
+        app.ask_folder_in(remembered, run)
     } else {
         let name =
             app.session.active().map_or_else(|| "Untitled".to_string(), |d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string()));
-        app.pick_save(&format!("{name} timelapse.mp4"), run)
+        let file = format!("{name} timelapse.mp4");
+        let suggested = remembered.map_or_else(|| file.clone(), |d| std::path::Path::new(&d).join(&file).to_string_lossy().into_owned());
+        app.pick_save(&suggested, run)
     }
 }
 
@@ -1229,6 +1234,16 @@ fn settings_view(ui: &mut Ui, t: &Tokens, settings: &Settings, ask: &mut Option<
         if button(ui, t, label, Look::Plain, Icon::None, Some(w), 24.0, true).clicked() {
             *ask = Some(Ask::ChooseFolder);
         }
+    });
+    card(ui, t, false, |ui| {
+        ui.label(heading(t, tl!("Export folder")));
+        if switch_row(ui, t, settings.remember_export_folder, tl!("Remember export folder")) {
+            *ask = Some(Ask::Settings(json!({"rememberExportFolder": !settings.remember_export_folder})));
+        }
+        if settings.remember_export_folder {
+            path_box(ui, t, &settings.export_folder, tl!("Nothing exported yet"));
+        }
+        desc(ui, t, tl!("Export dialogs start in the folder you last exported to."));
     });
     card(ui, t, false, |ui| {
         ui.label(heading(t, tl!("Recording quality")));

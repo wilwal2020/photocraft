@@ -1896,7 +1896,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         _ if button_mode => Click::Play(i),
                         Some(x) if x < CHECK_SPLIT => Click::CheckAction(i),
                         Some(x) if x < TREE_X && dialog.is_some() => Click::DialogAction(i, dialog),
-                        Some(x) if (TREE_X + indent..cx + 14.0).contains(&x) => Click::ToggleAction(i),
+                        // `x` is from the row's left edge, like the triangle's span (user report:
+                        // with the panel away from the window's left edge every click on an
+                        // action opened or closed it instead of selecting it).
+                        Some(x) if (TREE_X + indent..cx - x0 + 14.0).contains(&x) => Click::ToggleAction(i),
                         _ => Click::SelectAction(i),
                     });
                     if button_mode {
@@ -2171,6 +2174,50 @@ pub(crate) mod tests {
             &json!({"layer": {"name": "Ink", "occurrence": 1}, "target": {"current": true}, "layers": [{"name": "A"}, {"current": true}], "opacity": 0.5}),
         );
         assert_eq!(lines, ["Layer: Ink (2)", "Layers: A, Current Layer", "Opacity: 0.5", "Target: Current Layer"]);
+    }
+
+    /// A click on an action's name selects it; only its triangle opens it (user report: a click
+    /// anywhere on the row opened it, with the panel on the right of the window).
+    #[test]
+    fn clicking_an_action_selects_it_and_its_triangle_opens_it() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+        });
+        h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        h.state_mut().run("actions.record", json!({"name": "Pick Me"})).unwrap();
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        h.run_steps(1);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "window.panel.actions", json!({})).unwrap();
+        h.run_steps(4);
+        let i = h.state().session.actions.list.iter().position(|a| a.name == "Pick Me").unwrap();
+        h.state_mut().ui.actions.selected = None;
+        h.state_mut().ui.actions.expanded.clear();
+        h.run_steps(2);
+        let row = h.get_by_label("Pick Me").rect();
+        assert!(row.left() > 200.0, "the panel is away from the window's left edge: {row:?}");
+        // On the name.
+        let click = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, pos: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(pos));
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+        };
+        click(&mut h, egui::pos2(row.left() + TREE_X + 60.0, row.center().y));
+        assert_eq!(h.state().ui.actions.selected, Some(i), "the name selects it");
+        assert!(!h.state().ui.actions.expanded.get(i).copied().unwrap_or(false), "and doesn't open it");
+        // On the triangle (just right of the set's indent).
+        let tri = egui::pos2(row.left() + TREE_X + 14.0 + 6.0, row.center().y);
+        // Past the double-click time, so it is a click of its own.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        click(&mut h, tri);
+        assert!(h.state().ui.actions.expanded.get(i).copied().unwrap_or(false), "the triangle opens it");
     }
 
     /// An action's Set Shortcut… takes any key with any modifiers (beyond Photoshop's F-keys), and
@@ -2779,13 +2826,19 @@ pub(crate) mod tests {
         crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
         app.run("actions.stop", json!({})).unwrap();
         let steps = &app.session.actions.list[0].steps;
-        assert_eq!(steps, &[("layer.new.layer".into(), json!({})), ("file.saveAs".into(), json!({"path": "out/result.psd"})), ("file.save".into(), json!({}))]);
+        // Save As keeps the folder and the file type, not the name (user request): played on
+        // another document it saves that one under its own name.
+        assert_eq!(
+            steps,
+            &[("layer.new.layer".into(), json!({})), ("file.saveAs".into(), json!({"folder": "out", "extension": "psd"})), ("file.save".into(), json!({}))]
+        );
         written.borrow_mut().clear();
-        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("file.new", json!({"width": 16, "height": 16, "name": "Second"})).unwrap();
         let played = app.run("actions.play", json!({"action": 0})).unwrap();
         assert!(played.get("failed").is_none(), "{played}");
-        assert_eq!(*written.borrow(), ["out/result.psd", "out/result.psd"]);
-        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("out/result.psd"));
+        let want = std::path::Path::new("out").join("Second.psd").to_string_lossy().into_owned();
+        assert_eq!(*written.borrow(), [want.clone(), want.clone()]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(want.as_str()));
     }
 
     /// An app with the real importer/exporter and writer whose Save dialogs answer `answers`.

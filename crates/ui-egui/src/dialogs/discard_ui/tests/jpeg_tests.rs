@@ -122,10 +122,14 @@ fn a_copy_recorded_from_the_engine_command_replays() {
     h.state_mut().run("file.saveACopy", json!({"path": path, "quality": 90})).unwrap();
     h.state_mut().run("actions.stop", json!({})).unwrap();
     let _ = std::fs::remove_file(&path);
-    assert_eq!(h.state().session.actions.list[0].steps, [("file.saveACopy".into(), json!({"path": path, "quality": 90}))]);
+    // The folder and file type are kept, not the name: played, the copy is named after the document.
+    let dir = std::path::Path::new(&path).parent().unwrap().to_string_lossy().into_owned();
+    assert_eq!(h.state().session.actions.list[0].steps, [("file.saveACopy".into(), json!({"folder": dir, "extension": "jpg", "quality": 90}))]);
+    let stem = std::path::Path::new(&h.state().session.active().unwrap().doc.name).file_stem().unwrap().to_string_lossy().into_owned();
+    let played_path = std::path::Path::new(&dir).join(format!("{stem}.jpg")).to_string_lossy().into_owned();
     let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(writes.borrow().as_slice(), &[(path, asked(pct(12), JpegFormat::Baseline))]);
+    assert_eq!(writes.borrow().as_slice(), &[(played_path, asked(pct(12), JpegFormat::Baseline))]);
 }
 
 /// The quality and format chosen in the prompt are the ones written; Cancel writes nothing.

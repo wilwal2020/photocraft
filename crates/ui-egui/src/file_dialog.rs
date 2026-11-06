@@ -131,7 +131,16 @@ impl PhotocraftApp {
     /// Ask the user to choose a folder, starting in the folder of the most recent file when known.
     /// `then` receives the selected path when the dialog is answered.
     pub(crate) fn ask_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_folder_in(None, then)
+    }
+
+    /// [`Self::ask_folder`], starting in `initial_dir` when given.
+    pub(crate) fn ask_folder_in(
+        &mut self,
+        initial_dir: Option<String>,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let initial_dir = initial_dir.or_else(|| last_used_dir(&self.ui.recent_files));
         self.ask_file(FileDialogRequest::Folder { initial_dir }, move |app, answer| match answer {
             FileDialogAnswer::FolderTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),

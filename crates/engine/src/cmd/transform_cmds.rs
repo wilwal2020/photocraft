@@ -68,13 +68,94 @@ pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
     if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| mask_shown_bounds(doc, &m.surface)) } else { content }
 }
 
-/// Where a mask lets its layer show: its painted values, and the whole canvas when what it reads
-/// past them is not black. A fill layer's mask made white with a black hole paints only the hole,
-/// so the frame was the hole alone, which the mask hides, and the layer vanished while the box was
-/// open (user report).
+/// Where a mask lets its layer show: its painted values, and on the canvas wherever it isn't
+/// black when what it reads past them is not black. A fill layer's mask made white with a black
+/// hole paints only the hole, so the frame was the hole alone, which the mask hides, and the layer
+/// vanished while the box was open (user report). A mask filled black with a white shape painted
+/// on it frames the shape, not the canvas (user report, again).
 fn mask_shown_bounds(doc: &Document, mask: &Surface) -> Rect {
-    let painted = photocraft_compose::bounds::content_bounds(mask);
-    if mask.default_pixel().first().is_some_and(|v| *v > 0.0) { painted.union(&doc.bounds()) } else { painted }
+    if mask.default_pixel().first().is_some_and(|v| *v > 0.0) { shown_in_canvas(mask, doc.bounds()) } else { photocraft_compose::bounds::content_bounds(mask) }
+}
+
+/// The bounds of `mask`'s non-black pixels within `canvas`: its tiles' own, and the whole of each
+/// tile it hasn't painted (those read as its default, which isn't black here).
+fn shown_in_canvas(mask: &Surface, canvas: Rect) -> Rect {
+    use photocraft_geom::TileCoord;
+    if canvas.is_empty() {
+        return Rect::EMPTY;
+    }
+    // Black encodes as zero bytes in every sample type.
+    let black = vec![0u8; mask.format().bytes_per_pixel()];
+    let (a, b) = (TileCoord::containing(canvas.x0, canvas.y0), TileCoord::containing(canvas.x1 - 1, canvas.y1 - 1));
+    let mut out = Rect::EMPTY;
+    for ty in a.ty..=b.ty {
+        for tx in a.tx..=b.tx {
+            let c = TileCoord::new(tx, ty);
+            let o = c.rect();
+            let inside = o.intersect(&canvas);
+            let r = match mask.tile(c) {
+                None => inside,
+                // A tile across the canvas edge also holds pixels past it: look at its canvas part.
+                Some(_) if inside != o => nonzero_bounds(mask, inside),
+                Some(t) => match t.content_bounds(&black) {
+                    Some((x0, y0, x1, y1)) => Rect::new(o.x0 + i32::from(x0), o.y0 + i32::from(y0), o.x0 + i32::from(x1), o.y0 + i32::from(y1)),
+                    None => continue,
+                },
+            };
+            if !r.is_empty() {
+                out = if out.is_empty() { r } else { out.union(&r) };
+            }
+        }
+    }
+    out
+}
+
+/// The bounds of `mask`'s non-black pixels in `area` (one tile at most), by reading them.
+fn nonzero_bounds(mask: &Surface, area: Rect) -> Rect {
+    let Ok(v) = crate::allocation::read_region(mask, area, "framing a mask") else { return area };
+    let w = area.width() as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+    for (i, row) in v.chunks(w.max(1)).enumerate() {
+        if let (Some(a), Some(b)) = (row.iter().position(|v| *v > 0.0), row.iter().rposition(|v| *v > 0.0)) {
+            (x0, x1, y0, y1) = (x0.min(a), x1.max(b + 1), y0.min(i), i + 1);
+        }
+    }
+    if x0 == usize::MAX {
+        return Rect::EMPTY;
+    }
+    Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32)
+}
+
+/// `mask` as it reads on `canvas`, black everywhere past it: what a fill or adjustment layer's
+/// mask is when Free Transform moves it. The box moves what shows on the canvas, so a mask that
+/// reads white past the canvas (a new Solid Color's, or one filled black over the canvas) no longer
+/// brings that white back where the box was made smaller (user report: the transform reset, or
+/// painted the fill in round the edges).
+fn canvas_bounded(mask: &Surface, canvas: Rect) -> Result<Surface> {
+    let mut out = Surface::with_default(mask.format(), &[0.0]);
+    let mut y = canvas.y0;
+    while y < canvas.y1 {
+        let strip = Rect::new(canvas.x0, y, canvas.x1, y.saturating_add(photocraft_geom::TILE_SIZE).min(canvas.y1));
+        let v = crate::allocation::read_region(mask, strip, "transforming a mask")?;
+        out.try_write_region(strip, &v)?;
+        y = strip.y1;
+    }
+    out.prune();
+    Ok(out)
+}
+
+/// Before Free Transform moves `l`: a layer without pixels of its own (a fill or an adjustment)
+/// shows only through its masks, so its linked masks are cut to the canvas ([`canvas_bounded`]).
+fn bound_masks_to_canvas(l: &mut Layer, canvas: Rect) -> Result<()> {
+    if !matches!(l.content, LayerContent::Fill(_) | LayerContent::Adjustment(_)) {
+        return Ok(());
+    }
+    for m in [&mut l.mask, &mut l.second_mask].into_iter().flatten().filter(|m| m.linked) {
+        if m.surface.default_pixel().first().is_some_and(|v| *v > 0.0) {
+            m.surface = canvas_bounded(&m.surface, canvas)?;
+        }
+    }
+    Ok(())
 }
 
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
@@ -921,6 +1002,7 @@ fn transform_doc(
         check_layer_budget(layer_sel(l), l, h)?;
     }
     let mut taken = Vec::new();
+    let canvas = doc.bounds();
     for &id in ids {
         let group = group_locks(doc, id);
         // Photoshop turns the Background into a normal layer before transforming it.
@@ -929,6 +1011,7 @@ fn transform_doc(
         let doc_sel = layer_sel(l);
         if !h.is_identity() {
             taken.extend(crate::smart_cmds::take_caches(std::slice::from_mut(l)));
+            bound_masks_to_canvas(l, canvas)?;
         }
         apply_transform(doc_sel, group, l, h, affine, interp, ctl)?;
     }
