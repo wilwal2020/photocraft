@@ -224,6 +224,12 @@ pub struct StepInput {
     pub step: u64,
 }
 
+/// The path length (pixels) the stroke direction is smoothed over: twice the dab spacing, at
+/// least 3 px (pointer jitter) and at most 12 px (so a turn shows within a dab or two).
+fn direction_window(spacing: f64) -> f64 {
+    if spacing.is_finite() { (2.0 * spacing).clamp(3.0, 12.0) } else { 6.0 }
+}
+
 /// Walks a polyline and emits steps every `step_len(point)` pixels, plus airbrush steps in time.
 #[derive(Clone, Debug)]
 pub struct PathWalker {
@@ -234,6 +240,9 @@ pub struct PathWalker {
     pending_first: Option<StrokePoint>,
     initial_dir: Option<f32>,
     dir: f32,
+    /// The stroke's direction of travel, smoothed along the path ([`direction_window`]): a unit
+    /// vector, `None` before the first move.
+    tangent: Option<(f64, f64)>,
     step: u64,
     /// Airbrush interval in ms (None = off).
     interval: Option<f64>,
@@ -256,6 +265,7 @@ impl PathWalker {
             pending_first: None,
             initial_dir: None,
             dir: 0.0,
+            tangent: None,
             step: 0,
             interval: build_up_interval_ms,
             time_acc: 0.0,
@@ -353,7 +363,20 @@ impl PathWalker {
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
         if len > 1e-9 {
-            self.dir = (-dy).atan2(dx) as f32;
+            // Direction follows the path over a few pixels, not each pointer segment: a pen's
+            // samples come a pixel or less apart, and their wobble turned every dab of a
+            // direction-controlled tip a different way (user report, against Photoshop). A long
+            // segment (a ⇧-click line, a corner between long ones) takes its own direction.
+            let u = (dx / len, dy / len);
+            let w = 1.0 - (-len / direction_window(step_len(&p))).exp();
+            let t = match self.tangent {
+                Some((tx, ty)) => (tx * (1.0 - w) + u.0 * w, ty * (1.0 - w) + u.1 * w),
+                None => u,
+            };
+            let n = t.0.hypot(t.1);
+            let t = if n > 1e-6 && n.is_finite() { (t.0 / n, t.1 / n) } else { u };
+            self.tangent = Some(t);
+            self.dir = (-t.1).atan2(t.0) as f32;
             if self.initial_dir.is_none() {
                 self.initial_dir = Some(self.dir);
             }

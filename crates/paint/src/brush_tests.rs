@@ -465,6 +465,29 @@ fn tilt_direction_and_rotation_drive_angle() {
     assert!(d[0].radius <= 0.5 + 1e-6);
 }
 
+/// Direction follows the stroke, not the pointer's wobble: a pen's samples a pixel apart with
+/// half a pixel of jitter keep the dabs turned along the line (user report: against Photoshop,
+/// a direction-controlled sampled tip turned every way), and a sharp corner still turns at once.
+#[test]
+fn direction_ignores_pointer_jitter_but_follows_corners() {
+    let b = BrushSettings {
+        size: 20.0,
+        spacing: 0.25,
+        shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Direction), ..Default::default() },
+        ..brush()
+    };
+    // Rightwards, one sample a pixel, the y wobbling by ±0.5 px.
+    let pts: Vec<StrokePoint> = (0..200).map(|i| StrokePoint::new(f64::from(i), if i % 2 == 0 { 0.5 } else { -0.5 }, 1.0)).collect();
+    let d = dabs_of(&b, &pts);
+    let worst = d.iter().skip(4).map(|x| x.angle.to_degrees().abs()).fold(0.0_f32, f32::max);
+    assert!(worst < 15.0, "dabs turned up to {worst}° along a straight line");
+    // A corner made of long segments turns straight away.
+    let pts = vec![StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0), StrokePoint::new(100.0, 100.0, 1.0)];
+    let d = dabs_of(&b, &pts);
+    let last = d.last().unwrap().angle.to_degrees();
+    assert!((last + 90.0).abs() < 1.0, "down the second side: {last}");
+}
+
 #[test]
 fn jitter_is_deterministic_per_seed() {
     let b = BrushSettings {
