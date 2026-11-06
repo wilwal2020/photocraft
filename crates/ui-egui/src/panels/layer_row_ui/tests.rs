@@ -344,6 +344,38 @@ fn dragging_down_the_eyes_sweeps_visibility_without_reordering() {
     }
 }
 
+/// Dragging down the eyes from a layer inside a hidden group shows the layers swept over and the
+/// group, as a click on that greyed eye does, rather than hiding a layer that wasn't showing.
+#[test]
+fn sweeping_the_eyes_inside_a_hidden_group_shows_the_group() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let inner = s.execute("layer.new.layer", json!({"name": "Inner"})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.execute("layer.new.groupFromLayers", json!({"name": "Pack"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"layer": group, "visible": false})).unwrap();
+    s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let layer = |h: &Harness<'_, PhotocraftApp>, id: u64| h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().clone();
+    let rows = recorded(&h.ctx);
+    let row = rows.iter().find(|r| r.layer == inner).expect("the group is open");
+    let below = rows.iter().find(|r| r.row.top() >= row.row.bottom() - 1.0).expect("a row below it");
+    let first = pos2(row.row.left() + 17.0, row.row.center().y);
+    let last = pos2(below.row.left() + 17.0, below.row.center().y);
+    h.event(egui::Event::PointerMoved(first));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: first, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=6 {
+        h.event(egui::Event::PointerMoved(first + (last - first) * (k as f32 / 6.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: last, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(layer(&h, inner).visible, "the layer stays shown");
+    assert!(layer(&h, group).visible, "and its group is shown with it");
+    assert!(layer(&h, below.layer).visible, "the row swept over below stays shown");
+}
+
 /// #736: a layer row dropped on the footer's New Layer button is duplicated, on New Group it is
 /// grouped, on Delete it is deleted; a row outside the selection goes alone.
 #[test]

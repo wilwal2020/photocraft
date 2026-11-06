@@ -96,19 +96,28 @@ struct EyeSweep {
 }
 
 /// Starts an eye-column sweep from `eye`, or applies a running one to the row `row` of `l`.
-fn eye_sweep(ctx: &egui::Context, l: &Layer, row: Rect, eye: &egui::Response, actions: &mut Vec<(String, Value)>) {
+/// `parent_hidden`: a group holding `l` is hidden. As a click there does, the sweep then shows the
+/// layer and its groups rather than hiding a layer that wasn't showing.
+fn eye_sweep(ctx: &egui::Context, l: &Layer, parent_hidden: bool, row: Rect, eye: &egui::Response, actions: &mut Vec<(String, Value)>) {
     let id = egui::Id::unique("layer-eye-sweep");
     let set =
         |visible: bool, key: u64| ("layer.setProps".to_string(), json!({"layer": l.id.0, "visible": visible, "coalesce": format!("layer-eye-sweep:{key}")}));
     if eye.drag_started() {
-        start_eye_sweep(ctx, l, id, actions, &set);
+        start_eye_sweep(ctx, l, parent_hidden, id, actions, &set);
     } else {
-        continue_eye_sweep(ctx, l, row, id, actions, &set);
+        continue_eye_sweep(ctx, l, parent_hidden, row, id, actions, &set);
     }
 }
 
-fn start_eye_sweep(ctx: &egui::Context, layer: &Layer, id: egui::Id, actions: &mut Vec<(String, Value)>, set: &impl Fn(bool, u64) -> (String, Value)) {
-    let sweep = EyeSweep { visible: !layer.visible, key: ctx.cumulative_pass_nr(), swept: vec![layer.id.0] };
+fn start_eye_sweep(
+    ctx: &egui::Context,
+    layer: &Layer,
+    parent_hidden: bool,
+    id: egui::Id,
+    actions: &mut Vec<(String, Value)>,
+    set: &impl Fn(bool, u64) -> (String, Value),
+) {
+    let sweep = EyeSweep { visible: parent_hidden || !layer.visible, key: ctx.cumulative_pass_nr(), swept: vec![layer.id.0] };
     actions.push(set(sweep.visible, sweep.key));
     ctx.data_mut(|data| data.insert_temp(id, sweep));
 }
@@ -116,6 +125,7 @@ fn start_eye_sweep(ctx: &egui::Context, layer: &Layer, id: egui::Id, actions: &m
 fn continue_eye_sweep(
     ctx: &egui::Context,
     layer: &Layer,
+    parent_hidden: bool,
     row: Rect,
     id: egui::Id,
     actions: &mut Vec<(String, Value)>,
@@ -130,7 +140,8 @@ fn continue_eye_sweep(
     if y1 < row.top() || y0 >= row.bottom() || sweep.swept.contains(&layer.id.0) {
         return;
     }
-    if layer.visible != sweep.visible {
+    // Showing a layer in a hidden group shows the group too (`layer.setProps` does).
+    if layer.visible != sweep.visible || (sweep.visible && parent_hidden) {
         actions.push(set(sweep.visible, sweep.key));
     }
     sweep.swept.push(layer.id.0);
@@ -465,7 +476,7 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
         let color = if row.parent_hidden { color.gamma_multiply(0.35) } else { color };
         crate::layer_row_ui::paint_eye(ui.painter(), eye_cell.center() - vec2(0.5, 0.0), color);
     }
-    eye_sweep(ctx, l, rect, &eye_resp, actions);
+    eye_sweep(ctx, l, row.parent_hidden, rect, &eye_resp, actions);
     if eye_resp.clicked() {
         // ⌥-click shows only this layer; ⌥-click it again to restore the others.
         if ui.input(|i| i.modifiers.alt) {
