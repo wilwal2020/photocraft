@@ -486,6 +486,8 @@ impl EpiIntegration {
                     window,
                     self.normal_geometry,
                 );
+                // PhotoCraft fork: a maximized window moved to another monitor reopens there.
+                let window_settings = normal_on_current_monitor(window_settings, window);
                 self.normal_geometry = Some(window_settings.normal_geometry());
                 epi::set_value(storage, STORAGE_WINDOW_KEY, &window_settings);
             }
@@ -516,6 +518,55 @@ const STORAGE_EGUI_MEMORY_KEY: &str = "egui";
 
 #[cfg(feature = "persistence")]
 const STORAGE_WINDOW_KEY: &str = "window";
+
+/// PhotoCraft fork. While a window is maximized (or full screen) its normal geometry isn't
+/// updated, so one maximized on a monitor and then moved, still maximized, to another (dragging
+/// its title bar, Win+Shift+Arrow) saved the old monitor's normal position, reopened there and
+/// maximized on it (user report: PhotoCraft kept opening on the pen display). The normal
+/// position moves onto the window's current monitor, centred, when it isn't on it.
+#[cfg(feature = "persistence")]
+fn normal_on_current_monitor(settings: WindowSettings, window: &winit::window::Window) -> WindowSettings {
+    // `WindowGeometry`'s fields are private to egui-winit: go through its saved form.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Geometry {
+        outer_position_pixels: Option<egui::Pos2>,
+        scale_factor: f32,
+        inner_size_points: egui::Vec2,
+    }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Saved {
+        normal_geometry: Geometry,
+        fullscreen: bool,
+        maximized: bool,
+    }
+    let Ok(text) = ron::to_string(&settings) else { return settings };
+    let Ok(mut saved) = ron::from_str::<Saved>(&text) else { return settings };
+    if !(saved.maximized || saved.fullscreen) {
+        return settings;
+    }
+    let (Some(monitor), Some(pos)) = (window.current_monitor(), saved.normal_geometry.outer_position_pixels) else {
+        return settings;
+    };
+    let (mp, ms) = (monitor.position(), monitor.size());
+    let rect = egui::Rect::from_min_size(egui::pos2(mp.x as f32, mp.y as f32), egui::vec2(ms.width as f32, ms.height as f32));
+    let g = &saved.normal_geometry;
+    let size = g.inner_size_points * g.scale_factor.max(0.1);
+    let Some(moved) = normal_position_on(pos, size, rect) else { return settings };
+    saved.normal_geometry.outer_position_pixels = Some(moved);
+    saved.normal_geometry.scale_factor = monitor.scale_factor() as f32;
+    ron::to_string(&saved).ok().and_then(|t| ron::from_str::<WindowSettings>(&t).ok()).unwrap_or(settings)
+}
+
+/// PhotoCraft fork: where a normal window of `size` pixels at `pos` goes on `monitor` (pixels):
+/// `None` when `pos` is on it already, else centred on it (its top-left corner kept on it).
+#[cfg(feature = "persistence")]
+fn normal_position_on(pos: egui::Pos2, size: egui::Vec2, monitor: egui::Rect) -> Option<egui::Pos2> {
+    if !pos.is_finite() || !size.is_finite() || monitor.is_negative() || monitor.contains(pos) {
+        return None;
+    }
+    let centred = monitor.center() - size / 2.0;
+    Some(centred.max(monitor.min))
+}
 
 pub fn load_window_settings(_storage: Option<&dyn epi::Storage>) -> Option<WindowSettings> {
     profiling::function_scope!();

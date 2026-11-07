@@ -13,3 +13,8 @@ from the crate's and the egui workspace's manifests.
   (`handle_platform_output_with_event_loop`), so `PlatformOutput::cursor_image` applies in an
   immediate viewport too. PhotoCraft's Camera Raw window is one: its Zoom and Hand cursors were
   painted beside the arrow, a frame behind the pointer (user report: the zoom symbol lags).
+- `native/epi_integration.rs` (`save`, `normal_on_current_monitor`): a maximized or full-screen
+  window's saved normal position moves onto the monitor the window is on when it was left on
+  another (eframe keeps the last normal geometry while maximized, so a maximized window moved to
+  another monitor reopened on the old one; user report: PhotoCraft kept opening on the pen
+  display).
