@@ -49,6 +49,7 @@ pub mod exr_parts;
 mod flat;
 use photocraft_color::gradient_bake;
 pub mod guides_map;
+mod psd_roundtrip;
 mod second_mask_psd;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;

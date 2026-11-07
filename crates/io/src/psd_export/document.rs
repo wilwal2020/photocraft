@@ -58,8 +58,10 @@ fn document_to_psd_previewed(
     size_limit: u64,
     preview: Option<&mut photocraft_compose::Reducer>,
 ) -> (PsdFile, Vec<String>) {
-    // Second masks: multiplied into the layer mask, kept whole in a private block.
-    let prepared = crate::second_mask_psd::for_export(doc);
+    // Second masks: multiplied into the layer mask, kept whole in a private block; second and
+    // effect masks also in hidden helper layers, and Lock Selection in the XMP, which a save in
+    // Photoshop keeps (`psd_roundtrip`).
+    let prepared = crate::psd_roundtrip::for_export(doc);
     let doc = prepared.as_ref().unwrap_or(doc);
     let layerless_limit = opts.size_limit_psb.then_some(size_limit);
     if doc.mode == ColorMode::Multichannel {

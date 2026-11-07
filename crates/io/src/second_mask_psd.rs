@@ -69,7 +69,7 @@ pub fn after_import(doc: &mut Document, warnings: &mut Vec<String>) {
 
 /// The two masks' effective values (density applied) multiplied, with the first's feather, link
 /// and enabled state.
-fn multiplied(a: &LayerMask, b: &LayerMask, canvas: Rect) -> LayerMask {
+pub(crate) fn multiplied(a: &LayerMask, b: &LayerMask, canvas: Rect) -> LayerMask {
     let eff = |m: &LayerMask, v: f32| 1.0 - m.density * (1.0 - v);
     let default = |m: &LayerMask| eff(m, m.surface.default_pixel().first().copied().unwrap_or(1.0));
     let fmt = a.surface.format();

@@ -1508,6 +1508,8 @@ fn finish_import(mut doc: Document, mut cx: Ctx<'_>, ctl: &photocraft_raster::In
     cx.warnings.extend(crate::text_styles_map::import(&mut doc));
     // PhotoCraft's second masks (`PCm2` blocks).
     crate::second_mask_psd::after_import(&mut doc, &mut cx.warnings);
+    // Helper layers (second and effect masks) and Lock Selection in the XMP.
+    crate::psd_roundtrip::after_import(&mut doc, &mut cx.warnings);
     if ctl.cancelled() {
         return None;
     }
