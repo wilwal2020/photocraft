@@ -1,9 +1,9 @@
 use super::{
-    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, file_open,
-    gpu_canvas, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices, palette, panels,
-    prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui, text_field_menu, theme,
-    tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds,
-    wide_angle_ui, work_area, workspace_ui,
+    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, gpu_canvas,
+    gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices, palette, panels, prefs_ui,
+    preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui, text_field_menu, theme, tiff_options_ui,
+    timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds, wide_angle_ui, work_area,
+    workspace_ui,
 };
 
 impl PhotocraftApp {
@@ -21,6 +21,16 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
+    /// background (#210) have tabs before they have documents, so they win over Home. The frame
+    /// draws no tool strip, options bar, status bar or docks under Home, and the canvas area
+    /// draws Home itself; both ask here so they cannot disagree.
+    pub(crate) fn home_screen_up(&mut self) -> bool {
+        let opening = !self.jobs.opens.is_empty();
+        let n = self.session.documents().len();
+        !opening && self.ui.chrome.shows_home(n, self.session.prefs().general.auto_show_home_screen)
+    }
+
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
@@ -48,6 +58,7 @@ impl PhotocraftApp {
         if self.session.tools.grey_for_mask() {
             ctx.request_repaint();
         }
+        crate::memory_warning::tick(self, now);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         // The window's device is gone: nothing more may run that draws or prompts (the window is
@@ -110,9 +121,7 @@ impl PhotocraftApp {
             }
         }
         // Web drops onto the canvas, read since the last frame: placed below, one at a time.
-        let to_place: Vec<(String, Vec<u8>)> =
-            self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(to_place.into_iter().map(|(name, bytes)| file_open::DropPlace::Bytes(name, bytes)));
+        self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
@@ -328,20 +337,22 @@ impl PhotocraftApp {
             panels::title_bar(self, ui);
             self.perf.span("ui: title bar", gpu_canvas::now_ms() - t);
         }
-        if (chrome && self.ui.panels.options_bar) || tabbed_in {
+        // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
+        let home = self.home_screen_up();
+        if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
             let t = gpu_canvas::now_ms();
             panels::options_bar(self, ui);
             self.perf.span("ui: options bar", gpu_canvas::now_ms() - t);
         }
-        if (chrome && self.ui.panels.toolbar) || tabbed_in {
+        if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             let t = gpu_canvas::now_ms();
             panels::toolbar(self, ui);
             self.perf.span("ui: toolbar", gpu_canvas::now_ms() - t);
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
         // A Tools panel docked at the end side (before the dock's layout takes the rest).
-        if (chrome && self.ui.panels.toolbar) || tabbed_in {
+        if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             panels::toolbar_end(self, ui);
         }
         if docking {
@@ -354,7 +365,7 @@ impl PhotocraftApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
                 // Photoshop's status bar belongs to the document window: it spans the canvas, and the
                 // Tools panel and the docks reach the bottom of the window beside it.
-                if chrome && self.ui.panels.status_bar {
+                if chrome && self.ui.panels.status_bar && !home {
                     let t = gpu_canvas::now_ms();
                     panels::status_bar(self, ui);
                     self.perf.span("ui: status bar", gpu_canvas::now_ms() - t);
@@ -363,17 +374,22 @@ impl PhotocraftApp {
                 canvas::document_area(self, ui);
                 self.perf.span("ui: document", gpu_canvas::now_ms() - t);
             });
-            panels::properties_window(self, &ctx);
+            if !home {
+                panels::properties_window(self, &ctx);
+            }
         }
-        brush_panel::window(self, &ctx);
-        let t = gpu_canvas::now_ms();
-        preset_panels::windows(self, &ctx);
-        self.perf.span("ui: floating panels", gpu_canvas::now_ms() - t);
-        gradient_ui::editor_window(self, &ctx);
-        type_panels_ui::windows(self, &ctx);
-        analysis_ui::windows(self, &ctx);
-        timeline_ui::windows(self, &ctx);
-        workspace_ui::windows(self, &ctx);
+        // The floating editor windows belong to the editor: Home covers them (dialogs and notices
+        // below stay).
+        if !home {
+            brush_panel::window(self, &ctx);
+            preset_panels::windows(self, &ctx);
+            gradient_ui::editor_window(self, &ctx);
+            type_panels_ui::windows(self, &ctx);
+            analysis_ui::windows(self, &ctx);
+            timeline_ui::windows(self, &ctx);
+            workspace_ui::windows(self, &ctx);
+        }
+
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         layers_panel_ui::show_dialog(self, &ctx);

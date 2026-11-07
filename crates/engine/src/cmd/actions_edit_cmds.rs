@@ -1,6 +1,7 @@
 //! Editing an action's steps and its set, as the Actions panel does beyond recording:
 //! `actions.insert` (Photoshop's Insert Stop… and Insert Menu Item…), `actions.dialog` (the
-//! panel's dialog toggle column) and `actions.assignSet` (which set folder an action sits in).
+//! panel's dialog toggle column), `actions.assignSet` (which set folder an action sits in) and
+//! `actions.newSet` (New Set…, an empty set folder).
 //!
 //! All three refuse to run during playback, commit pending recorded steps first, and keep the
 //! per-step flag sets (`disabled`, `dialogs`) in step with the moved indices, like
@@ -73,6 +74,10 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     let action = &mut s.actions.list[idx];
     action.steps.insert(at, (id.clone(), params));
     action.remap_steps(|i| Some(if i >= at { i + 1 } else { i }));
+    // An inserted Stop has its dialog toggle on, so it shows its message in the app.
+    if id == crate::atn_cmds::STOP_MESSAGE {
+        action.dialogs.insert(at);
+    }
     let result = json!({"action": action.name, "step": at, "id": id, "steps": action.steps.len()});
     s.actions.touch();
     Ok(result)
@@ -193,6 +198,13 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
     Ok(result)
+}
+
+/// Every set name, in the Actions panel's order: the sets of the actions as they first appear,
+/// then the empty ones New Set made.
+pub fn set_names(s: &Session) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    s.actions.sets().into_iter().filter(|set| seen.insert(set.clone())).collect()
 }
 
 /// The conditions of Photoshop's Insert Conditional, by their string ids.
@@ -319,7 +331,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Insert Step",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "id":command id, "params":{}?, "at":index?=end} → {action, step, id, steps}. Inserts a step at the 0-based position (Photoshop's Insert Stop… with id actions.stopMessage, Insert Menu Item… with any command). Pending recorded steps count; flags of the steps after it follow them."##,
+            params: r##"{"action":name|index, "id":command id, "params":{}?, "at":index?=end} → {action, step, id, steps}. Inserts a step at the 0-based position (the reference application's Insert Stop… with id actions.stopMessage, its dialog toggle on; Insert Menu Item… with any command). Pending recorded steps count; flags of the steps after it follow them."##,
             enabled: always,
             run: insert,
             journal: false,
@@ -470,7 +482,7 @@ mod tests {
         let a = &s.actions.list[0];
         assert_eq!(a.steps[1], ("actions.stopMessage".to_string(), json!({"message": "Check", "allowContinue": true})));
         assert_eq!(a.disabled.iter().copied().collect::<Vec<_>>(), [2], "the switched-off step moved down one");
-        assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [3]);
+        assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [1, 3], "the inserted Stop's dialog is on; the old toggle moved down one");
         // Default position: the end. A bare id works for a parameterless command.
         let r = s.execute("actions.insert", json!({"action": 0, "id": "layer.new.layer"})).unwrap();
         assert_eq!(r["step"], 4);
@@ -568,6 +580,29 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    #[test]
+    fn new_set_makes_an_empty_folder_that_new_actions_record_into() {
+        let mut s = session_with(&["select.all"]);
+        s.execute("actions.assignSet", json!({"action": "A", "set": "Set 1"})).unwrap();
+        // Numbered past the sets the actions already have.
+        assert_eq!(s.execute("actions.newSet", json!({})).unwrap()["set"], "Set 2");
+        assert_eq!(s.execute("actions.newSet", json!({"name": " Retouch "})).unwrap()["set"], "Retouch");
+        assert_eq!(set_names(&s), ["Set 1", "Set 2", "Retouch"]);
+        // CodeRabbit on batch 11: Actions List names the empty sets too, so an agent can find them.
+        assert_eq!(s.execute("actions.list", json!({})).unwrap()["sets"], json!(["Set 1", "Set 2", "Retouch"]));
+        assert!(s.execute("actions.newSet", json!({"name": "Set 1"})).is_err(), "a set an action is in");
+        assert!(s.execute("actions.newSet", json!({"name": "Retouch"})).is_err(), "an empty set");
+        assert!(s.execute("actions.newSet", json!({"name": " "})).is_err());
+        // New Action into the empty set.
+        let r = s.execute("actions.record", json!({"set": "Retouch"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        let i = r["index"].as_u64().unwrap() as usize;
+        assert_eq!(s.actions.list[i].set.as_deref(), Some("Retouch"));
+        // This branch lists New Set's folders first, in the order they were made.
+        assert_eq!(set_names(&s), ["Set 1", "Set 2", "Retouch"], "Retouch now holds an action");
+        assert!(s.execute("actions.record", json!({"set": 3})).is_err());
     }
 
     #[test]

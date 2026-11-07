@@ -10,7 +10,7 @@
 //! ```
 //!
 //! The file opens as in the desktop app: the GPU compositor warming up at start
-//! (`PhotocraftApp::warm_up_gpu`) and the file a few seconds later. `--cold` opens it at once
+//! (`PhotocraftApp::start_compositor`) and the file a few seconds later. `--cold` opens it at once
 //! without the warm-up; `--warm-only` skips the pause, `--sleep-only` the warm-up (an idle laptop
 //! GPU clocks down: the first composite after the pause takes ~0.8 s instead of ~0.3 s).
 
@@ -143,7 +143,7 @@ fn main() {
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             app.set_wgpu(rs.clone());
             if !cold {
-                app.warm_up_gpu();
+                app.start_compositor(&cc.egui_ctx);
             }
         }
         app

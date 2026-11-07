@@ -260,7 +260,7 @@ impl LibraryStore {
         let items = || st.libraries.iter().flat_map(|l| l.items.iter());
         for item in items() {
             let Some(doc) = item.payload.as_ref().filter(|_| !self.written.contains(&item.id) && !self.failed.contains(&item.id)) else { continue };
-            let opts = photocraft_format::SaveOptions { thumbnail: item.thumb.as_deref().cloned(), composite: None };
+            let opts = photocraft_format::SaveOptions { thumbnail: item.thumb.as_deref().cloned(), composite: None, ..Default::default() };
             let written = photocraft_format::save_to_bytes(doc, &opts).map_err(|e| e.to_string()).and_then(|bytes| {
                 if bytes.len() as u64 > MAX_ITEM_BYTES {
                     return Err(format!("larger than {} MB", MAX_ITEM_BYTES >> 20));

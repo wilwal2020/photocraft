@@ -81,6 +81,21 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true, None)
 }
 
+/// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
+/// `starts_group` (upstream's blend mode groups, #5532). This branch's blend lists draw
+/// Photoshop's group breaks themselves ([`blend_breaks`]), so the grouping is left to them.
+pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    _starts_group: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true, None)
+}
+
 /// [`dropdown_wheel_hovered`] whose open list shows every option at once in compact rows, with a
 /// line above each option in `sections`, moving up as far as it must to fit the window (as a
 /// blend mode menu does), instead of a short list that scrolls (Color Lookup's looks, as in

@@ -23,6 +23,8 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.run_steps(3);
         let ctx = h.ctx.clone();
         h.state_mut().set_theme(&ctx, ThemeKind::Pro);
+        // Labels and retained state are under test, not the collapse animation.
+        h.ctx.all_styles_mut(|style| style.animation_time = 0.0);
         h.state_mut().session.prefs.edit(|p| p.interface.language = lang.code().into());
         h.run_steps(4);
         let tr = |s| i18n::tr_ctx(lang, "cameraRaw", s);

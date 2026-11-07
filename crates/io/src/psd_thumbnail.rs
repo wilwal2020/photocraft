@@ -20,12 +20,17 @@ pub const MAX_SIDE: u32 = 160;
 /// Size of the header in front of the JFIF data.
 pub const HEADER_LEN: usize = 28;
 
-/// The 1036 resource for `doc`: its composite reduced to at most [`MAX_SIDE`], converted to
-/// sRGB through the document's profile, matted over white and JPEG-compressed. `reduced` is the
-/// composite already reduced to that size, when the save made it on the way
+/// The 1036 resource for `doc`: its composite reduced to at most [`MAX_SIDE`] with its spot inks
+/// printed over it, converted to sRGB through the document's profile, matted over white and
+/// JPEG-compressed. `reduced` is the composite already reduced to that size, when the save made
+/// it on the way
 /// ([`photocraft_compose::thumbnail_reducer`] fed the merged image's bands).
 pub(crate) fn resource(doc: &Document, reduced: Option<photocraft_compose::Buffer>) -> Result<ImageResource, IoError> {
-    let (w, h, rgb) = srgb_of(doc, reduced.unwrap_or_else(|| photocraft_compose::thumbnail_buffer(doc, MAX_SIDE)), MAX_SIDE)?;
+    let (w, h, rgb) = srgb_of(
+        doc,
+        photocraft_compose::multichannel::inks_over(doc, reduced.unwrap_or_else(|| photocraft_compose::thumbnail_buffer(doc, MAX_SIDE))),
+        MAX_SIDE,
+    )?;
     let img = Image::from_raw(w, h, ChannelLayout::Rgb, CSample::U8, rgb)?;
     let opts = EncodeOptions { jpeg_quality: 80, embed_icc: false, embed_metadata: false, ..EncodeOptions::default() };
     let jfif = photocraft_codecs::encode(&img, Format::Jpeg, &opts)?;
@@ -95,7 +100,7 @@ fn thumbnail_bytes(w: u32, h: u32, jfif: &[u8]) -> Result<Vec<u8>, IoError> {
 /// The profile of the compositor's RGB output for `doc`: an RGB document's own (embedded when it
 /// parses, else sRGB), a gray document's gray profile seen as RGB, and sRGB for CMYK and Lab
 /// (which the compositor renders in sRGB).
-fn composite_profile(doc: &Document) -> Profile {
+pub(crate) fn composite_profile(doc: &Document) -> Profile {
     let space = match doc.mode {
         ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => ColorSpace::Gray,
         ColorMode::Cmyk | ColorMode::Lab => return Builtin::Srgb.profile().clone(),

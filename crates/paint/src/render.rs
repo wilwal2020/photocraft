@@ -216,7 +216,7 @@ impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
         let mips = |t: &TipShape| match t.bitmap() {
-            Some(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
+            Some(g) if g.is_valid() => Some(crate::mip_cache::tip_mips(g)),
             _ => None,
         };
         Self {
@@ -1475,10 +1475,10 @@ impl StrokeRenderer {
             // One row of a coverage tile: at most 64 pixels of at most 8 channels.
             let mut row = [0.0f32; (COV_TILE as usize) * 8];
             let row = row.get_mut(..span)?;
-            let bytes = dst.bytes_mut();
+            let mut bytes = dst.bytes_mut();
             for y in tr.y0..tr.y1 {
                 let start = (((y - tc.ty * tile_edge) * tile_edge + (tr.x0 - tc.tx * tile_edge)) as usize) * n;
-                match pre_tile {
+                match pre_tile.as_deref() {
                     Some(p) if p.len() >= (start + span) * sample.bytes() => photocraft_color::read_samples(p, sample, start, row),
                     Some(_) => continue,
                     None => {
@@ -1974,3 +1974,7 @@ fn within(v0: f32, dv: f32, lo: f32, hi: f32) -> Option<(f32, f32)> {
 
 #[cfg(test)]
 mod reference;
+
+#[cfg(test)]
+#[path = "mip_cache_render_tests.rs"]
+mod mip_cache_tests;

@@ -34,6 +34,12 @@ fn cache() -> &'static Mutex<Cache> {
     C.get_or_init(|| Mutex::new(Cache { entries: HashMap::new(), sweep_at: MIN_SWEEP }))
 }
 
+pub(crate) fn purge() {
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.entries.clear();
+    cache.sweep_at = MIN_SWEEP;
+}
+
 /// `Surface::content_bounds`, cached per tile.
 pub fn content_bounds(s: &Surface) -> Rect {
     if s.tile_count() == 0 {
@@ -54,8 +60,11 @@ pub fn content_bounds(s: &Surface) -> Rect {
         let b = match hit {
             Some(b) => b,
             None => {
+                let generation = photocraft_raster::spill::read_error_generation();
                 let b = t.content_bounds(&dp);
-                c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                if photocraft_raster::spill::check_since(generation).is_ok() && t.scratch_health().is_ok() {
+                    c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                }
                 b
             }
         };
@@ -96,9 +105,10 @@ fn part_bounds(t: &Tile, part: (u16, u16, u16, u16), dp: &[u8]) -> Option<(u16, 
     let (px0, py0, px1, py1) = (usize::from(part.0), usize::from(part.1), usize::from(part.2), usize::from(part.3));
     let blank = dp.repeat(px1.saturating_sub(px0));
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    let bytes = t.bytes();
     for y in py0..py1 {
         let start = (y * ts + px0) * bpp;
-        let Some(row) = t.bytes().get(start..start + blank.len()) else { break };
+        let Some(row) = bytes.get(start..start + blank.len()) else { break };
         if row == blank.as_slice() {
             continue;
         }

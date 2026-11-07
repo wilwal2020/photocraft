@@ -172,7 +172,7 @@ pub fn visible_plane(doc: &Document, id: LayerId, source: Source) -> Option<Vec<
     let k = full_change(doc);
     // The two renders side by side: each leaves cores idle while its effect maps are built and
     // in its last band of tiles.
-    let render = |d: &Document| photocraft_compose::render(d, area).px;
+    let render = |d: &Document| photocraft_compose::render(d, area).into_px();
     let (w, b) = rayon::join(|| render(&white), || render(&black));
     // How far the tone moved, row by row on all cores (one pass over both renders was a fifth of
     // the time on 2936 × 3000).

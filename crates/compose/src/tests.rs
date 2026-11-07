@@ -2143,6 +2143,21 @@ fn shapeless_effects_render_the_same_in_bands_and_parts() {
     }
 }
 
+/// The interruptible composite renders band by band: with shapeless effects (whose maps are built
+/// per band) it still gives the whole-document composite.
+#[test]
+fn interruptible_composite_with_shapeless_effects_matches_the_whole_composite() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let d = shapeless_fx_doc(depth);
+        let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+        purge_effect_cache();
+        let expected = composite_to_surface(&d, d.bounds(), fmt, None);
+        purge_effect_cache();
+        let actual = composite_to_surface_with_interrupt(&d, d.bounds(), fmt, None, &photocraft_raster::Interrupt::NONE).unwrap();
+        assert!(actual.read_region(d.bounds()) == expected.read_region(d.bounds()), "{depth:?}: the interruptible composite differs");
+    }
+}
+
 #[test]
 fn shapeless_effect_maps_cover_only_the_band_being_rendered() {
     // Transparency Shapes Layer off makes an effect region the whole canvas: on a 1920 × 103675
@@ -3001,7 +3016,7 @@ fn levels_steps_match_photoshop() {
         let px = xs.iter().map(|&x| f32::from(x) / 255.0).map(|v| [v, v, v, 1.0]).collect();
         let mut b = Buffer { rect: Rect::new(0, 0, xs.len() as i32, 1), px };
         adjust::apply_depth(adj, &mut b, adjust::Transfer::Srgb, Some(SampleType::U8));
-        b.px
+        b.into_px()
     };
     let rgb = levels(ch(0.0, 213.0, 1.22, 48.0, 255.0), [ch(0.0, 255.0, 0.47, 0.0, 194.0), id.clone(), ch(61.0, 255.0, 0.47, 0.0, 213.0)]);
     let xs = [2, 8, 9, 15, 16, 43, 45, 48, 55, 61, 72, 79, 84, 89, 90, 101, 106, 120, 150, 180, 200];
@@ -3377,7 +3392,7 @@ fn render_bands_cover_the_rect_in_order() {
     render_bands(&d, r, 100, |b| -> Result<(), ()> {
         assert_eq!((b.rect.x0, b.rect.x1), (r.x0, r.x1));
         rows.push((b.rect.y0, b.rect.y1));
-        px.extend(b.px);
+        px.extend(b.into_px());
         Ok(())
     })
     .unwrap();
@@ -4535,13 +4550,13 @@ fn dissolve_adjustment_resolves_opacity_to_binary_coverage() {
     layer.blend = BlendMode::Dissolve;
     layer.opacity = 0.5;
     d.layers.push(layer);
-    let pixels = render(&d, d.bounds()).px;
+    let pixels = render(&d, d.bounds()).into_px();
     let black = pixels.iter().filter(|p| p[0] < 0.01).count();
     let white = pixels.iter().filter(|p| p[0] > 0.99).count();
     assert!(black > 0 && white > 0, "Dissolve must select both original and adjusted pixels");
     assert_eq!(black + white, pixels.len(), "no intermediate gray pixels");
     d.layers.last_mut().unwrap().blend = BlendMode::Normal;
-    let continuous = render(&d, d.bounds()).px;
+    let continuous = render(&d, d.bounds()).into_px();
     assert!(continuous.iter().all(|p| (p[0] - 0.5).abs() < E), "Normal remains continuously interpolated");
 }
 
@@ -4552,14 +4567,14 @@ fn clipped_dissolve_fill_matches_opaque_unclipped_coverage() {
     fill.blend = BlendMode::Dissolve;
     fill.opacity = 0.5;
     d.layers.push(fill);
-    let control = render(&d, d.bounds()).px;
+    let control = render(&d, d.bounds()).into_px();
     d.layers.last_mut().unwrap().clipped = true;
-    let clipped = render(&d, d.bounds()).px;
+    let clipped = render(&d, d.bounds()).into_px();
     assert_eq!(clipped, control, "clipping over a fully opaque base must preserve dissolve pixels");
     let black = clipped.iter().filter(|p| p[0] < 0.01).count();
     assert!(black > 0 && black < clipped.len());
     d.layers.last_mut().unwrap().blend = BlendMode::Normal;
-    let continuous = render(&d, d.bounds()).px;
+    let continuous = render(&d, d.bounds()).into_px();
     assert!(continuous.iter().all(|p| (p[0] - 0.5).abs() < E));
 }
 
@@ -4570,17 +4585,17 @@ fn dissolve_color_overlay_preserves_binary_layer_coverage() {
     layer.blend = BlendMode::Dissolve;
     layer.opacity = 0.5;
     d.layers.push(layer);
-    let control = render(&d, d.bounds()).px;
+    let control = render(&d, d.bounds()).into_px();
     d.layers
         .last_mut()
         .unwrap()
         .effects
         .items
         .push(photocraft_doc::Effect::ColorOverlay { common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0), color: Color::BLACK });
-    let styled = render(&d, d.bounds()).px;
+    let styled = render(&d, d.bounds()).into_px();
     assert_eq!(styled, control, "an identity overlay should not turn dissolve pixels gray");
     d.layers.last_mut().unwrap().blend = BlendMode::Normal;
-    let continuous = render(&d, d.bounds()).px;
+    let continuous = render(&d, d.bounds()).into_px();
     assert!(continuous.iter().all(|p| (p[0] - 0.5).abs() < E));
 }
 
@@ -4701,7 +4716,7 @@ fn a_fill_rendered_in_bands_matches_one_rendering() {
     let mut rects = Vec::new();
     render_fill_content_bands(&l, &f, canvas, 16, &[], |b| {
         rects.push(b.rect);
-        px.extend(b.px);
+        px.extend(b.into_px());
     });
     assert_eq!(rects, [0, 16, 32, 48].map(|y| Rect::new(0, y, 70, (y + 16).min(53))));
     assert_eq!(px, whole.px);

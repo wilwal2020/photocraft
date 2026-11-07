@@ -157,6 +157,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         mask,
         vector_mask,
         second_mask,
+        frame,
         effects,
         label: _,
         content,
@@ -180,6 +181,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         && *vector_mask == b.vector_mask
         // The second mask has no tile damage of its own here: any change to it redraws the layer.
         && masks_cmp(second_mask, &b.second_mask, &mut |x, y, _| surfaces_equal(x, y))
+        && *frame == b.frame
         && *effects == b.effects
         && *excluded_channels == b.excluded_channels
         && *blend_if == b.blend_if

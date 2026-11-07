@@ -134,7 +134,7 @@ fn main() {
             let mut app = PhotocraftApp::new(session, Services::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
-                app.warm_up_gpu();
+                app.start_compositor(&cc.egui_ctx);
             }
             app
         });
@@ -179,7 +179,7 @@ fn action(args: &[String]) {
             let mut app = PhotocraftApp::new(session, Services::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
-                app.warm_up_gpu();
+                app.start_compositor(&cc.egui_ctx);
             }
             app
         });

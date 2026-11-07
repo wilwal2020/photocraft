@@ -13,6 +13,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
     for theme in crate::theme::ThemeKind::ALL {
         for mode in [0, 2] {
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
             app.ui.tool = crate::Tool::Brush;
             app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
             app.ui.panels.brush_settings = mode != 2;
@@ -70,6 +71,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
 #[test]
 fn dragging_a_brush_to_the_list_edge_scrolls_the_list() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
     // The Brushes panel alone: in a short window the floating Brush Settings would cover it.
     app.ui.panels.brush_settings = false;
     app.ui.panels.brushes = true;

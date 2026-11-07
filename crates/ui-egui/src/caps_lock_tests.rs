@@ -7,6 +7,8 @@
 //! cursor of their own (the pens, Eyedropper, Color Sampler, Paint Bucket) swap it for the
 //! crosshair and back with caps lock (#4639).
 
+use std::sync::Arc;
+
 use egui::CursorIcon;
 use egui_kittest::Harness;
 use serde_json::json;
@@ -45,20 +47,31 @@ fn capslock_harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[derive(Debug, PartialEq)]
+struct CursorImageFp {
+    size: [u16; 2],
+    hotspot: [u16; 2],
+    rgba: Arc<[u8]>,
+}
+
 /// Everything the cursor path can change in one frame: the cursor icon, the OS cursor bitmap
-/// (Windows) and the shapes painted on the canvas (the tool-cursor path paints the crosshair
+/// (Windows/macOS/Linux) and the shapes painted on the canvas (the tool-cursor path paints the crosshair
 /// and the brush tip outline). Comparison across two preference/caps-lock states of the same
 /// harness is platform-independent.
 #[derive(Debug, PartialEq)]
 struct CursorFp {
     icon: CursorIcon,
-    image: Option<[u16; 2]>,
+    image: Option<CursorImageFp>,
     shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
     let out = h.output();
-    CursorFp { icon: out.platform_output.cursor_icon, image: out.platform_output.cursor_image.as_ref().map(|i| i.size), shapes: out.shapes.clone() }
+    CursorFp {
+        icon: out.platform_output.cursor_icon,
+        image: out.platform_output.cursor_image.as_ref().map(|i| CursorImageFp { size: i.size, hotspot: i.hotspot, rgba: Arc::clone(&i.rgba) }),
+        shapes: out.shapes.clone(),
+    }
 }
 
 fn painting(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
@@ -146,6 +159,10 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         other(&mut h, "precise");
         let precise = fp(&h);
         assert_ne!(standard, precise, "{tool:?}: Standard and Precise differ");
+        assert_eq!(precise.icon, CursorIcon::Crosshair, "{tool:?}: Precise cursor is crosshair");
+        assert!(precise.image.is_some(), "{tool:?}: Precise cursor uses the native crosshair bitmap");
+        assert_ne!(precise.image, standard.image, "{tool:?}: Precise bitmap differs from the standard tool icon");
+
         caps(&mut h, true);
         assert_eq!(fp(&h), standard, "{tool:?}: caps lock turns the precise crosshair back into the icon");
         other(&mut h, "standard");

@@ -298,6 +298,13 @@ fn adjustment_layer(d: &Descriptor) -> Option<Mapped> {
         Some(D::Descriptor(t)) => (trimmed(&t.class_id), Some(t)),
         _ => return None,
     };
+    // Layer properties (name, opacity, mode, label colour, clipping) on an ordinary adjustment:
+    // 0.21's importer (`steps_make`) makes one step that carries them. This one keeps the forms it
+    // alone reads: a Color Lookup (0.21 has no class for it), Curves loaded from a file.
+    let own_form = class == "colorLookup" || (class == "Crvs" && settings.is_some_and(|t| t.get("Usng").is_some()));
+    if !own_form && ["Nm  ", "Opct", "Md  ", "Clr ", "Grup"].iter().any(|k| using.get(k).is_some()) {
+        return None;
+    }
     let mut v: Vec<(String, Value)> = Vec::new();
     if class == "colorLookup" {
         let params = match settings {

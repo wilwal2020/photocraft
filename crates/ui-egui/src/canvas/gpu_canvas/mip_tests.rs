@@ -66,6 +66,38 @@ fn canvas_mips_preserve_opaque_pixels_and_partial_updates() {
     }
     // On the same device (see the top of the file).
     canvas_textures_the_gpu_refuses_leave_it_working(&gpu);
+    background_compositor_switch_preserves_pixels(&gpu);
+    refused_viewport_page_work_is_caught(&gpu);
+}
+
+/// #5332 review: viewport page uploads run their texture, buffer and bind group creation and
+/// their write inside the same error scopes as a texture set, so an error the GPU raises there
+/// (out of memory, in use) is returned instead of disabling the GPU for the session. A texture
+/// wider than the device allows is refused the same way, synchronously, on any adapter.
+fn refused_viewport_page_work_is_caught(gpu: &GpuCanvas) {
+    let device = &gpu.rs.device;
+    let max = device.limits().max_texture_dimension_2d;
+    let (texture, error) = super::doc_textures::catch_gpu_errors(device, || {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("too_wide_page"),
+            size: wgpu::Extent3d { width: max + 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    });
+    drop(texture);
+    assert!(error.is_some(), "the refusal is caught");
+    assert!(gpu.health.is_ok(), "{:?}", gpu.fault());
+    // A page the GPU accepts is stored as before.
+    let buf = Buffer::filled(Rect::from_xywh(0, 0, 64, 64), [0.5, 0.5, 0.5, 1.0]);
+    let core = Rect::new(1, 1, 63, 63);
+    assert!(gpu.upload_page(PageUpload { key: 9, page: 1, size: [64, 64], depth: SampleType::U8, factor: 1, core, buf: &buf }));
+    assert_eq!(gpu.pages(9).0, vec![1]);
+    assert!(gpu.health.is_ok(), "{:?}", gpu.fault());
 }
 
 /// #4017: a 3 GP canvas's 16 GB of textures failed with Out of Memory, and the uncaptured error
@@ -128,112 +160,6 @@ fn check_mips(gpu: &GpuCanvas) {
     }
 }
 
-/// The compositor built on a thread at start ([`GpuCanvas::warm_up`]) is the one the first
-/// composite takes once it is done; until then the CPU draws instead of the UI waiting (user
-/// report: the first new document froze for 15 s while D3D12 compiled the shaders). A canvas
-/// dropped while one builds waits for it.
-#[test]
-fn the_warmed_up_compositor_composites_the_first_document() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default())));
-    let Ok(rs) = rs else {
-        eprintln!("skipping warm-up: no GPU adapter");
-        return;
-    };
-    let gpu = GpuCanvas::new(&rs);
-    // A build that is still running (held back until the first refresh has been drawn).
-    let (go, wait) = std::sync::mpsc::channel::<()>();
-    {
-        let mut r = gpu.rs.renderer.write();
-        let res = r.callback_resources.get_mut::<Resources>().unwrap();
-        let (device, format) = (gpu.rs.device.clone(), photocraft_gpu::Compositor::preferred_acc_format(&gpu.rs.adapter));
-        res.compositor_warmup = Some(std::thread::spawn(move || {
-            let _ = wait.recv();
-            photocraft_gpu::Compositor::try_new_with_format(&device, format)
-        }));
-    }
-    gpu.warm_up();
-    let building = |gpu: &GpuCanvas| gpu.rs.renderer.read().callback_resources.get::<Resources>().is_some_and(|r| r.compositor_warmup.is_some());
-    assert!(building(&gpu), "building on a thread");
-    let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", serde_json::json!({"width": 64, "height": 64, "background": "white"})).unwrap();
-    let doc = s.active().unwrap().doc.clone();
-    let r = gpu.refresh(doc.id.0, &doc, None, None);
-    assert!(!r.kind.starts_with("gpu"), "drawn on the CPU, not waited for: {r:?}");
-    assert_eq!(r.fallback.map(|f| f.to_string()).as_deref(), Some(COMPOSITOR_BUILDING));
-    assert!(building(&gpu), "still building");
-    go.send(()).unwrap();
-    while gpu.rs.renderer.read().callback_resources.get::<Resources>().and_then(|r| r.compositor_warmup.as_ref()).is_some_and(|h| !h.is_finished()) {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let r = gpu.refresh(doc.id.0, &doc, None, None);
-    assert_eq!(r.kind, "gpu-full", "{r:?}");
-    assert!(!building(&gpu), "taken by the first composite");
-    // Asked again with a compositor in place: nothing to build.
-    gpu.warm_up();
-    assert!(!building(&gpu));
-    drop(gpu);
-    drop(rs);
-    // Dropped while building: the drop waits for it (no thread left in the driver).
-    let rs = egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default());
-    let gpu = GpuCanvas::new(&rs);
-    gpu.warm_up();
-    drop(gpu);
-    drop(rs);
-}
-
-/// A document opened while the compositor is still being built is drawn on the CPU; once the
-/// build is done it goes to the GPU by itself, with no edit (user report: the status bar said
-/// "CPU rendering" with GPU rendering on, and the first stroke paid for the switch).
-#[test]
-fn a_document_opened_during_the_build_goes_to_the_gpu_when_it_is_built() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let (go, wait) = std::sync::mpsc::channel::<()>();
-    let wait = std::sync::Mutex::new(Some(wait));
-    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).with_pixels_per_point(1.0).wgpu_setup(wgpu_setup()).build_eframe(move |cc| {
-            crate::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-            if let Some(rs) = cc.wgpu_render_state.as_ref() {
-                app.set_wgpu(rs.clone());
-                // A build held back until the test lets it finish.
-                let mut r = rs.renderer.write();
-                if let Some(res) = r.callback_resources.get_mut::<Resources>() {
-                    let (device, format) = (rs.device.clone(), photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter));
-                    let wait = wait.lock().unwrap().take().unwrap();
-                    res.compositor_warmup = Some(std::thread::spawn(move || {
-                        let _ = wait.recv();
-                        photocraft_gpu::Compositor::try_new_with_format(&device, format)
-                    }));
-                }
-            }
-            app
-        })
-    }));
-    let Ok(mut h) = built else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    if h.state().gpu.is_none() {
-        eprintln!("skipping: no GPU canvas");
-        return;
-    }
-    h.state_mut().run("file.new", serde_json::json!({"width": 300, "height": 200, "background": "white"})).unwrap();
-    let doc = h.state().session.active().unwrap().doc.id.0;
-    h.run_steps(4);
-    let reason = |h: &egui_kittest::Harness<'_, crate::PhotocraftApp>| h.state().render_path.current(doc).map(ToString::to_string);
-    assert_eq!(reason(&h).as_deref(), Some(COMPOSITOR_BUILDING), "drawn on the CPU while the compositor is built");
-    go.send(()).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while reason(&h).is_some() {
-        assert!(std::time::Instant::now() < deadline, "still on the CPU: {:?}", reason(&h));
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    // No edit was made: the same revision is now on the GPU.
-    assert!(h.state().gpu_active());
-}
-
 /// #6418: on AMD's Vulkan driver, a pass that drew only part of a small mip level corrupted texels
 /// outside its scissor, at the level's top-left (RX 6900 XT, driver 26.8.1). Whether a texture is
 /// hit depends on where the driver placed it, so this paints dabs on canvases of several sizes at
@@ -274,6 +200,39 @@ fn partial_updates_match_a_full_rebuild_at_every_mip_level() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// A CPU-created texture stays valid when a newly built compositor updates only a damage rect.
+fn background_compositor_switch_preserves_pixels(gpu: &GpuCanvas) {
+    use photocraft_doc::{ColorMode, Document, Layer, LayerContent};
+    let mut doc = Document::new("background build", photocraft_geom::Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+    let mut layer = Layer::raster("pixels", doc.pixel_format());
+    if let LayerContent::Raster(surface) = &mut layer.content {
+        surface.fill_rect(Rect::new(0, 0, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
+    }
+    doc.layers.push(layer);
+    let key = doc.id.0;
+    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Building;
+    let first = gpu.refresh(key, &doc, None, None);
+    assert_eq!(first.kind, "full");
+    assert_eq!(first.fallback, Some(CpuReason::CompositorBuilding));
+    assert!(gpu.compositor_failed().is_none());
+    let built = photocraft_gpu::Compositor::try_new_with_format(&gpu.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&gpu.rs.adapter));
+    let Ok(comp) = built else { return };
+    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Ready(Box::new(comp));
+    let damage = Rect::new(8, 8, 16, 16);
+    if let LayerContent::Raster(surface) = &mut doc.layers[0].content {
+        surface.fill_rect(damage, &[0.8, 0.2, 0.1, 1.0]);
+    }
+    let second = gpu.refresh(key, &doc, Some(damage), None);
+    assert_eq!(second.kind, "gpu-rect", "{:?}", second.fallback);
+    let actual = read_mips(gpu, key).remove(0);
+    let expected = photocraft_compose::render(&doc, doc.bounds());
+    for (got, want) in actual.iter().zip(expected.px.iter()) {
+        for (g, w) in got.iter().zip(want.iter()) {
+            assert!((g - w).abs() < 0.02, "{got:?} != {want:?}");
         }
     }
 }

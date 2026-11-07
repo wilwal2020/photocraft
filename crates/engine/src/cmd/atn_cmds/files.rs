@@ -1,5 +1,4 @@
-use super::convert::{Imported, import_any};
-use super::convert::{UniqueNames, export};
+use super::convert::{Imported, UniqueNames, export, import_any};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
 fn unique(name: &str, taken: &[String]) -> String {
@@ -9,13 +8,23 @@ fn unique(name: &str, taken: &[String]) -> String {
     (2..).map(|i| format!("{name} {i}")).find(|n| !taken.contains(n)).unwrap_or_else(|| name.to_string())
 }
 
+/// Load a `.atn` set or an Actions palette's sets, and retarget each set's own action references
+/// once, preserving foreign qualifications even when the caller changes the imported set's name
+/// or action names collide.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
     if s.actions.recording.is_some() || s.actions.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
+    let encoding = match p.get("encoding") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(e)) if e == "auto" => None,
+        Some(Value::String(e)) if !e.is_empty() => Some(e.as_str()),
+        Some(_) => return Err(bad(cmd, "encoding must be \"auto\" or a label such as shift_jis, gbk, big5, euc-kr, windows-1252, macintosh")),
+    };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".atn file or Actions palette")?;
-    let mut sets = import_any(&bytes).map_err(|e| bad(cmd, e))?;
+    let mut sets = import_any(&bytes, encoding).map_err(|e| bad(cmd, e))?;
+    let originals: Vec<String> = sets.iter().map(|imp| imp.set.clone()).collect();
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
@@ -40,7 +49,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let palette = sets.len() > 1;
     let mut loaded: Vec<Value> = Vec::with_capacity(sets.len());
     let mut seen: Vec<(String, Vec<Action>)> = Vec::new();
-    for mut imp in sets {
+    for (mut imp, original_set) in sets.into_iter().zip(originals) {
         // Photoshop's panel can hold the same set twice (an installer run four times): an exact
         // copy loads once, a different set of the same name gets a numbered name.
         if seen.iter().any(|(n, a)| *n == imp.set && *a == imp.actions) {
@@ -57,7 +66,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         seen.push((imp.set.clone(), imp.actions.clone()));
-        loaded.push(load_set(s, imp, replace));
+        loaded.push(load_set(s, imp, replace, &original_set));
     }
     s.actions.touch();
     if !palette && let Some(one) = loaded.pop() {
@@ -80,7 +89,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Add one imported set to the Actions panel (replacing the actions of a set of the same name
 /// when `replace`), and report it as `actions.load` does.
-fn load_set(s: &mut Session, mut imp: Imported, replace: bool) -> Value {
+fn load_set(s: &mut Session, mut imp: Imported, replace: bool, original_set: &str) -> Value {
     if replace {
         s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
     }
@@ -100,13 +109,21 @@ fn load_set(s: &mut Session, mut imp: Imported, replace: bool) -> Value {
         names.push(name);
         added.push(a);
     }
-    // Play and Conditional steps call actions by name: follow the renames in the actions just
+    // Play, Conditional and Batch steps call actions by name: follow the renames in the actions just
     // loaded, each target looked up once by the name the file gave it.
     for a in &mut added {
         for (id, params) in &mut a.steps {
+            // A qualified Batch reference belongs to the file's original set, not to a
+            // foreign set which happens to have the destination override's name.
+            if id == "file.automate.batch" && params.get("set").and_then(Value::as_str) == Some(original_set) {
+                params["set"] = json!(imp.set);
+            } else if id == "file.automate.batch" && params.get("set").is_some_and(|set| !set.is_null()) {
+                continue;
+            }
             let keys: &[&str] = match id.as_str() {
                 "actions.play" => &["action"],
                 "actions.conditional" => &["then", "else"],
+                "file.automate.batch" => &["action"],
                 _ => &[],
             };
             for key in keys {
@@ -117,6 +134,11 @@ fn load_set(s: &mut Session, mut imp: Imported, replace: bool) -> Value {
         }
     }
     s.actions.list.extend(added);
+    // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
+    // Set made.
+    if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.prefs.sets.contains(&imp.set) {
+        s.actions.prefs.sets.push(imp.set.clone());
+    }
     let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
@@ -140,6 +162,7 @@ fn load_set(s: &mut Session, mut imp: Imported, replace: bool) -> Value {
         "unsupported": imp.unsupported,
         "functionKeys": keys.iter().map(|(n, k)| json!({"action": n, "key": k})).collect::<Vec<_>>(),
         "warnings": imp.warnings,
+        "encoding": imp.encoding.as_deref().unwrap_or("UTF-8"),
     })
 }
 
@@ -153,6 +176,9 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let set_param = match p.get("set") {
         None | Some(Value::Null) => None,
+        // A set is found by its exact name, as `actions.record` finds it: one loaded from a
+        // Photoshop file or an older actions.json may have surrounding spaces. Others are trimmed.
+        Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
@@ -162,16 +188,17 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
     } else if let Some(set) = set_param {
         let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
-        if list.is_empty() {
+        // An empty set New Set made is written with no actions, as Photoshop saves one.
+        if list.is_empty() && !s.actions.prefs.sets.contains(&set) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
         (set, list)
     } else {
+        if s.actions.list.is_empty() {
+            return Err(bad(cmd, "there are no actions to save"));
+        }
         (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
     };
-    if actions.is_empty() {
-        return Err(bad(cmd, "there are no actions to save"));
-    }
     let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
     let keys: Vec<(String, String)> =
         s.prefs().shortcuts.iter().filter_map(|(k, v)| k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|n| (n.to_string(), v.clone()))).collect();

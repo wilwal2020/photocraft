@@ -24,9 +24,6 @@ pub(super) struct Resources {
     pub(super) separate_mip_targets: bool,
     /// The wgpu layer compositor (created on first use).
     pub(super) compositor: Option<photocraft_gpu::Compositor>,
-    /// The compositor being made on a thread ([`super::GpuCanvas::warm_up`]): the first use takes it.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) compositor_warmup: Option<std::thread::JoinHandle<Result<photocraft_gpu::Compositor, photocraft_gpu::Unsupported>>>,
     /// Why the wgpu compositor couldn't be created (then the CPU compositor is used).
     pub(super) compositor_failed: Option<photocraft_gpu::Unsupported>,
     /// The device's health: the paint callback issues no GPU work once it's lost.
@@ -39,8 +36,10 @@ pub(super) struct Resources {
     pub(super) layer_fit: Option<LayerFit>,
     pub(super) compositor_cache_budget: Option<u64>,
     pub(super) compositor_focus: Option<photocraft_geom::Rect>,
-    /// GPU bytes one document's display texture set may take (see [`canvas_budget`]).
+    /// GPU bytes the documents' display textures may take together (see [`canvas_budget`]).
     pub(super) canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// How that budget is split between the open documents (see [`super::residency`]).
+    pub(super) residency: super::residency::Residency,
     pub(super) encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
     pub(super) lut_bgl: wgpu::BindGroupLayout,
@@ -169,6 +168,9 @@ pub(super) struct Tile {
     pub(super) levels: Vec<wgpu::TextureView>,
     pub(super) bind_group: wgpu::BindGroup,
     pub(super) _uniform: wgpu::Buffer,
+    /// A viewport page ([`GpuCanvas::upload_page`]): its id and reduction factor (document
+    /// pixels per texel); `None` for a tile of a whole-document texture set.
+    pub(super) page: Option<(u64, u32)>,
 }
 
 fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -231,17 +233,6 @@ fn pipeline(
         multiview_mask: None,
         cache: None,
     })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for Resources {
-    /// A compositor still being built ([`super::GpuCanvas::warm_up`]) is waited for: a thread left
-    /// inside the driver's shader compiler as the process exits can crash it.
-    fn drop(&mut self) {
-        if let Some(h) = self.compositor_warmup.take() {
-            let _ = h.join();
-        }
-    }
 }
 
 impl Resources {
@@ -373,8 +364,6 @@ impl Resources {
             out_linear: target.is_srgb(),
             separate_mip_targets: false,
             compositor: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            compositor_warmup: None,
             compositor_failed: None,
             health: photocraft_gpu::DeviceHealth::new(),
             compositor_budget: None,
@@ -382,6 +371,7 @@ impl Resources {
             compositor_cache_budget: None,
             compositor_focus: None,
             canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
+            residency: Default::default(),
             encode_bgl,
             encode_pipeline,
         }

@@ -296,7 +296,7 @@ fn mask_job(app: &PhotocraftApp, proxy: Arc<Document>, k: u32, params: &Value, c
                     own = px;
                     &own
                 }
-                _ => composite.get_or_init(|| photocraft_compose::render(&proxy, area).px),
+                _ => composite.get_or_init(|| photocraft_compose::render(&proxy, area).into_px()),
             };
             let mut mask: Vec<f32> = query
                 .coverage(px, area.width() as usize, k as f32, [0.0, 0.0])

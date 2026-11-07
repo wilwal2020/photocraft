@@ -363,6 +363,9 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         } else if actions_cmds::shell_view_command(id) {
             app.sync_views();
             app.run(id, p.clone())
+        } else if id == "edit.paste" && p.get("as").is_some_and(|v| !v.is_null()) {
+            // Paste as pixels, a path or a shape reads the system clipboard's SVG, as the menu does.
+            app.run(id, p.clone())
         } else {
             app.session.execute(id, p.clone()).map_err(|e| e.to_string())
         };
@@ -2150,6 +2153,45 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+// ------------------------------------------------------------------ upstream hooks
+//
+// Upstream 0.21 rebuilt its Actions panel's playback (step dialogs that continue a paused action,
+// Check Spelling steps, Stop messages); this branch keeps its own panel, whose playback never
+// pauses at those places. The dialogs and panels that call into upstream's panel keep working
+// through these.
+
+/// Run a dialog's command, as a paused action's step dialog would (upstream continues the action
+/// after it; this panel's step dialogs continue through [`resume`]).
+pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, _fields: &serde_json::Map<String, Value>, cmd: &str, params: Value) -> Result<Value, String> {
+    app.run(cmd, params)
+}
+
+/// Check Spelling's Done for an action paused at its step: this panel never pauses there.
+pub(crate) fn resume_spelling(_app: &mut PhotocraftApp, _token: u64) -> Result<Value, String> {
+    Ok(Value::Null)
+}
+
+/// A Check Spelling correction (Change / Change All).
+pub(crate) fn spelling_change(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
+    app.run("edit.checkSpelling", params)
+}
+
+/// The Set and Action dropdowns of the Batch and Create Droplet dialogs, as in the reference
+/// application: each action name once and each set once, in list order. A loaded library can hold
+/// one name in two sets, so the dialog sends the set too and the command picks that set's action.
+pub fn action_form_choices(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
+    let (mut names, mut sets) = (Vec::new(), Vec::new());
+    for action in &app.session.actions.list {
+        if !names.contains(&action.name) {
+            names.push(action.name.clone());
+        }
+        if let Some(set) = action.set.as_ref().filter(|set| !sets.contains(*set)) {
+            sets.push(set.clone());
+        }
+    }
+    (names, sets)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2285,6 +2327,7 @@ pub(crate) mod tests {
         let set = |name: &str, actions: &[&str]| AtnFile {
             name: UnicodeString::new_nul(name),
             expanded: true,
+            encoding: None,
             actions: actions
                 .iter()
                 .map(|a| AtnAction {

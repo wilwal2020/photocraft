@@ -159,6 +159,59 @@ fn swept_pointer_range(ctx: &egui::Context) -> Option<(f32, f32)> {
     Some(((p.y - delta.y).min(p.y), (p.y - delta.y).max(p.y)))
 }
 
+/// A Frame row's second thumbnail (its image) beside the frame outline's: paints both targets'
+/// brackets and handles the click that picks Frame / Image / Both and a double-click that opens
+/// a smart-object image. Returns whether the click was taken.
+#[allow(clippy::too_many_arguments)]
+fn frame_content_thumb(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    (doc, l, rect): (&photocraft_doc::Document, &Layer, Rect),
+    (thumb, x, ts, selected): (Rect, f32, f32, bool),
+    resp: &egui::Response,
+    actions: &mut Vec<(String, Value)>,
+) -> bool {
+    let t = Tokens::get(ctx);
+    let target = crate::frame_tool::target(app, l);
+    if selected && target != crate::frame_tool::Target::Content {
+        crate::mask_thumbs_ui::paint_brackets(painter, thumb, t.text);
+    }
+    let content_thumb = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
+    let child = l.children().and_then(|c| c.first());
+    if let Some(child) = child {
+        draw_layer_thumb(app, ctx, ui, doc, child, content_thumb);
+    } else {
+        icons::paint(ui, content_thumb, "frame-placeholder", ts.min(24.0), t.icon);
+    }
+    if selected && target != crate::frame_tool::Target::Frame {
+        crate::mask_thumbs_ui::paint_brackets(painter, content_thumb, t.text);
+    }
+    let pos = resp.interact_pointer_pos();
+    let on_content = pos.is_some_and(|p| content_thumb.contains(p));
+    let mut clicked = false;
+    if resp.clicked() && !ui.input(|i| i.modifiers.command) && (on_content || pos.is_some_and(|p| thumb.contains(p))) {
+        let target = if ui.input(|i| i.modifiers.shift) {
+            crate::frame_tool::Target::Both
+        } else if on_content {
+            crate::frame_tool::Target::Content
+        } else {
+            crate::frame_tool::Target::Frame
+        };
+        crate::frame_tool::select(app, l.id, target);
+        clicked = true;
+    }
+    if resp.double_clicked()
+        && on_content
+        && let Some(child) = child
+        && matches!(child.content, LayerContent::Smart(_))
+    {
+        actions.push(("layer.smartObjects.editContents".into(), json!({"layer": child.id.0})));
+    }
+    clicked
+}
+
 /// Marker in the clipped row's existing 12-point slot, beside its thumbnail.
 pub(super) fn paint_clipping_indicator(painter: &egui::Painter, at: Pos2, color: Color32) {
     let tip = at + vec2(5.0, 3.0);
@@ -230,6 +283,7 @@ pub(super) fn layer_row(
     row: RowSel,
     actions: &mut Vec<(String, Value)>,
 ) -> Rect {
+    let row = RowSel { selected: row.selected || (l.frame.is_some() && crate::frame_tool::selected(app).is_some_and(|f| f.id == l.id)), ..row };
     let selected = row.selected;
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size sets the row and the layer and mask thumbnails;
@@ -296,15 +350,17 @@ pub(super) fn layer_row(
         paint_clipping_indicator(&painter, pos2(x, rect.center().y), t.text_faint);
         x += 12.0;
     }
-    let thumb = if l.is_group() {
-        // Photoshop's group rows: a small folder glyph instead of a thumbnail.
+    let thumb = if l.is_group() && l.frame.is_none() {
+        // Photoshop's group rows: a small folder glyph instead of a thumbnail (a frame shows its
+        // frame and contents thumbnails).
         let folder = Rect::from_min_size(pos2(x.round(), (rect.center().y - 5.5).round()), vec2(15.0, 11.0));
         crate::layer_row_ui::paint_folder(&painter, folder, t.text_dim);
         x += folder.width() + 12.0;
         folder
     } else if ts > 0.0 {
         let cell = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
-        let thumb = layer_thumb_rect(app, ctx, doc, l, cell, true);
+        // A frame's thumbnail fills its square, with its contents' square beside it.
+        let thumb = if l.frame.is_some() { cell } else { layer_thumb_rect(app, ctx, doc, l, cell, true) };
         draw_layer_thumb(app, ctx, ui, doc, l, thumb);
         // The name follows the thumbnail as drawn, so a narrow one leaves it further left.
         x = thumb.right() + PRO_THUMB_GAP;
@@ -312,6 +368,11 @@ pub(super) fn layer_row(
     } else {
         Rect::from_min_size(pos2(x, rect.center().y), vec2(0.0, 0.0))
     };
+    let mut frame_clicked = false;
+    if l.frame.is_some() && ts > 0.0 {
+        frame_clicked = frame_content_thumb(app, ctx, ui, &painter, (doc, l, rect), (thumb, x, ts, selected), &resp, actions);
+        x += ts + 6.0;
+    }
     // Link chains and pixel / vector mask thumbnails (#153). With thumbnails off the labels and
     // disclosure controls remain interactive.
     let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
@@ -345,6 +406,9 @@ pub(super) fn layer_row(
     let load_at = |m: egui::Modifiers, p: Pos2| {
         if !m.command {
             return None;
+        }
+        if l.frame.is_some() && thumb.contains(p) {
+            return Some(crate::mask_thumbs_ui::load_params(l, crate::mask_thumbs_ui::MaskKind::Vector, m));
         }
         if let Some(kind) = masks.hit(p) {
             return Some(crate::mask_thumbs_ui::load_params(l, kind, m));
@@ -385,7 +449,12 @@ pub(super) fn layer_row(
         actions.push(("select.loadSelection".into(), p));
     } else if let Some(cmd) = mask_toggle {
         actions.push(cmd);
-    } else if tapped && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+    } else if tapped && !frame_clicked && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+        if l.frame.is_some() {
+            app.ui.frame_tool.selected = Some(l.id.0);
+            app.ui.frame_tool.target =
+                if l.children().is_some_and(|c| !c.is_empty()) { crate::frame_tool::Target::Both } else { crate::frame_tool::Target::Frame };
+        }
         select_row_on_click(app, ui, &rc, actions);
     }
     // Double-click: the name renames in place (over the row's full height, not just the glyphs:
@@ -743,6 +812,20 @@ pub(super) fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
+    if let Some(f) = &l.frame {
+        let path = f.path.clone();
+        for line in photocraft_vector::flatten::flatten_path(&path, 0.01) {
+            let mut points: Vec<Pos2> =
+                line.pts.iter().map(|&(x, y)| pos2(rect.left() + x as f32 * rect.width(), rect.top() + y as f32 * rect.height())).collect();
+            if line.closed
+                && let Some(p) = points.first().copied()
+            {
+                points.push(p);
+            }
+            ui.painter().add(egui::Shape::line(points, Stroke::new(1.0, t.icon)));
+        }
+        return;
+    }
     match &l.content {
         LayerContent::Adjustment(adj) => {
             // Photoshop: each adjustment type's own glyph, on the panel itself (no tile).

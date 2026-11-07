@@ -47,7 +47,8 @@ fn invert_sample(bytes: &mut [u8], s: SampleType) {
 /// are filled with `fill[c]` (a native-endian encoded sample). Channels whose
 /// `invert[c]` is set are inverted (PSD stores CMYK as `max - ink`).
 pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> Vec<u8> {
-    let mut out = vec![0u8; n * planes.len() * s.bytes()];
+    // Large results come from (and callers may return them to) the scratch pool.
+    let mut out = photocraft_raster::scratch::take(n * planes.len() * s.bytes(), 0u8);
     interleave_into(planes, fill, n, s, invert, &mut out);
     out
 }
@@ -69,9 +70,7 @@ pub fn try_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: S
             return Err(PsdError::Invalid("interleave fill has the wrong sample size".into()));
         }
     }
-    let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(|_| PsdError::OutOfMemory("not enough memory to interleave PSD pixels"))?;
-    out.resize(len, 0);
+    let mut out = photocraft_raster::scratch::try_take_exact(len, 0u8).ok_or(PsdError::OutOfMemory("not enough memory to interleave PSD pixels"))?;
     interleave_into(planes, fill, n, s, invert, &mut out);
     Ok(out)
 }
@@ -131,7 +130,7 @@ pub fn write_planes(s: &mut photocraft_raster::Surface, r: photocraft_geom::Rect
         for &tc in coords.get(band).unwrap_or_default() {
             let Ok(mut t) = base.try_default_tile() else { continue };
             let tr = tc.rect().intersect(&r);
-            let data = t.bytes_mut();
+            let mut data = t.bytes_mut();
             let span = tr.width() as usize;
             for y in tr.y0..tr.y1 {
                 let at = ((y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
@@ -191,7 +190,9 @@ pub fn write_planes(s: &mut photocraft_raster::Surface, r: photocraft_geom::Rect
             let mut px = data.chunks_exact(bpp);
             let first = px.next().unwrap_or_default();
             let uniform = px.all(|p| p == first);
-            if !uniform || first != dp.as_slice() {
+            let keep = !uniform || first != dp.as_slice();
+            drop(data);
+            if keep {
                 out.push((tc, Arc::new(t), uniform));
             }
         }
@@ -203,8 +204,8 @@ pub fn write_planes(s: &mut photocraft_raster::Surface, r: photocraft_geom::Rect
         if !uniform {
             return (tc, t);
         }
-        let value = t.bytes().get(..bpp);
-        match solid.iter().find(|s| s.bytes().get(..bpp) == value) {
+        let value = t.bytes().get(..bpp).map(<[u8]>::to_vec);
+        match solid.iter().find(|s| s.bytes().get(..bpp) == value.as_deref()) {
             Some(s) => (tc, Arc::clone(s)),
             None => {
                 solid.push(Arc::clone(&t));

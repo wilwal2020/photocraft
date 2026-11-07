@@ -5,6 +5,9 @@ use super::{Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, TextureOptions, c
 /// Tabs + canvas for the active document, or the start screen; then drops layers dragged onto
 /// another document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if crate::jobs_ui::batch_preview(app, ui) {
+        return;
+    }
     crate::distort_ui::drop_foreign(app);
     let area = ui.available_rect_before_wrap();
     documents(app, ui);
@@ -33,6 +36,24 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
     Some(documents[start..].iter().copied().zip(cells).collect())
 }
 
+/// Tell the GPU canvas which documents are on screen (the arranged tiles or the main canvas's,
+/// plus those of open document windows): they split the display texture budget, and the
+/// textures of the others are freed first. Only a change of that set (or a document's size)
+/// re-splits it, so switching between shown documents or windows moves no texture.
+pub(crate) fn publish_shown(app: &PhotocraftApp) {
+    let Some(gpu) = &app.gpu else { return };
+    let docs = app.session.documents();
+    let mut shown: Vec<usize> = match arranged_cells(app, app.last_canvas_rect) {
+        Some(cells) => cells.into_iter().map(|(d, _)| d).collect(),
+        None => main_canvas_document(app).into_iter().collect(),
+    };
+    shown.extend(app.ui.windows.iter().filter(|w| w.open).map(|w| w.document));
+    let mut shown: Vec<(u64, u64)> = shown.into_iter().filter_map(|d| docs.get(d)).map(|st| (st.doc.id.0, gpu.canvas_bytes(&st.doc))).collect();
+    shown.sort_unstable();
+    shown.dedup();
+    gpu.show_documents(&shown);
+}
+
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.drop_canvas_rect = None;
     app.tab_strip = None;
@@ -45,13 +66,14 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.ctx().data_mut(|d| d.insert_temp(path_doc, doc_now));
     retain_gpu_documents(app);
+    publish_shown(app);
     crate::transform_tool::track_steps(app, ui.ctx());
     crate::cas_transform::tick(app, ui.ctx());
     crate::symmetry_ui::track(app, ui.ctx());
     let n = app.session.documents().len();
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
-    if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
+    if app.home_screen_up() {
         start_screen(app, ui);
         return;
     }
@@ -76,6 +98,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.tab_strip = Some(tabs(app, ui));
         ui.spacing_mut().item_spacing.y = spacing;
         drop_slot_line(app, ui);
+        // A tab click switches documents before any canvas is drawn this frame.
+        publish_shown(app);
     }
     if let Some(job) = app.jobs.focus.or_else(|| (n == 0).then(|| app.jobs.opens.last().map(|o| o.job)).flatten()) {
         crate::jobs_ui::open_card(app, ui, job);
@@ -333,18 +357,20 @@ fn tab_close_clicked(resp: &egui::Response, xresp: &egui::Response) -> bool {
 /// a separator.
 type TabMenuRow = Option<(&'static str, &'static str, serde_json::Value, bool)>;
 
-/// The document tab menu, in Photoshop's order. `index` is the right-clicked tab (`None` for the
+/// The document tab menu, in Photoshop's order (#11403). `index` is the right-clicked tab (`None` for the
 /// empty strip beside the tabs, which offers only New and Open, plus Close All). All tab actions
 /// go through the same guarded File commands as the menu bar, including the unsaved-changes
 /// prompt. The clicked tab is explicit even when another document is active.
-pub(super) fn tab_context_items(index: Option<usize>, count: usize, has_path: bool) -> Vec<TabMenuRow> {
-    let mut rows = Vec::with_capacity(8);
+pub(crate) fn tab_context_items(index: Option<usize>, count: usize, has_path: bool) -> Vec<TabMenuRow> {
+    let mut rows = Vec::with_capacity(11);
     if let Some(index) = index {
+        rows.push(Some(("Consolidate All to Here", "window.arrange.consolidateAllToTabs", json!({}), count > 1)));
         rows.push(Some(("Close", "file.close", json!({"document": index}), true)));
     }
     rows.push(Some(("Close All", "file.closeAll", json!({}), count > 0)));
     if let Some(index) = index {
         rows.push(Some(("Close Others", "file.closeOthers", json!({"document": index}), count > 1)));
+        rows.push(Some(("Move to New Window", "window.arrange.floatInWindow", json!({"document": index}), true)));
     }
     rows.push(None);
     // Empty params: run like the File menu items, so New opens its dialog and Open the file picker.
@@ -357,7 +383,7 @@ pub(super) fn tab_context_items(index: Option<usize>, count: usize, has_path: bo
     rows
 }
 
-fn tab_context_menu(ui: &mut egui::Ui, index: Option<usize>, count: usize, has_path: bool) -> Option<(&'static str, serde_json::Value)> {
+pub(crate) fn tab_context_menu(ui: &mut egui::Ui, index: Option<usize>, count: usize, has_path: bool) -> Option<(&'static str, serde_json::Value)> {
     crate::widgets::style_spectrum_popup_menu(ui);
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(170.0);

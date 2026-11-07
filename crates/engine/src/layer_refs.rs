@@ -46,8 +46,10 @@ fn current_only(id: &str) -> bool {
     id == "layer.showOnly"
 }
 
-fn reference(doc: &Document, active: Option<LayerId>, id: LayerId, relative: bool) -> Option<Value> {
-    if Some(id) == active {
+fn reference(doc: &Document, active: Option<LayerId>, id: LayerId, relative: bool, source: bool) -> Option<Value> {
+    // A layer whose content the step reads (a frame's picture, Load Selection's source) is named
+    // even when current: playing on another layer must not read that one instead (0.21, #219).
+    if Some(id) == active && !source {
         return Some(json!({"current": true}));
     }
     // A layer that is no row of its own (inside a collapsed group), or with no current layer to
@@ -80,13 +82,14 @@ pub(crate) fn record(s: &Session, id: &str, p: &Value) -> Option<Value> {
     let mut out = if id == "edit.transform" { crate::layer_multi_cmds::recorded_step(s, id, p.clone(), None) } else { p.clone() };
     let fields = out.as_object_mut()?;
     let mut changed = false;
+    let source = crate::actions_record::needs_source_layer(id);
     for key in keys {
         let Some(v) = fields.get(*key) else { continue };
         let new = match v {
-            Value::Number(n) => n.as_u64().and_then(|l| reference(&st.doc, st.active_layer, LayerId(l), relative)),
+            Value::Number(n) => n.as_u64().and_then(|l| reference(&st.doc, st.active_layer, LayerId(l), relative, source && *key == "layer")),
             // Every element a layer id, or the list stays as it is.
             Value::Array(a) => {
-                let refs = a.iter().map(|e| e.as_u64().and_then(|l| reference(&st.doc, st.active_layer, LayerId(l), relative)));
+                let refs = a.iter().map(|e| e.as_u64().and_then(|l| reference(&st.doc, st.active_layer, LayerId(l), relative, false)));
                 refs.collect::<Option<Vec<_>>>().map(Value::Array)
             }
             _ => None,
@@ -100,7 +103,10 @@ pub(crate) fn record(s: &Session, id: &str, p: &Value) -> Option<Value> {
         let named = fields.remove("layer").is_some() | fields.remove("layers").is_some();
         return (changed || named).then_some(out);
     }
-    if current_by_default(id) {
+    // A Type step on the current layer leaves it out, as upstream's portable recording does (0.21,
+    // #219), so the keystrokes that follow fold into their step (`actions_record::fold_keystroke`).
+    let implicit = id.starts_with("type.") && !source && st.selected_layers().len() <= 1;
+    if current_by_default(id) || implicit {
         let current = json!({"current": true});
         if fields.get("layer") == Some(&current) {
             fields.remove("layer");
@@ -128,6 +134,10 @@ fn resolve_one(s: &Session, cmd: &str, v: &Value) -> Result<Option<LayerId>> {
         return row.map(|l| Some(*l)).ok_or_else(|| bad(no_row(n)));
     }
     let Some(name) = o.get("name") else { return Ok(None) };
+    // A selector with anything else in it is not one this branch made: refused, not guessed at.
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "name" | "occurrence")) {
+        return Err(bad(format!("a layer reference by name takes no `{k}`")));
+    }
     let name = name.as_str().ok_or_else(|| bad(format!("a layer's `name` must be a string, got {name}")))?;
     let occurrence = match o.get("occurrence") {
         None => None,

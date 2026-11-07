@@ -374,7 +374,7 @@ fn patch(img: &mut [[u8; 4]], area: Rect, doc: &Document, d: Rect) {
 /// The composite of `doc` over `area` as straight RGBA8.
 fn composite_rgba8(doc: &Document, area: Rect) -> Vec<[u8; 4]> {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let px = photocraft_compose::render(doc, area).px;
+    let px = photocraft_compose::render(doc, area).into_px();
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;

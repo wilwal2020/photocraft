@@ -653,7 +653,7 @@ fn use_item(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 l.name = item.name.clone();
             }
-            let top = crate::edit_cmds::insert_layers(s, &copies, dx, dy, &format!("Place {}", item.name), false)?;
+            let top = crate::edit_cmds::insert_layers(s, &copies, dx, dy, &format!("Place {}", item.name), false, None)?;
             Ok(json!({"item": id, "layer": top.0, "offset": [dx, dy]}))
         }
     }

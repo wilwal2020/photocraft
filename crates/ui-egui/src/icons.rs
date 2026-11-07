@@ -34,6 +34,7 @@ pub fn svg_bytes(name: &str) -> Option<Vec<u8>> {
         _ => None,
     }
 }
+
 /// Panel footer buttons share one glyph per action and one size, so the Layers footer and the
 /// Swatches, Gradients and Patterns footers read the same, as in Photoshop (#10656).
 pub const FOOTER_SIZE: f32 = 26.0;
@@ -154,7 +155,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::RedEye => "eye",
         Tool::CloneStamp => "stamp",
         Tool::PatternStamp => "grid-3x3",
-        Tool::HistoryBrush => "clock",
+        Tool::HistoryBrush => "history-brush",
         Tool::ArtHistoryBrush => "sparkles",
         Tool::Blur => "droplet",
         Tool::Sharpen => "triangle",
