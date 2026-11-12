@@ -216,7 +216,7 @@ pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
-    let items: [(&str, &str); 17] = [
+    let items: [(&str, &str); 20] = [
         ("brightnessContrast", tl!("Brightness/Contrast")),
         ("levels", tl!("Levels")),
         ("curves", tl!("Curves")),
@@ -234,6 +234,9 @@ pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ("gradientMap", tl!("Gradient Map")),
         ("selectiveColor", tl!("Selective Color")),
         ("colorLookup", tl!("Color Lookup")),
+        ("shading", tl!("Shading")),
+        ("shading2", tl!("Shading 2")),
+        ("lighting", tl!("Lighting")),
     ];
     let mut run = None;
     ui.horizontal_wrapped(|ui| {

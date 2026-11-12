@@ -28,8 +28,12 @@ mod curves;
 mod gradient_map;
 mod hue_saturation;
 mod levels;
+mod lighting;
+mod presets;
+mod sat_curve;
 mod selective_color;
 mod session;
+mod shading;
 
 use basic::grain;
 #[cfg(test)]
@@ -55,6 +59,7 @@ use hue_saturation::hue_saturation;
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
+pub use presets::{apply_pending as apply_pending_preset, saved as saved_presets};
 use selective_color::selective_color;
 pub use session::{gradient_map_window, is_gradient_map, layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
@@ -133,6 +138,8 @@ pub struct EditorCx {
     pub dynamic_color_sliders: bool,
     /// Image › Curves with a single Channels-panel target: that channel only (#5335).
     pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
+    /// The user's saved presets of this kind (Shading, Shading 2, Lighting; empty otherwise).
+    pub presets: Vec<(String, Value)>,
 }
 
 /// The Levels/Curves channel space the values address.
@@ -174,6 +181,9 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "threshold" => threshold(ui, v, cx),
         "gradientMap" => gradient_map(ui, v, cx),
         "grain" => grain(ui, v),
+        "shading" => shading::shading(ui, v, cx.mem, false, &cx.presets),
+        "shading2" => shading::shading(ui, v, cx.mem, true, &cx.presets),
+        "lighting" => lighting::lighting(ui, v, cx.mem, &cx.presets),
         "selectiveColor" => selective_color(ui, v, cx),
         _ => Edit::default(),
     }
@@ -296,6 +306,7 @@ mod tests {
             dialog: false,
             dynamic_color_sliders: dynamic,
             isolated_curve: None,
+            presets: Vec::new(),
         };
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));

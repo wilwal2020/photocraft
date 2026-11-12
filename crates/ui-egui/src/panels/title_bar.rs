@@ -96,7 +96,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
                     let progress_w = if crate::timelapse_ui::export_progress(app).is_some() { crate::timelapse_ui::PROGRESS_W + 6.0 } else { 0.0 };
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 5.0 * ICON_SLOT + progress_w {
+                    // The AI funds button, a little apart from the timelapse buttons.
+                    let funds_w = crate::ai_funds_ui::BUTTON + crate::ai_funds_ui::GAP + 6.0;
+                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 5.0 * ICON_SLOT + progress_w + funds_w {
+                        6
+                    } else if room >= WORKSPACE_MIN + 5.0 * ICON_SLOT + progress_w {
                         5
                     } else if room >= WORKSPACE_MIN + 4.0 * ICON_SLOT {
                         4
@@ -107,7 +111,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     } else {
                         0
                     };
-                    let extra = if icons_shown >= 5 { progress_w } else { 0.0 };
+                    let extra = match icons_shown {
+                        6 => progress_w + funds_w,
+                        5 => progress_w,
+                        _ => 0.0,
+                    };
                     let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - extra - 6.0).clamp(WORKSPACE_MIN, 130.0);
                     if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", tl!("Workspace"), &mut ws, &opts, ws_width) {
                         app.ui.workspace = ws;
@@ -136,6 +144,12 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // narrow (also in File › Timelapse and the Timelapse panel).
                     if icons_shown >= 4 {
                         crate::timelapse_ui::title_buttons(app, ui, icons_shown >= 5);
+                    }
+                    // Generative AI funds: what is left of the AI Studio balance and what Nano
+                    // Banana cost (user request), dropped first when the bar is narrow.
+                    if icons_shown >= 6 {
+                        ui.add_space(crate::ai_funds_ui::GAP);
+                        crate::ai_funds_ui::title_button(app, ui);
                     }
                     if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
                 };

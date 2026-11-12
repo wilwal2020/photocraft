@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 pub mod actions_dialogs;
 pub mod adjust_icons;
+pub mod ai_funds_ui;
 pub mod alt_pick;
 mod ants_raster;
 pub mod brush_key_repeat;
@@ -723,6 +724,8 @@ pub struct PhotocraftApp {
     pub(crate) gigapixel: Option<gigapixel_ui::Waiting>,
     /// Window › Timelapse (see `timelapse_ui`).
     pub(crate) timelapse: timelapse_ui::TimelapseUi,
+    /// The title bar's generative AI funds box (see `ai_funds_ui`).
+    pub(crate) ai_funds: ai_funds_ui::AiFundsUi,
     pub(crate) updates_rt: updates_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,

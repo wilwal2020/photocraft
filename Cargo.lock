@@ -5242,6 +5242,7 @@ name = "photocraft-algo"
 version = "0.21.0"
 dependencies = [
  "criterion",
+ "flate2",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",

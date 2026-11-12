@@ -4,7 +4,9 @@
 //!
 //! Loading applies only the settings the file holds, over the current ones, as Camera Raw's
 //! Load Settings does; settings PhotoCraft has no control for (lens profiles, geometry, masks,
-//! creative profiles, Point Color, …) are ignored and named in the report. The same reader fills
+//! Point Color, …) are ignored and named in the report. A creative profile (`crs:Look`) comes
+//! with its colour tables, from the file or, when the file only names it, from the profile's own
+//! file among Camera Raw's settings on this computer (see `profiles`). The same reader fills
 //! the dialog from a raw file's sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`), and the writer
 //! keeps it. Saving writes every supported control, so loading the file in Photoshop reproduces
 //! the dialog.
@@ -20,6 +22,8 @@
 //! counterpart and are ignored.
 
 use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
+
+mod profiles;
 
 /// The Camera Raw settings namespace.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
@@ -272,8 +276,15 @@ fn apply(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value: &st
 }
 
 /// Apply a Camera Raw settings file over `params`. Fails on input that isn't XMP or holds no
-/// Camera Raw settings; never panics on malformed input.
+/// Camera Raw settings; never panics on malformed input. A creative profile the file names
+/// without its tables is looked up among Camera Raw's settings on this computer.
 pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> {
+    load_with(params, bytes, &profiles::installed)
+}
+
+/// [`load`], finding the file of a profile named without its tables with `find_profile(uuid,
+/// name)` (its bytes, or `None`).
+pub fn load_with(params: &mut CameraRaw, bytes: &[u8], find_profile: &dyn Fn(&str, &str) -> Option<Vec<u8>>) -> Result<LoadReport, String> {
     if bytes.len() > MAX_XMP_BYTES {
         return Err("the settings file is too large".into());
     }
@@ -309,18 +320,32 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
                     None => report.ignored.push(name.to_string()),
                 }
             } else if name == "Look" {
-                // A profile: the neutral ones for rendered images are nothing to apply.
+                // A profile: the neutral ones for rendered images take a creative one away.
                 match look_name(c) {
                     Some(n) if n == "Adobe Monochrome" => {
                         next.monochrome = true;
+                        next.profile = None;
                         report.applied += 1;
                     }
-                    Some(n) if NEUTRAL_LOOKS.contains(&n.as_str()) => {}
-                    _ => report.ignored.push(name.to_string()),
+                    Some(n) if NEUTRAL_LOOKS.contains(&n.as_str()) => next.profile = None,
+                    n => match profiles::from_look(c, n, find_profile) {
+                        Some(p) => {
+                            next.profile = Some(p);
+                            report.applied += 1;
+                        }
+                        None => report.ignored.push(name.to_string()),
+                    },
                 }
             } else if c.children().any(|g| g.is_element()) {
                 // Structured settings (masks, lens profiles, Point Color…) have no counterpart.
-                if !METADATA.contains(&name) {
+                // Camera Raw writes an empty Point Color as one entry of -1s, and its variance
+                // means nothing without one.
+                let empty_point_colors = name == "PointColors"
+                    && c.descendants()
+                        .filter(|n| n.is_text())
+                        .flat_map(|n| n.text().unwrap_or("").split(','))
+                        .all(|v| v.trim().is_empty() || number(v) == Some(-1.0));
+                if !METADATA.contains(&name) && !empty_point_colors && name != "ColorVariance" {
                     report.ignored.push(name.to_string());
                 }
             } else {
@@ -571,6 +596,9 @@ pub fn save_preset(params: &CameraRaw, name: &str, group: &str, uuid: &str, sect
     if sections.contains(&Section::Curve) {
         write_curves(&mut out, &mut p);
     }
+    if sections.contains(&Section::Treatment) {
+        write_look(&mut out, &p);
+    }
     out.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n");
     out
 }
@@ -584,6 +612,41 @@ fn scalar_text(name: &str, v: f32, lo: f32) -> String {
         _ if lo < 0.0 => signed(v.round(), 0),
         _ => format!("{:.0}", v.round()),
     }
+}
+
+/// The creative profile as a `crs:Look`: named by its UUID as Camera Raw writes its own profiles
+/// into presets (Photoshop and PhotoCraft find its file), or with its tables when it has none.
+fn write_look(out: &mut String, p: &CameraRaw) {
+    let Some(prof) = &p.profile else { return };
+    out.push_str(&format!(
+        "   <crs:Look>\n    <rdf:Description\n     crs:Name=\"{}\"\n     crs:Amount=\"{}\"\n",
+        escape(&prof.name),
+        prof.amount.clamp(0.0, 2.0)
+    ));
+    if prof.uuid.is_empty() {
+        for (key, table) in [("LookTable", &prof.look_table), ("RGBTable", &prof.rgb_table)] {
+            if let Some(t) = table {
+                let id = table_id(t.text());
+                out.push_str(&format!("     crs:{key}=\"{id}\"\n     crs:Table_{id}=\"{}\"\n", escape(t.text())));
+            }
+        }
+        out.push_str(&format!("     crs:RGBTableAmount=\"{}\"/>\n", prof.rgb_table_amount));
+    } else {
+        out.push_str(&format!("     crs:UUID=\"{}\"\n     crs:Stubbed=\"true\"/>\n", escape(&prof.uuid)));
+    }
+    out.push_str("   </crs:Look>\n");
+}
+
+/// A 32-digit hex name for a table written into a file (Camera Raw names them by a digest).
+fn table_id(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let half = |salt: u8| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        salt.hash(&mut h);
+        text.hash(&mut h);
+        h.finish()
+    };
+    format!("{:016X}{:016X}", half(1), half(2))
 }
 
 fn write_curves(out: &mut String, p: &mut CameraRaw) {
@@ -644,6 +707,13 @@ pub fn blend(base: &CameraRaw, target: &CameraRaw, amount: f32) -> CameraRaw {
             *field(&mut out) = field(&mut fallback).clone();
         }
     }
+    // A profile the preset brings (not the one it was applied over) comes in at the preset's
+    // Amount; the same profile's Amount interpolates above.
+    if let Some(t) = &target.profile
+        && base.profile.as_ref().is_none_or(|b| b.look_table != t.look_table || b.rgb_table != t.rgb_table)
+    {
+        out.profile = Some(photocraft_algo::camera_raw::Profile { amount: (t.amount * amount).clamp(0.0, 2.0), ..t.clone() });
+    }
     out
 }
 
@@ -692,6 +762,7 @@ pub fn save(params: &CameraRaw) -> String {
     out.push_str(&format!("   crs:{MONOCHROME}=\"{}\"\n", if p.monochrome { "True" } else { "False" }));
     out.push_str("   crs:ToneCurveName2012=\"Custom\"\n   crs:HasSettings=\"True\">\n");
     write_curves(&mut out, &mut p);
+    write_look(&mut out, &p);
     out.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n");
     out
 }
@@ -867,14 +938,134 @@ mod tests {
         assert!(r.ignored.is_empty(), "the neutral profile is nothing to report: {:?}", r.ignored);
         assert!(r.auto_white_balance);
         assert_eq!((p.contrast, p.red_hue, p.grain_roughness), (20.0, 19.0, 85.0));
-        // A creative profile is reported, the black-and-white one sets the treatment.
+        // A creative profile whose tables can't be found is reported, the black-and-white one sets
+        // the treatment.
         let creative = String::from_utf8_lossy(PRESET).replace("Adobe Color", "Modern 10");
-        assert_eq!(load(&mut CameraRaw::default(), creative.as_bytes()).unwrap().ignored, vec!["Look".to_string()]);
+        assert_eq!(load_with(&mut CameraRaw::default(), creative.as_bytes(), &|_, _| None).unwrap().ignored, vec!["Look".to_string()]);
         let mono = String::from_utf8_lossy(PRESET).replace("Adobe Color", "Adobe Monochrome");
         let mut m = CameraRaw::default();
         load(&mut m, mono.as_bytes()).unwrap();
         assert!(m.monochrome);
         assert!(preset_info(b"<x/>").is_err() && preset_info(b"\xff").is_err());
+    }
+
+    /// `bytes` in Camera Raw's table encoding: the size, then zlib, in base 85.
+    fn table_text(bytes: &[u8]) -> String {
+        use std::io::Write;
+        const ALPHABET: &[u8; 85] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?`'|()[]{}@%$#";
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(bytes).unwrap();
+        let mut raw = (bytes.len() as u32).to_le_bytes().to_vec();
+        raw.extend(z.finish().unwrap());
+        let mut out = String::new();
+        for group in raw.chunks(4) {
+            let mut b = [0u8; 4];
+            b[..group.len()].copy_from_slice(group);
+            let mut x = u32::from_le_bytes(b);
+            for _ in 0..=group.len() {
+                out.push(char::from(ALPHABET[(x % 85) as usize]));
+                x /= 85;
+            }
+        }
+        out
+    }
+
+    /// A look table (6 hues × 2 × 2) that scales the value by `val`.
+    fn look_table(val: f32) -> String {
+        let mut b: Vec<u8> = [0u32, 1, 6, 2, 2].iter().flat_map(|v| v.to_le_bytes()).collect();
+        for _ in 0..24 {
+            for v in [0.0f32, 1.0, val] {
+                b.extend(v.to_le_bytes());
+            }
+        }
+        b.extend(0u32.to_le_bytes());
+        table_text(&b)
+    }
+
+    /// A profile file as Camera Raw keeps one (`PresetType="Look"`) with a look table.
+    fn profile_file(uuid: &str, table: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Look" crs:UUID="{uuid}"
+             crs:LookTable="K1" crs:Table_K1="{}" crs:RGBTableAmount="0.5"><crs:Name><rdf:Alt><rdf:li xml:lang="x-default">Test Look</rdf:li></rdf:Alt></crs:Name>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#,
+            escape(table)
+        )
+    }
+
+    /// A preset naming a profile without its tables, as Camera Raw writes its own into presets.
+    fn stubbed_preset(uuid: &str, amount: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Normal" crs:Contrast2012="+10">
+            <crs:PointColors><rdf:Seq><rdf:li>-1.000000, -1.000000, -1.000000</rdf:li></rdf:Seq></crs:PointColors>
+            <crs:ColorVariance><rdf:Seq><rdf:li>-50.000000</rdf:li></rdf:Seq></crs:ColorVariance>
+            <crs:Look><rdf:Description crs:Name="Test Look" crs:Amount="{amount}" crs:UUID="{uuid}" crs:Stubbed="true"/></crs:Look>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    #[test]
+    fn a_named_profile_is_found_by_uuid_and_applied_at_its_amount() {
+        let table = look_table(0.5);
+        let file = profile_file("ABC123", &table);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let find = |uuid: &str, name: &str| {
+            asked.borrow_mut().push((uuid.to_string(), name.to_string()));
+            (uuid == "ABC123").then(|| file.clone().into_bytes())
+        };
+        let mut p = CameraRaw::default();
+        let r = load_with(&mut p, stubbed_preset("ABC123", "0.75").as_bytes(), &find).unwrap();
+        assert!(r.ignored.is_empty(), "the profile applies and empty Point Colors are nothing: {:?}", r.ignored);
+        assert_eq!(asked.borrow().as_slice(), [("ABC123".to_string(), "Test Look".to_string())]);
+        let prof = p.profile.clone().unwrap();
+        assert_eq!((prof.name.as_str(), prof.uuid.as_str(), prof.amount, prof.rgb_table_amount), ("Test Look", "ABC123", 0.75, 0.5));
+        assert_eq!(prof.look_table.as_ref().map(|t| t.text()), Some(table.as_str()));
+        assert!(prof.rgb_table.is_none() && !p.is_identity());
+        // The profile darkens: value × 0.5 at Amount 0.75.
+        let mut px = vec![[0.5, 0.5, 0.5, 1.0]];
+        photocraft_algo::camera_raw::develop(&mut px, 1, 1, &CameraRaw { contrast: 0.0, ..p.clone() }, false);
+        assert!(px[0][0] < 0.45, "{:?}", px[0]);
+        // Not found: reported, settings otherwise applied. A neutral profile takes it away.
+        let mut q = CameraRaw::default();
+        let r = load_with(&mut q, stubbed_preset("OTHER", "1").as_bytes(), &find).unwrap();
+        assert_eq!((r.ignored.clone(), q.contrast, q.profile.is_none()), (vec!["Look".to_string()], 10.0, true));
+        let mut r2 = p.clone();
+        load_with(&mut r2, PRESET, &find).unwrap();
+        assert!(r2.profile.is_none(), "Adobe Color replaces a creative profile");
+    }
+
+    #[test]
+    fn a_profile_with_its_tables_in_the_preset_needs_no_file_and_round_trips() {
+        let table = look_table(0.8);
+        let inline = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Look><rdf:Description crs:Name="Mine" crs:Amount="1.5" crs:LookTable="AA" crs:Table_AA="{}"/></crs:Look>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#,
+            escape(&table)
+        );
+        let mut p = CameraRaw::default();
+        let r = load_with(&mut p, inline.as_bytes(), &|_, _| panic!("no lookup for a profile with its tables")).unwrap();
+        assert_eq!(r.applied, 1);
+        let prof = p.profile.clone().unwrap();
+        assert_eq!((prof.amount, prof.uuid.as_str()), (1.5, ""));
+        // Saved without a UUID it keeps its tables; with one it is named, as Camera Raw does.
+        let mut back = CameraRaw::default();
+        load_with(&mut back, save(&p).as_bytes(), &|_, _| None).unwrap();
+        assert_eq!(back.profile, p.profile);
+        let named = CameraRaw { profile: Some(photocraft_algo::camera_raw::Profile { uuid: "U1".into(), ..prof.clone() }), ..p.clone() };
+        let text = save_preset(&named, "P", "", "X", &[Section::Treatment]);
+        assert!(text.contains("crs:Stubbed=\"true\"") && !text.contains("Table_"));
+        let file = profile_file("U1", &table);
+        let mut back = CameraRaw::default();
+        load_with(&mut back, text.as_bytes(), &|u, _| (u == "U1").then(|| file.clone().into_bytes())).unwrap();
+        assert_eq!(back.profile.as_ref().map(|q| (q.amount, q.look_table.clone())), Some((1.5, prof.look_table.clone())));
+        // Not in a preset without the Treatment section.
+        assert!(!save_preset(&named, "P", "", "X", &[Section::Light]).contains("crs:Look"));
+        // A preset's Amount scales a profile it brings.
+        let blended = blend(&CameraRaw::default(), &p, 0.5);
+        assert_eq!(blended.profile.as_ref().map(|q| q.amount), Some(0.75));
     }
 
     #[test]

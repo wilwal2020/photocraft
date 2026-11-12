@@ -1,7 +1,10 @@
 use super::*;
 
-const KINDS: [&str; 16] = [
+const KINDS: [&str; 19] = [
     "grain",
+    "shading",
+    "shading2",
+    "lighting",
     "invert",
     "brightnessContrast",
     "threshold",
@@ -39,6 +42,9 @@ pub(crate) fn sample(kind: &str) -> Value {
         "gradientMap" => json!({"stops": [[0, "#000000"], [0.5, "#ff0000"], [1, [1, 1, 1]]], "reverse": true, "dither": true}),
         "selectiveColor" => json!({"method": "absolute", "reds": [10, 0, -20, 5]}),
         "grain" => json!({"amount": 60, "size": 10, "roughness": 80}),
+        "shading2" => json!({"depth": 45, "saturationShift": -40, "saturationCurve": 25, "selfBounce": 10, "hueShift": 30, "steps": 2}),
+        "shading" => json!({"depth": 50, "saturationCurve": -35, "chromaRetention": 70, "selfBounce": 55, "terminator": "#ff8040", "terminatorAmount": 45, "terminatorPosition": 30, "terminatorWidth": 25, "physical": true, "hueShift": 40, "splitHue": 90, "ambient": "#336699", "moodAmount": 15, "steps": 3, "saturationPoints": [[0, 255], [90, 220], [255, 0]], "huePoints": [[0, 255], [80, 40], [255, 0]], "literalCurve": true}),
+        "lighting" => json!({"lift": 50, "saturationCurve": 60, "highlightFade": 70, "gloss": 40, "glossSize": 20, "metallic": true, "hueShift": 30, "lightHue": 60, "light": "#ffcc66", "glowAmount": 15, "steps": 2, "saturationPoints": [[0, 255], [128, 60], [-40, 300], [255, 0]], "huePoints": [[0, 255], [128, -60], [255, 0]]}),
         _ => json!({}),
     }
 }
@@ -523,6 +529,51 @@ fn grain_is_an_adjustment_layer_only() {
     assert!(crate::commands::find("image.adjustments.grain").is_none(), "no Image › Adjustments › Grain");
 }
 
+/// PhotoCraft's Shading (user request, 2026-11-09) is a layer-only adjustment whose params are
+/// percentages, degrees and pixels; values clamp, a wrong type is refused.
+#[test]
+fn shading_is_an_adjustment_layer_only() {
+    let mut s = colourful("rgb", 8);
+    let shading = |s: &crate::Session| {
+        let d = s.active().unwrap();
+        match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Adjustment(Adjustment::Shading(sh)) => sh.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    s.execute("layer.newAdjustmentLayer.shading", json!({})).unwrap();
+    assert_eq!(shading(&s), Shading::default());
+    s.execute("layer.newAdjustmentLayer.shading", json!({"depth": 250, "hueShift": 45, "steps": 2.6, "ambient": "#000000"})).unwrap();
+    let sh = shading(&s);
+    assert_eq!((sh.depth, sh.hue_shift, sh.steps, sh.ambient), (1.0, 45.0, 3, [0.0; 3]));
+    assert!(s.execute("layer.newAdjustmentLayer.shading", json!({"depth": "deep"})).is_err());
+    assert!(s.execute("layer.newAdjustmentLayer.shading", json!({"mood": "not a colour"})).is_err());
+    assert!(crate::commands::find("image.adjustments.shading").is_none(), "no Image › Adjustments › Shading");
+    assert_eq!(crate::commands::adjustment_kind(&Adjustment::Shading(sh)), "shading");
+}
+
+/// Lighting, Shading's mirror (user request, 2026-11-09), is a layer-only adjustment too.
+#[test]
+fn lighting_is_an_adjustment_layer_only() {
+    let mut s = colourful("rgb", 8);
+    let lighting = |s: &crate::Session| {
+        let d = s.active().unwrap();
+        match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Adjustment(Adjustment::Lighting(l)) => l.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    s.execute("layer.newAdjustmentLayer.lighting", json!({})).unwrap();
+    assert_eq!(lighting(&s), Lighting::default());
+    s.execute("layer.newAdjustmentLayer.lighting", json!({"lift": 250, "lightHue": 45, "steps": 2.6, "light": "#000000"})).unwrap();
+    let l = lighting(&s);
+    assert_eq!((l.lift, l.light_hue, l.steps, l.light), (1.0, 45.0, 3, [0.0; 3]));
+    assert!(s.execute("layer.newAdjustmentLayer.lighting", json!({"lift": "bright"})).is_err());
+    assert!(s.execute("layer.newAdjustmentLayer.lighting", json!({"glow": "not a colour"})).is_err());
+    assert!(crate::commands::find("image.adjustments.lighting").is_none(), "no Image › Adjustments › Lighting");
+    assert_eq!(crate::commands::adjustment_kind(&Adjustment::Lighting(l)), "lighting");
+}
+
 fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
     let d = s.active().unwrap();
     let bg = d.doc.layers[0].surface().unwrap();
@@ -532,7 +583,7 @@ fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
 #[test]
 fn destructive_commands_apply_their_params_at_every_depth() {
     for depth in [8, 16, 32] {
-        for kind in KINDS.iter().filter(|k| !matches!(**k, "invert" | "grain")) {
+        for kind in KINDS.iter().filter(|k| !matches!(**k, "invert" | "grain" | "shading" | "shading2" | "lighting")) {
             let mut s = colourful("rgb", depth);
             let before = pixels(&s);
             let steps = s.active().unwrap().history.past_len();

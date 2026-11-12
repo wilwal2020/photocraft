@@ -4797,3 +4797,43 @@ fn softer_outer_glow_fades_out_before_its_size() {
         }
     }
 }
+
+/// Shading and Lighting read their opacity × mask as the amount, each amount its own colour
+/// (user request, 2026-11-09), rather than fading a full-strength result in; clipped, they act
+/// only on their base.
+#[test]
+fn shading_reads_its_mask_as_the_shadow_amount() {
+    let skin = [0.93, 0.70, 0.52, 1.0];
+    let near = |p: [f32; 4], q: [f32; 4]| (0..4).all(|k| (p[k] - q[k]).abs() < 2e-3);
+    for adj in [Adjustment::Shading(Default::default()), Adjustment::Lighting(Default::default())] {
+        let expect = |a: f32| {
+            let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), skin);
+            crate::adjust::apply_at_amounts(&adj, &mut b, &[a], crate::adjust::Transfer::Srgb);
+            b.px[0]
+        };
+        assert!(!near(expect(0.5), skin), "{adj:?} changes skin");
+        for clipped in [false, true] {
+            let mut d = Document::new("shading", Size::new(30, 4), ColorMode::Rgb, SampleType::U16);
+            let fmt = d.pixel_format();
+            let mut base = Layer::raster("base", fmt);
+            base.surface_mut().unwrap().fill_rect(Rect::new(0, 0, if clipped { 25 } else { 30 }, 4), &skin);
+            d.layers.push(base);
+            let mut mask = photocraft_raster::Surface::new(PixelFormat::GRAY8);
+            mask.fill_rect(Rect::new(10, 0, 20, 4), &[128.0 / 255.0]);
+            mask.fill_rect(Rect::new(20, 0, 30, 4), &[1.0]);
+            let mut shading = Layer::new("shading", LayerContent::Adjustment(adj.clone()));
+            shading.mask = Some(LayerMask { surface: mask, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            shading.opacity = 0.8;
+            shading.clipped = clipped;
+            d.layers.push(shading);
+            let out = render(&d, d.bounds());
+            assert!(near(out.get(3, 1), skin), "no mask, no change: {:?}", out.get(3, 1));
+            let half = 0.8 * 128.0 / 255.0;
+            assert!(near(out.get(15, 1), expect(half)), "half mask at 80%: {:?} vs {:?}", out.get(15, 1), expect(half));
+            assert!(near(out.get(22, 1), expect(0.8)), "{:?} vs {:?}", out.get(22, 1), expect(0.8));
+            if clipped {
+                assert_eq!(out.get(27, 1)[3], 0.0, "clipped, it stays on its base");
+            }
+        }
+    }
+}

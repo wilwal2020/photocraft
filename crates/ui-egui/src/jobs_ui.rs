@@ -459,8 +459,12 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    crate::ai_funds_ui::tick(app);
     for e in app.session.poll_jobs() {
+        let ended = crate::ai_funds_ui::Ended::of(&e);
         on_event(app, ctx, e);
+        // What a Nano Banana generation cost, after the job's own status.
+        crate::ai_funds_ui::after_job(app, &ended, photocraft_engine::generative::nano_banana::billed());
     }
     // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
     if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {

@@ -1237,6 +1237,25 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Photoshop 2026: film grain, the same every render (it depends on the pixel position).
         ("grain", "Grain…", r##"{"amount":0..100=0,"size":0..100=34,"roughness":0..100=50}"##),
+        // PhotoCraft's own: paint shadows on its mask; each colour picks its own shadow colour.
+        (
+            "shading",
+            "Shading…",
+            r##"{"depth":0..100=35,"saturation":0..100=20,"saturationCurve":-100..100=0,"hueShift":0..90=22,"splitHue":0..360=125,"protectNeutrals":0..100=50,"ambient":"#rrggbb"="#7373cc","ambientAmount":0..100=6,"mood":"#rrggbb"="#ccadd1","moodAmount":0..100=0,"protectDarks":0..100=50,"steps":0..8=0,"chromaRetention":0..100=50,"selfBounce":0..100=30,"terminator":"#rrggbb"="#e65940","terminatorAmount":0..100=30,"terminatorPosition":0..100=40,"terminatorWidth":5..100=30,"physical":bool=false,"saturationPoints":[[x,y],…] -127.5..382.5=[[0,255],[255,0]] (Advanced Curve: the path on the colour picker, base colour top-left, full shadow bottom-right, half a box past it toward the picker's edges; drawn points lock saturationCurve),"huePoints":[[amount,turn],…] amount 0..255, turn -127.5..382.5=[[0,255],[255,0]] (Hue Curve: how far the hue has turned, base hue top, full shadow's bottom; below turns further, above turns back),"literalCurve":bool=false (the Advanced Curve keeps its drawn shape, sized to each colour's own path, instead of stretching to each colour's box)} (the layer mask is the shadow amount; percentages except hueShift and splitHue in degrees; steps 0 = smooth; saturationCurve bows saturation through the half-shadow tones, + richer, - greyer)"##,
+        ),
+        // Shading on the colour picker's axes (user test, 2026-11-10): Brightness straight down,
+        // Saturation sideways at that lightness.
+        (
+            "shading2",
+            "Shading 2…",
+            r##"{"depth":0..100=35 (Brightness),"saturationShift":-100..100=30,"saturationCurve":-100..100=0,"hueShift":0..90=22,"splitHue":0..360=125,"protectNeutrals":0..100=50,"ambient":"#rrggbb"="#7373cc","ambientAmount":0..100=6,"mood":"#rrggbb"="#ccadd1","moodAmount":0..100=0,"protectDarks":0..100=50,"steps":0..8=0,"selfBounce":0..100=30,"terminator":"#rrggbb"="#e65940","terminatorAmount":0..100=30,"terminatorPosition":0..100=40,"terminatorWidth":5..100=30,"physical":bool=false,"saturationPoints":[[x,y],…] -127.5..382.5=[[0,255],[255,0]] (Advanced Curve: the path on the colour picker, base colour top-left, full shadow bottom-right, half a box past it toward the picker's edges; drawn points lock saturationCurve),"huePoints":[[amount,turn],…] amount 0..255, turn -127.5..382.5=[[0,255],[255,0]] (Hue Curve: how far the hue has turned, base hue top, full shadow's bottom; below turns further, above turns back),"literalCurve":bool=false (the Advanced Curve keeps its drawn shape, sized to each colour's own path, instead of stretching to each colour's box)} (the layer mask is the shadow amount; percentages except hueShift and splitHue in degrees; steps 0 = smooth; saturationCurve bows saturation through the half-shadow tones, + richer, - greyer)"##,
+        ),
+        // Its mirror: paint light on its mask; each colour picks its own lit colour.
+        (
+            "lighting",
+            "Lighting…",
+            r##"{"lift":0..100=35,"saturation":0..100=20,"saturationCurve":-100..100=0,"highlightFade":0..100=40,"hueShift":0..90=15,"lightHue":0..360=108,"protectNeutrals":0..100=50,"light":"#rrggbb"="#ffd999","lightAmount":0..100=25,"glow":"#rrggbb"="#ffe6b3","glowAmount":0..100=0,"protectDarks":0..100=90,"steps":0..8=0,"gloss":0..100=0,"glossSize":2..50=15,"metallic":bool=false,"saturationPoints":[[x,y],…] -127.5..382.5=[[0,255],[255,0]] (Advanced Curve: the path on the colour picker, base colour top-left, full light bottom-right, half a box past it toward the picker's edges; drawn points lock saturationCurve),"huePoints":[[amount,turn],…] amount 0..255, turn -127.5..382.5=[[0,255],[255,0]] (Hue Curve: how far the hue has turned, base hue top, full light's bottom; below turns further, above turns back),"literalCurve":bool=false (the Advanced Curve keeps its drawn shape, sized to each colour's own path, instead of stretching to each colour's box)} (the layer mask is the light amount; percentages except hueShift and lightHue in degrees; steps 0 = smooth; saturationCurve bows saturation through the half-light tones, + richer, - greyer)"##,
+        ),
     ];
     for &(kind, label, params) in ADJ {
         let layer_id: &'static str = Box::leak(format!("layer.newAdjustmentLayer.{kind}").into_boxed_str());
@@ -1260,7 +1279,8 @@ fn build() -> Vec<CommandSpec> {
             journal: true,
         });
         // Grain is an adjustment layer only in Photoshop (no Image › Adjustments entry).
-        if kind == "grain" {
+        // Shading and Lighting are adjustment layers only: the mask is what they paint.
+        if matches!(kind, "grain" | "shading" | "shading2" | "lighting") {
             continue;
         }
         v.push(CommandSpec {

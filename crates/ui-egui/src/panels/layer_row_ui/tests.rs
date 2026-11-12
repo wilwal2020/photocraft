@@ -930,7 +930,7 @@ fn a_command_click_and_a_plain_click_are_not_a_double_click() {
     let frame = |t: f64, modifiers: egui::Modifiers| {
         let mut double = false;
         let mut out = ctx.run_ui(egui::RawInput { time: Some(t), events: vec![egui::Event::ModifiersChanged(modifiers)], ..Default::default() }, |ui| {
-            super::frame_began(ui.ctx());
+            super::frame_began(ui.ctx(), None);
             double = super::second_click(ui.ctx(), true, 7, 2);
             super::frame_ended(ui.ctx(), 5.0);
         });
@@ -955,7 +955,7 @@ fn a_second_click_queued_behind_a_slow_frame_still_double_clicks() {
     let frame = |t: f64, work_ms: f64, click: bool| {
         let mut double = false;
         let mut out = ctx.run_ui(egui::RawInput { time: Some(t), ..Default::default() }, |ui| {
-            super::frame_began(ui.ctx());
+            super::frame_began(ui.ctx(), None);
             if click {
                 double = super::second_click(ui.ctx(), true, 7, 5);
             }
@@ -970,4 +970,62 @@ fn a_second_click_queued_behind_a_slow_frame_still_double_clicks() {
     assert!(!frame(10.0, 10.0, true));
     frame(10.2, 10.0, false);
     assert!(!frame(10.7, 10.0, true), "0.7 s apart, frames idle between: two clicks");
+}
+
+/// User report (fifth): a double-click on a Solid Color thumbnail in a group just shown and
+/// opened sometimes didn't open the Color Picker. The first click's frame was slow (the layer
+/// selected, the group's contents composited and thumbnailed), and egui ran it twice: a second,
+/// quick pass laid out what the first one changed. The frame clock was restarted by that pass,
+/// so the frame looked as quick as its second pass and the second click, made while the first
+/// pass worked, was timed from the next frame's start.
+#[test]
+fn a_second_click_queued_behind_a_slow_frame_of_two_passes_still_double_clicks() {
+    let ctx = egui::Context::default();
+    let frame = |t: f64, work_ms: [f64; 2], click: bool| {
+        let mut double = false;
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(t), ..Default::default() }, |ui| {
+            let ctx = ui.ctx();
+            let pass = ctx.current_pass_index();
+            super::frame_began(ctx, None);
+            if click && pass == 0 {
+                double = super::second_click(ctx, true, 7, 5);
+            }
+            if pass == 0 && work_ms[1] > 0.0 {
+                ctx.request_discard("the click changed the layout");
+            }
+            super::frame_ended(ctx, work_ms[pass.min(1)]);
+        });
+        out.textures_delta.clear();
+        double
+    };
+    assert!(!frame(1.0, [900.0, 5.0], true), "the first click");
+    assert!(frame(1.92, [10.0, 0.0], true), "made while the first pass worked: a double-click");
+    frame(5.0, [10.0, 0.0], false);
+    assert!(!frame(10.0, [10.0, 5.0], true));
+    frame(10.2, [10.0, 0.0], false);
+    assert!(!frame(10.7, [10.0, 0.0], true), "0.7 s apart, frames idle between: two clicks");
+}
+
+/// The same with a frame whose painting was slow (textures uploaded, the canvas drawn): eframe's
+/// time for the whole previous frame counts, not only its passes.
+#[test]
+fn a_second_click_queued_behind_slow_painting_still_double_clicks() {
+    let ctx = egui::Context::default();
+    let frame = |t: f64, prev_frame_s: Option<f32>, click: bool| {
+        let mut double = false;
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(t), ..Default::default() }, |ui| {
+            super::frame_began(ui.ctx(), prev_frame_s);
+            if click {
+                double = super::second_click(ui.ctx(), true, 7, 5);
+            }
+            super::frame_ended(ui.ctx(), 10.0);
+        });
+        out.textures_delta.clear();
+        double
+    };
+    assert!(!frame(1.0, None, true), "the first click");
+    assert!(frame(1.95, Some(0.92), true), "made while the frame painted: a double-click");
+    frame(5.0, Some(0.02), false);
+    assert!(!frame(10.0, Some(0.02), true));
+    assert!(!frame(10.7, Some(0.02), true), "0.7 s apart, idle between: two clicks");
 }

@@ -15,7 +15,9 @@
 //! surrounding colours (the model's output drifts a little in tone), so nothing outside the hole
 //! changes. Each part of the hole far from the others is one request ([`crate::inpaint::groups`]),
 //! each billed by Google: about [`PRICE_1K`] (a crop up to [`MAX_1K`] px) or [`PRICE_2K`] (larger
-//! crops, sent at most [`MAX_SEND`] px across).
+//! crops, sent at most [`MAX_SEND`] px across). What each answer actually cost is worked out from
+//! its `usage` tokens at the list prices ([`PRICE_INPUT_PER_M`], [`PRICE_IMAGE_OUT_PER_M`],
+//! [`PRICE_TEXT_OUT_PER_M`]) and added up in [`billed`], which the shell shows in kroner.
 //!
 //! The request goes to the Interactions API with `store: false`, so Google doesn't keep it (it
 //! keeps interactions for 55 days otherwise). The API key is the user's own: the one saved with
@@ -379,6 +381,81 @@ pub fn availability() -> Result<(), MlError> {
 /// What one removal costs at most, in USD: one image per part of the hole.
 pub fn price(sides: &[u32]) -> f64 {
     sides.iter().map(|s| if *s <= MAX_1K { PRICE_1K } else { PRICE_2K }).sum()
+}
+
+// --- What it cost ------------------------------------------------------------------------------
+
+/// Google's standard price of a million input tokens (the prompt and the images sent), USD.
+pub const PRICE_INPUT_PER_M: f64 = 1.50;
+/// Google's standard price of a million image output tokens, USD (a 1K image is 1120 tokens:
+/// [`PRICE_1K`]; a 2K one 1680: [`PRICE_2K`]).
+pub const PRICE_IMAGE_OUT_PER_M: f64 = 30.0;
+/// Google's standard price of a million text and thinking output tokens, USD.
+pub const PRICE_TEXT_OUT_PER_M: f64 = 7.50;
+/// Google's standard price of one 4K output image (USD; only the evaluation example asks for one).
+pub const PRICE_4K: f64 = 0.113;
+
+/// Everything Google billed this run, as `f64` bits (USD): every answer that arrived, also one
+/// that came after its removal was cancelled or that the removal couldn't use.
+static BILLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What Google billed this run in USD, as worked out from its answers ([`answer_cost`]); the
+/// shell takes what grew since it last looked as the cost of the generation that just ended.
+pub fn billed() -> f64 {
+    f64::from_bits(BILLED.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Add `usd` to [`billed`].
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn bill(usd: f64) {
+    use std::sync::atomic::Ordering;
+    if usd.is_finite() && usd > 0.0 {
+        let _ = BILLED.try_update(Ordering::Relaxed, Ordering::Relaxed, |bits| Some((f64::from_bits(bits) + usd).to_bits()));
+    }
+}
+
+/// The output size a request `body` asked for (`1K`, `2K`, `4K`), `2K` when it doesn't say.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn asked_size(body: &str) -> &str {
+    const KEY: &str = "\"image_size\":\"";
+    body.find(KEY).and_then(|i| body.get(i + KEY.len()..)).and_then(|rest| rest.split('"').next()).unwrap_or("2K")
+}
+
+/// What one answer (`text`, the JSON body) to a request for a `size` image cost, USD: its
+/// `usage` tokens at the list prices (input at [`PRICE_INPUT_PER_M`], image output at
+/// [`PRICE_IMAGE_OUT_PER_M`], text and thinking at [`PRICE_TEXT_OUT_PER_M`]; output not split by
+/// modality counts as image). An answer without `usage` costs the list price of the image it
+/// holds ([`PRICE_1K`], [`PRICE_2K`], [`PRICE_4K`]), and one with neither nothing.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn answer_cost(text: &str, size: &str) -> f64 {
+    let Ok(v) = serde_json::from_str::<Value>(text) else { return 0.0 };
+    let tokens = |key: &str| v.pointer(&format!("/usage/{key}")).and_then(Value::as_f64).unwrap_or(0.0).max(0.0);
+    if v.get("usage").is_some_and(Value::is_object) {
+        let output = tokens("total_output_tokens");
+        let by_modality = v.pointer("/usage/output_tokens_by_modality").and_then(Value::as_array);
+        let image = by_modality.map_or(output, |all| {
+            all.iter()
+                .filter(|m| m.get("modality").and_then(Value::as_str).is_some_and(|s| s.eq_ignore_ascii_case("image")))
+                .filter_map(|m| m.get("tokens").and_then(Value::as_f64))
+                .sum()
+        });
+        let text_out = (output - image).max(0.0) + tokens("total_thought_tokens");
+        return (tokens("total_input_tokens") * PRICE_INPUT_PER_M + image * PRICE_IMAGE_OUT_PER_M + text_out * PRICE_TEXT_OUT_PER_M) / 1e6;
+    }
+    let has_image = v
+        .get("steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.get("content").and_then(Value::as_array))
+        .flatten()
+        .any(|b| b.get("type").and_then(Value::as_str) == Some("image"));
+    match (has_image, size) {
+        (false, _) => 0.0,
+        (true, "1K") => PRICE_1K,
+        (true, "4K") => PRICE_4K,
+        (true, _) => PRICE_2K,
+    }
 }
 
 // --- Geometry ----------------------------------------------------------------------------------
@@ -1198,7 +1275,12 @@ fn post(key: &str, body: &str, ctl: &Interrupt) -> Result<String, MlError> {
     std::thread::Builder::new()
         .name("nano-banana".into())
         .spawn(move || {
-            let _ = tx.send(request(&key, &body));
+            let answer = request(&key, &body);
+            // Billed here, so an answer that arrives after a cancel counts too.
+            if let Ok(text) = &answer {
+                bill(answer_cost(text, asked_size(&body)));
+            }
+            let _ = tx.send(answer);
         })
         .map_err(|e| MlError::Inference(format!("couldn't start the request ({e})")))?;
     let start = std::time::Instant::now();

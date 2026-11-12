@@ -272,6 +272,20 @@ fn render_first_run_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, content_
             let _ = app.open_dialog_file();
         }
     });
+
+    // Recent files hidden (Hide, or Preferences): a way back, when there are some.
+    if !cfg!(target_arch = "wasm32") && !app.session.prefs().interface.show_home_recent_files && !app.ui.recent_files.is_empty() {
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            let label = tl!("Show recent files");
+            let w = ui.painter().layout_no_wrap(label.to_string(), crate::theme::medium(12.0), t.text_dim).size().x + 16.0;
+            ui.add_space(((content_w - w) / 2.0).max(0.0));
+            let r = ui.add(egui::Button::new(egui::RichText::new(label).size(12.0).color(t.text_dim)).frame(false));
+            if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("List recent files on the Home screen again")).clicked() {
+                app.session.prefs.edit(|p| p.interface.show_home_recent_files = true);
+            }
+        });
+    }
 }
 
 /// Wayland has no native file drops (winit 0.30, #386), so the hint offers File › Open and paste.

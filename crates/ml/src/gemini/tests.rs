@@ -473,3 +473,52 @@ fn generative_fills_prompt_goes_alone_with_the_unmarked_picture() {
     assert_eq!(prompt(" a cat ", MARKERS[0].1, Intent::Prompt), "a cat");
     assert_eq!(mask_prompt(" a cat ", Intent::Prompt), "a cat");
 }
+
+#[test]
+fn answers_cost_their_usage_at_the_list_prices() {
+    // A 2K image (1680 image tokens) asked with 600 input tokens and 40 thinking tokens.
+    let usage = json!({
+        "usage": {
+            "total_input_tokens": 600,
+            "total_output_tokens": 1700,
+            "output_tokens_by_modality": [{"modality": "image", "tokens": 1680}, {"modality": "text", "tokens": 20}],
+            "total_thought_tokens": 40,
+        },
+        "steps": [],
+    });
+    let want = (600.0 * PRICE_INPUT_PER_M + 1680.0 * PRICE_IMAGE_OUT_PER_M + 60.0 * PRICE_TEXT_OUT_PER_M) / 1e6;
+    assert!((answer_cost(&usage.to_string(), "2K") - want).abs() < 1e-12);
+    // The image tokens alone are the per-image list price.
+    let image_only = json!({"usage": {"total_output_tokens": 1120, "output_tokens_by_modality": [{"modality": "IMAGE", "tokens": 1120}]}});
+    assert!((answer_cost(&image_only.to_string(), "1K") - PRICE_1K).abs() < 1e-12);
+    // Output not split by modality counts as image.
+    let unsplit = json!({"usage": {"total_output_tokens": 1680}});
+    assert!((answer_cost(&unsplit.to_string(), "1K") - PRICE_2K).abs() < 1e-12);
+}
+
+#[test]
+fn answers_without_usage_cost_the_image_they_hold() {
+    let answer = answer_with(&png(&[0.5; 2 * 2 * 3], 2, 2));
+    assert_eq!(answer_cost(&answer, "1K"), PRICE_1K);
+    assert_eq!(answer_cost(&answer, "2K"), PRICE_2K);
+    assert_eq!(answer_cost(&answer, "4K"), PRICE_4K);
+    let words = json!({"steps": [{"type": "model_output", "content": [{"type": "text", "text": "no"}]}]});
+    assert_eq!(answer_cost(&words.to_string(), "2K"), 0.0);
+    assert_eq!(answer_cost("not json", "2K"), 0.0);
+}
+
+#[test]
+fn the_size_asked_comes_from_the_request() {
+    assert_eq!(asked_size(&body(&[], "p", "1:1", (500, 500))), "1K");
+    assert_eq!(asked_size(&body(&[], "p", "1:1", (1500, 1500))), "2K");
+    assert_eq!(asked_size("{}"), "2K");
+}
+
+#[test]
+fn billing_adds_up_and_ignores_nonsense() {
+    let before = billed();
+    bill(0.05);
+    bill(f64::NAN);
+    bill(-1.0);
+    assert!(billed() - before >= 0.05 - 1e-12);
+}

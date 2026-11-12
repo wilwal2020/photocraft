@@ -108,14 +108,129 @@ fn check(text: &str) -> Result<(), String> {
     let Ok(kv) = ron::from_str::<HashMap<String, String>>(text) else { return Ok(()) };
     for (key, value) in &kv {
         // eframe also skips an entry that doesn't parse.
-        let Ok(v) = ron::from_str::<ron::Value>(value) else { continue };
-        floats_sane(&v, 0).map_err(|e| format!("{key}: {e}"))?;
-        let zoom = (key == "egui").then(|| field(&v, "options").and_then(|o| field(o, "zoom_factor")).and_then(as_f64)).flatten();
-        if let Some(z) = zoom.filter(|z| !ZOOM.contains(z)) {
+        let Some(scanned) = scan(value) else { continue };
+        let zoom = scanned.map_err(|e| format!("{key}: {e}"))?;
+        if key == "egui"
+            && let Some(z) = zoom.filter(|z| !ZOOM.contains(z))
+        {
             return Err(format!("egui: zoom factor {z}"));
         }
     }
     Ok(())
+}
+
+/// [`floats_sane`] and the egui zoom factor, read straight off one entry's RON text: every float
+/// outside nested strings must be finite and within [`MAX_COORD`], nesting no deeper than 64;
+/// `Ok` carries the first `zoom_factor` (egui's `options` come first). `None` when the text is not
+/// well-formed (eframe skips such an entry).
+///
+/// Parsing egui's memory into a `ron::Value` instead took seconds at every launch once its list
+/// of closed popups' areas had grown (an 842 KB entry: 4 s of a 6 s start; user report,
+/// 2026-11-11): RON's untyped parser retries each nested `(…)` several ways.
+fn scan(text: &str) -> Option<Result<Option<f64>, String>> {
+    let b = text.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let (mut i, mut depth, mut zoom, mut want_zoom) = (0usize, 0usize, None, false);
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'"' => {
+                // A nested string (egui's persisted values hold RON text of their own): skipped,
+                // as `floats_sane` never looked inside strings.
+                i += 1;
+                loop {
+                    match b.get(i)? {
+                        b'\\' => i += 2,
+                        b'"' => break,
+                        _ => i += 1,
+                    }
+                }
+                i += 1;
+            }
+            b'\'' => {
+                i += 1;
+                loop {
+                    match b.get(i)? {
+                        b'\\' => i += 2,
+                        b'\'' => break,
+                        _ => i += 1,
+                    }
+                }
+                i += 1;
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let end = text[i + 2..].find("*/")?;
+                i += end + 4;
+            }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                if depth > 64 {
+                    return Some(Err("nested too deeply".into()));
+                }
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.checked_sub(1)?;
+                i += 1;
+            }
+            b'0'..=b'9' | b'-' | b'+' | b'.' => {
+                let start = i;
+                i += 1;
+                while i < b.len() && (ident(b[i]) || b[i] == b'.' || ((b[i] == b'-' || b[i] == b'+') && matches!(b[i - 1], b'e' | b'E'))) {
+                    i += 1;
+                }
+                let token = &text[start..i];
+                let body = token.trim_start_matches(['-', '+']);
+                if body == "inf" || body == "NaN" {
+                    return Some(Err(format!("value {token}")));
+                }
+                let hex = body.starts_with("0x") || body.starts_with("0b") || body.starts_with("0o");
+                let float = !hex && (body.contains('.') || body.contains(['e', 'E']));
+                if float {
+                    let digits: String = token.trim_end_matches("f32").trim_end_matches("f64").chars().filter(|c| *c != '_').collect();
+                    if let Ok(f) = digits.parse::<f64>() {
+                        if !f.is_finite() || f.abs() > MAX_COORD {
+                            return Some(Err(format!("value {f}")));
+                        }
+                        if want_zoom && zoom.is_none() {
+                            zoom = Some(f);
+                        }
+                    }
+                }
+                want_zoom = false;
+            }
+            c if ident(c) => {
+                let start = i;
+                while i < b.len() && ident(b[i]) {
+                    i += 1;
+                }
+                let word = &text[start..i];
+                // A raw string, r"…" or r#"…"#: skipped like any string.
+                if word == "r" && matches!(b.get(i), Some(b'"' | b'#')) {
+                    let hashes = text[i..].bytes().take_while(|c| *c == b'#').count();
+                    let close = format!("\"{}", "#".repeat(hashes));
+                    let body = i + hashes + 1;
+                    i = body + text.get(body..)?.find(&close)? + close.len();
+                    continue;
+                }
+                if word == "inf" || word == "NaN" {
+                    return Some(Err(format!("value {word}")));
+                }
+                want_zoom = word == "zoom_factor" && zoom.is_none();
+            }
+            b':' | b',' | b' ' | b'\t' | b'\n' | b'\r' => i += 1,
+            _ => {
+                want_zoom = false;
+                i += 1;
+            }
+        }
+    }
+    (depth == 0).then_some(Ok(zoom))
 }
 
 /// `Some(new_text)` when `text` is an old-schema file that should be rewritten; `None` when it
@@ -221,6 +336,8 @@ fn point_value(v: &ron::Value) -> Option<PointV37> {
 }
 
 /// Every float finite and within [`MAX_COORD`]; depth-limited (the file is untrusted).
+/// The reference walk [`scan`] reproduces without building a `ron::Value` (tests compare them).
+#[cfg(test)]
 fn floats_sane(v: &ron::Value, depth: usize) -> Result<(), String> {
     if depth > 64 {
         return Err("nested too deeply".into());
@@ -384,6 +501,37 @@ mod tests {
         }
         assert!(!super::has_saved_position(None));
         assert!(!super::has_saved_position(Some(&std::env::temp_dir().join("photocraft-missing-ui.ron"))));
+    }
+
+    #[test]
+    fn the_text_scan_agrees_with_the_value_walk() {
+        use super::{floats_sane, scan};
+        // Floats inside nested strings were never checked (egui's persisted values are RON text).
+        assert_eq!(scan("(data:([(1,(ron:\"(x:1e30)\"))]))"), Some(Ok(None)));
+        // Integers (egui's hashed ids) are not coordinates; hex and suffixes are read as such.
+        assert_eq!(scan("(id:18446744073709551615,h:0xFF,z:(zoom_factor:1.5))"), Some(Ok(Some(1.5))));
+        assert_eq!(scan("(zoom_factor:2.0,later:(zoom_factor:0.0))"), Some(Ok(Some(2.0))), "the first one, options'");
+        assert!(scan("(a:-inf)").unwrap().is_err() && scan("(a:-1.5e7)").unwrap().is_err() && scan("(a:2.5e5)").unwrap().is_ok());
+        assert_eq!(scan("(a:r#\"NaN ) ( \"#,b:'(')"), Some(Ok(None)), "raw strings and chars are skipped");
+        assert_eq!(scan("((("), None, "unbalanced");
+        assert_eq!(scan("(a:\"open)"), None, "unterminated string");
+        assert!(scan(&("(".repeat(70) + &")".repeat(70))).unwrap().is_err(), "nested too deeply");
+        // Agrees with the full parse on a realistic egui entry.
+        let egui = "(options:(theme_preference:System,zoom_factor:1.0,tessellation_options:(feathering:true,feathering_size_in_pixels:1.0)),data:([(442875985498941510,(type_id:(4020315281066545825),ron:\"(x:1621.0,y:502.0)\",generation:1))]),areas:{((18446744073709551615)):(areas:{(10191671437090508800):(pivot_pos:Some((x:2310.0,y:721.0)),pivot:((Min,Min)),interactable:false)})})";
+        let v: ron::Value = ron::from_str(egui).unwrap();
+        assert_eq!(floats_sane(&v, 0), Ok(()));
+        assert_eq!(scan(egui), Some(Ok(Some(1.0))));
+    }
+
+    #[test]
+    fn a_big_egui_memory_checks_quickly() {
+        // 3000 closed popups' areas, as a user's ui.ron had grown to (842 KB; 4 s to parse untyped).
+        let areas: Vec<String> = (0..3000u64).map(|i| format!("({}):(pivot_pos:Some((x:{}.5,y:721.0)),pivot:((Min,Min)),interactable:false)", i * 7919, i)).collect();
+        let egui = format!("(options:(zoom_factor:1.0),areas:{{((18446744073709551615)):(areas:{{{}}})}})", areas.join(","));
+        let text = format!("{{\"egui\":{egui:?}}}");
+        let t = std::time::Instant::now();
+        assert_eq!(check(&text), Ok(()));
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
     }
 
     #[test]

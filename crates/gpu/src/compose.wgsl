@@ -60,6 +60,7 @@ const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment res
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
+const F_AMOUNT_COVER: u32 = 4194304u; // adjmix: B (Shading/Lighting with its clipped layers) at full coverage where opacity × mask > 0
 const F_FX_MASK: u32 = 2097152u;   // lerp: B (A with an effect painted) back towards A by the pass mask (the effect's own mask); p0.x linear, p0.y A reads as zero
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
@@ -525,6 +526,338 @@ fn lut_at(i: i32) -> f32 {
 fn lut3(n: i32, r: i32, g: i32, b: i32) -> vec3<f32> {
     let i = ((b * n + g) * n + r) * 3;
     return vec3(lut_at(i), lut_at(i + 1), lut_at(i + 2));
+}
+
+// Shading: compose::adjust::shading (see there for the rules). `op.color` = mood colour and the
+// transfer exponent; p0 = depth, saturation, hue shift, split hue; p1 = protect neutrals, ambient
+// amount, protect darks, steps; p2 = ambient direction (a, b), mood amount; p3.y = saturation
+// curve. The gamut table is in the LUT rows: 257 lightness steps × 360 hues.
+const SHADING_KIND: i32 = 19;
+const SHADING_TABLE_L: i32 = 257;
+const SHADING_TABLE_H: i32 = 360;
+
+fn shading_ss(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+fn shading_cbrt(v: f32) -> f32 { return sign(v) * pow(abs(v), 1.0 / 3.0); }
+fn shading_to_oklab(c: vec3<f32>) -> vec3<f32> {
+    let l = shading_cbrt(0.41222146 * c.r + 0.53633255 * c.g + 0.051445995 * c.b);
+    let m = shading_cbrt(0.2119035 * c.r + 0.6806995 * c.g + 0.10739696 * c.b);
+    let s = shading_cbrt(0.08830246 * c.r + 0.28171885 * c.g + 0.6299787 * c.b);
+    return vec3(0.21045426 * l + 0.7936178 * m - 0.004072047 * s,
+                1.9779985 * l - 2.4285922 * m + 0.4505937 * s,
+                0.025904037 * l + 0.78277177 * m - 0.80867577 * s);
+}
+fn shading_from_oklab(c: vec3<f32>) -> vec3<f32> {
+    let l_ = c.x + 0.39633778 * c.y + 0.21580376 * c.z;
+    let m_ = c.x - 0.105561346 * c.y - 0.06385417 * c.z;
+    let s_ = c.x - 0.08948418 * c.y - 1.2914855 * c.z;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    return vec3(4.0767417 * l3 - 3.3077116 * m3 + 0.23096994 * s3,
+                -1.268438 * l3 + 2.6097574 * m3 - 0.34131938 * s3,
+                -0.0041960863 * l3 - 0.7034186 * m3 + 1.7076147 * s3);
+}
+// The parameters past the four words, stored right after the gamut table (gpu::plan::lower::
+// rows_with). Shading: 0 chroma retention, 1 self-bounce, 2 terminator hue, 3 terminator amount,
+// 4 its position, 5 its width, 6 physical (0/1), 7..9 the ambient light (linear, luminance 1),
+// 10 picker axes ("Shading 2", 0/1), 11 its saturation shift.
+// Lighting: 0 gloss, 1 gloss size, 2 metallic (0/1).
+fn shading_extra(i: i32) -> f32 { return lut_at(SHADING_TABLE_L * SHADING_TABLE_H + i); }
+// compose::adjust::shading::hue_diff.
+fn shading_hue_diff(from_h: f32, to_h: f32) -> f32 {
+    let x = to_h - from_h + 180.0;
+    return x - floor(x / 360.0) * 360.0 - 180.0;
+}
+fn shading_table(li: i32, hi: i32) -> f32 { return lut_at(li * SHADING_TABLE_H + hi % SHADING_TABLE_H); }
+fn shading_max_chroma(l: f32, h: f32) -> f32 {
+    let lf = clamp(l, 0.0, 1.0) * f32(SHADING_TABLE_L - 1);
+    let hf = (h - floor(h / 360.0) * 360.0) * f32(SHADING_TABLE_H) / 360.0;
+    let l0 = i32(floor(lf));
+    let h0 = i32(floor(hf));
+    let l1 = min(l0 + 1, SHADING_TABLE_L - 1);
+    let h1 = (h0 + 1) % SHADING_TABLE_H;
+    let fl = lf - f32(l0);
+    let fh = hf - f32(h0);
+    let a = shading_table(l0, h0) + (shading_table(l0, h1) - shading_table(l0, h0)) * fh;
+    let b = shading_table(l1, h0) + (shading_table(l1, h1) - shading_table(l1, h0)) * fh;
+    return a + (b - a) * fl;
+}
+// compose::adjust::shading::{rgb_to_hsb, hsb_to_rgb, swing}: Saturation Curve swings the
+// colour picker's saturation out and back on the way; the curve is p3.y for both kinds.
+fn shading_hsb(c: vec3<f32>) -> vec3<f32> {
+    let mx = max(max(c.r, c.g), c.b);
+    let mn = min(min(c.r, c.g), c.b);
+    let d = mx - mn;
+    var h = 0.0;
+    if (d > 0.0) {
+        if (mx == c.r) {
+            let x = (c.g - c.b) / d;
+            h = 60.0 * (x - floor(x / 6.0) * 6.0);
+        } else if (mx == c.g) {
+            h = 60.0 * ((c.b - c.r) / d + 2.0);
+        } else {
+            h = 60.0 * ((c.r - c.g) / d + 4.0);
+        }
+    }
+    var s = 0.0;
+    if (mx > 0.0) { s = d / mx; }
+    return vec3(h, s, mx);
+}
+fn shading_rgb(hsb: vec3<f32>) -> vec3<f32> {
+    var h = (hsb.x - floor(hsb.x / 360.0) * 360.0) / 60.0;
+    if (h >= 6.0) { h = 0.0; }
+    let s = hsb.y;
+    let v = hsb.z;
+    let f = h - floor(h);
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let i = i32(floor(h));
+    if (i == 0) { return vec3(v, t, p); }
+    if (i == 1) { return vec3(q, v, p); }
+    if (i == 2) { return vec3(p, v, t); }
+    if (i == 3) { return vec3(p, q, v); }
+    if (i == 4) { return vec3(t, p, v); }
+    return vec3(v, p, q);
+}
+// compose::adjust::shading::{path_at, hue_at, band, bend}: the Advanced Curve and the Hue Curve.
+// Extras 15 and 16 are their flags; the Advanced Curve's table (256 points along the curve,
+// saturation and brightness progress) follows from 17, the Hue Curve's (256 turns) from 529.
+fn shading_path_on() -> bool { return shading_extra(15) > 0.5; }
+fn shading_hue_on() -> bool { return shading_extra(16) > 0.5; }
+fn shading_path_at(a: f32) -> vec2<f32> {
+    let x = clamp(a, 0.0, 1.0) * 255.0;
+    let i = min(i32(floor(x)), 255);
+    let j = min(i + 1, 255);
+    let p = vec2(shading_extra(17 + 2 * i), shading_extra(18 + 2 * i));
+    let q = vec2(shading_extra(17 + 2 * j), shading_extra(18 + 2 * j));
+    return p + (q - p) * (x - f32(i));
+}
+fn shading_hue_at(a: f32) -> f32 {
+    let x = clamp(a, 0.0, 1.0) * 255.0;
+    let i = min(i32(floor(x)), 255);
+    let j = min(i + 1, 255);
+    let t0 = shading_extra(529 + i);
+    return t0 + (shading_extra(529 + j) - t0) * (x - f32(i));
+}
+fn shading_band(p: f32, v0: f32, v1: f32, before: f32, beyond: f32) -> f32 {
+    if (p < 0.0) { return v0 + (before - v0) * min(-p / 0.5, 1.0); }
+    if (p > 1.0) { return v1 + (beyond - v1) * min((p - 1.0) / 0.5, 1.0); }
+    return v0 + (v1 - v0) * p;
+}
+fn shading_bend(path: vec3<f32>, base: vec3<f32>, end: vec3<f32>, at: vec2<f32>, turn: f32, a: f32, k: f32, kv: f32, lighting: bool, literal: bool) -> vec3<f32> {
+    if (abs(at.x - a) <= 1e-6 && abs(at.y - a) <= 1e-6 && abs(turn - a) <= 1e-6) { return path; }
+    let hp = shading_hsb(clamp(path, vec3(0.0), vec3(1.0)));
+    let h0 = shading_hsb(clamp(base, vec3(0.0), vec3(1.0)));
+    let h1 = shading_hsb(clamp(end, vec3(0.0), vec3(1.0)));
+    var before = 1.0;
+    var beyond = 0.0;
+    if (lighting) { before = 0.0; beyond = 1.0; }
+    var ds = shading_band(at.x, h0.y, h1.y, 0.0, 1.0) - shading_band(a, h0.y, h1.y, 0.0, 1.0);
+    var dv = shading_band(at.y, h0.z, h1.z, before, beyond) - shading_band(a, h0.z, h1.z, before, beyond);
+    if (literal) {
+        // Literal Curve: the drawn shape, the same scale both ways (the path's length).
+        let scale = length(vec2(h1.y - h0.y, h1.z - h0.z)) / sqrt(2.0);
+        ds = (at.x - a) * scale;
+        dv = (at.y - a) * scale * (beyond - before);
+    }
+    ds = ds * clamp(k, 0.0, 1.0);
+    if (ds > 0.0) { ds = ds * shading_ss(0.0, 0.02, max(hp.y, max(h0.y, h1.y))); }
+    dv = dv * clamp(kv, 0.0, 1.0);
+    var hue = hp.x;
+    if (!(hp.y > 1e-3)) {
+        if (h1.y > 1e-3) { hue = h1.x; } else { hue = h0.x; }
+    }
+    if (abs(turn - a) > 1e-6 && h0.y > 1e-3 && h1.y > 1e-3) { hue = hue + (turn - a) * shading_hue_diff(h0.x, h1.x); }
+    return shading_rgb(vec3(hue, clamp(hp.y + ds, 0.0, 1.0), clamp(hp.z + dv, 0.0, 1.0)));
+}
+
+// compose::adjust::shading::{Prepared::stepped, shade_lin, mood, apply_shading}: document-encoded
+// `c` at amount `amount` (opacity × mask).
+fn shading_px(c: vec3<f32>, amount: f32) -> vec3<f32> {
+    let g = op.color.w;
+    var a = clamp(amount, 0.0, 1.0);
+    let steps = op.p1.w;
+    if (steps >= 2.0) { a = floor(a * steps + 0.5) / steps; }
+    if (a <= 0.0) { return c; }
+    let lin = clamp(vec3(t_decode(c.r, g), t_decode(c.g, g), t_decode(c.b, g)), vec3(0.0), vec3(1.0));
+    let r = shading_path(lin, a);
+    var shaded = r.xyz;
+    if (shading_path_on() || shading_hue_on()) {
+        let kv = 1.0 - op.p1.z * (1.0 - shading_ss(0.2, 0.5, shading_to_oklab(lin).x));
+        var at = vec2(a, a);
+        if (shading_path_on()) { at = shading_path_at(a); }
+        var turn = a;
+        if (shading_hue_on()) { turn = shading_hue_at(a); }
+        shaded = shading_bend(shaded, c, shading_path(lin, 1.0).xyz, at, turn, a, r.w, kv, false, op.p3.x > 0.5);
+    }
+    let mk = op.p2.z * a;
+    if (mk <= 0.0) { return shaded; }
+    return shaded * (vec3(1.0) - mk * (vec3(1.0) - op.color.rgb));
+}
+
+// compose::adjust::shading::Prepared::shade_lin_weighted: linear `lin` (clamped) on the path at
+// amount `a` (stepped), document-encoded, with how much of the curves the colour takes in w.
+fn shading_path(lin: vec3<f32>, a: f32) -> vec4<f32> {
+    let g = op.color.w;
+    if (a <= 0.0) { return vec4(t_encode(lin.r, g), t_encode(lin.g, g), t_encode(lin.b, g), 0.0); }
+    let amt = a;
+    let lab = shading_to_oklab(lin);
+    let l = lab.x;
+    let chroma = length(lab.yz);
+    let hue0 = degrees(atan2(lab.z, lab.y));
+    let hue = hue0 - floor(hue0 / 360.0) * 360.0;
+    let keep = 1.0 - op.p1.z * (1.0 - shading_ss(0.2, 0.5, l));
+    let ae = amt * keep;
+    let c0 = 0.05 * op.p1.x;
+    var w = 1.0;
+    if (c0 > 0.0) { w = shading_ss(0.3 * c0, 1.3 * c0, chroma); }
+    let l2 = l * (1.0 - op.p0.x * ae);
+    let ratio = clamp(l2 / max(l, 1e-6), 0.0, 1.0);
+    let dd0 = hue - op.p0.w + 180.0;
+    let dd = dd0 - floor(dd0 / 360.0) * 360.0 - 180.0;
+    let to_pole = 180.0 - abs(dd);
+    let taper = shading_ss(0.0, 30.0, abs(dd)) * shading_ss(0.0, 70.0, to_pole);
+    var h2 = 0.0;
+    var base = 0.0;
+    if (shading_extra(6) > 0.5) {
+        // Physical: the local colour lit by the ambient colour, at its own lightness.
+        let amb = vec3(shading_extra(7), shading_extra(8), shading_extra(9));
+        let pl = shading_to_oklab(lin * (vec3(1.0) + (amb - vec3(1.0)) * ae * 0.5));
+        let k = l / max(pl.x, 1e-6);
+        let hp = degrees(atan2(pl.z, pl.y));
+        h2 = hp - floor(hp / 360.0) * 360.0;
+        base = length(pl.yz * k);
+    } else {
+        let turned = min(op.p0.z * ae * w * taper, to_pole);
+        h2 = hue + select(-1.0, 1.0, dd >= 0.0) * turned;
+        base = chroma;
+    }
+    let picker = shading_extra(10) > 0.5;
+    var retention = shading_extra(0);
+    if (picker) { retention = 0.0; }
+    var kept = base * pow(max(ratio, 1e-6), 1.0 - retention);
+    let sbv = shading_extra(1);
+    if (sbv > 0.0 && chroma > 1e-5) {
+        // Self-bounce: multi-bounce occlusion per channel, as a hue turn and chroma ratio.
+        let v = ratio * ratio * ratio;
+        let pb = shading_to_oklab(lin * v / max(vec3(1.0) - (1.0 - v) * lin, vec3(1e-6)));
+        let cb = length(pb.yz) * l2 / max(pb.x, 1e-6);
+        let sb = sbv * w;
+        h2 = h2 + shading_hue_diff(hue, degrees(atan2(pb.z, pb.y))) * sb;
+        kept = kept * (1.0 + (clamp(cb / max(chroma * ratio, 1e-6), 0.0, 4.0) - 1.0) * sb);
+    }
+    let cmax = max(shading_max_chroma(l2, h2), 0.0);
+    var push = clamp(op.p0.y * ae * w, 0.0, 1.0);
+    if (picker) { push = clamp(shading_extra(11) * ae * w, -1.0, 1.0); }
+    var c2 = kept * (1.0 + push);
+    if (push >= 0.0) { c2 = kept + max(cmax - kept, 0.0) * push; }
+    c2 = min(c2, cmax);
+    // Terminator band: a bump on the amount, toward the band hue and the gamut edge.
+    let x = (a - shading_extra(4)) / shading_extra(5);
+    var bump = 0.0;
+    if (abs(x) < 1.0) { bump = (1.0 - x * x) * (1.0 - x * x); }
+    let th = shading_extra(2);
+    let tk = shading_extra(3) * bump * shading_ss(-0.2, 1.0, cos(radians(shading_hue_diff(h2, th)))) * keep * w;
+    if (tk > 0.0) {
+        h2 = h2 + shading_hue_diff(h2, th) * tk * 0.6;
+        let cm2 = max(shading_max_chroma(l2, h2), 0.0);
+        c2 = min(c2 + max(cm2 - c2, 0.0) * tk * 0.6, max(cm2, c2));
+    }
+    let tint = 0.06 * op.p1.y * ae;
+    let r = radians(h2);
+    let out_lab = vec3(l2, c2 * cos(r) + op.p2.x * tint, c2 * sin(r) + op.p2.y * tint);
+    let out_lin = clamp(shading_from_oklab(out_lab), vec3(0.0), vec3(1.0));
+    return vec4(t_encode(out_lin.r, g), t_encode(out_lin.g, g), t_encode(out_lin.b, g), keep * w);
+}
+
+// Lighting: compose::adjust::lighting (the mirror of Shading). `op.color` = glow colour and the
+// transfer exponent; p0 = lift, saturation, hue shift, light hue; p1 = protect neutrals, light
+// amount, protect darks, steps; p2 = light direction (a, b), glow amount; p3.y = saturation
+// curve, p3.z = highlight fade, p3.w = the light colour's OKLab chroma. The same gamut table in
+// the LUT rows.
+const LIGHTING_KIND: i32 = 20;
+
+// compose::adjust::lighting::{Prepared::stepped, light_lin, glow, apply_lighting}: document-encoded
+// `c` at amount `amount` (opacity × mask).
+fn lighting_px(c: vec3<f32>, amount: f32) -> vec3<f32> {
+    let g = op.color.w;
+    var a = clamp(amount, 0.0, 1.0);
+    let steps = op.p1.w;
+    if (steps >= 2.0) { a = floor(a * steps + 0.5) / steps; }
+    if (a <= 0.0) { return c; }
+    let lin = clamp(vec3(t_decode(c.r, g), t_decode(c.g, g), t_decode(c.b, g)), vec3(0.0), vec3(1.0));
+    let r = lighting_path(lin, a);
+    var lit = r.xyz;
+    // Glow and the Advanced Curve's brightness spare linework too (Protect Darks).
+    let keep = 1.0 - op.p1.z * (1.0 - shading_ss(0.15, 0.35, shading_to_oklab(lin).x));
+    if (shading_path_on() || shading_hue_on()) {
+        var at = vec2(a, a);
+        if (shading_path_on()) { at = shading_path_at(a); }
+        var turn = a;
+        if (shading_hue_on()) { turn = shading_hue_at(a); }
+        lit = shading_bend(lit, c, lighting_path(lin, 1.0).xyz, at, turn, a, r.w, keep, true, op.p3.x > 0.5);
+    }
+    let gk = op.p2.z * a * keep;
+    if (gk <= 0.0) { return lit; }
+    return vec3(1.0) - (vec3(1.0) - lit) * (vec3(1.0) - gk * op.color.rgb);
+}
+
+// compose::adjust::lighting::Prepared::light_lin_weighted: linear `lin` (clamped) on the path at
+// amount `a` (stepped), document-encoded, with how much of the curves the colour takes in w.
+fn lighting_path(lin: vec3<f32>, a: f32) -> vec4<f32> {
+    let g = op.color.w;
+    if (a <= 0.0) { return vec4(t_encode(lin.r, g), t_encode(lin.g, g), t_encode(lin.b, g), 0.0); }
+    let amt = a;
+    let lab = shading_to_oklab(lin);
+    let l = lab.x;
+    let chroma = length(lab.yz);
+    let hue0 = degrees(atan2(lab.z, lab.y));
+    let hue = hue0 - floor(hue0 / 360.0) * 360.0;
+    let keep = 1.0 - op.p1.z * (1.0 - shading_ss(0.15, 0.35, l));
+    let ae = amt * keep;
+    let c0 = 0.05 * op.p1.x;
+    var w = 1.0;
+    if (c0 > 0.0) { w = shading_ss(0.3 * c0, 1.3 * c0, chroma); }
+    let l2 = l + max(1.0 - l, 0.0) * op.p0.x * ae;
+    let away0 = op.p0.w + 180.0;
+    let away = away0 - floor(away0 / 360.0) * 360.0;
+    let dd0 = hue - away + 180.0;
+    let dd = dd0 - floor(dd0 / 360.0) * 360.0 - 180.0;
+    let to_light = 180.0 - abs(dd);
+    let taper = shading_ss(0.0, 30.0, abs(dd)) * shading_ss(0.0, 70.0, to_light);
+    let turned = min(op.p0.z * ae * w * taper, to_light);
+    let h2 = hue + select(-1.0, 1.0, dd >= 0.0) * turned;
+    let cm0 = max(shading_max_chroma(l, hue), 1e-4);
+    let cm1 = max(shading_max_chroma(l2, h2), 0.0);
+    let rel = min(chroma / cm0, 1.0);
+    let kept = min(chroma + (rel * cm1 - chroma) * 0.5, cm1);
+    let c2 = kept + max(cm1 - kept, 0.0) * clamp(op.p0.y * ae * w, 0.0, 1.0);
+    let tint = 0.06 * op.p1.y * ae;
+    // Highlight Fade: p3.z = amount, p3.w = the light colour's chroma.
+    let metallic = shading_extra(2) > 0.5;
+    var fade = op.p3.z * shading_ss(0.7, 1.0, a) * keep;
+    if (metallic) { fade = 0.0; }
+    let fl = op.p3.w * 0.5 * fade;
+    let r = radians(h2);
+    let cf = c2 * (1.0 - fade);
+    var out_lab = vec3(l2, cf * cos(r) + op.p2.x * (tint + fl), cf * sin(r) + op.p2.y * (tint + fl));
+    // Gloss: the top of the light toward white and a pale light colour (metal: its own colour).
+    let gsk = shading_extra(0) * shading_ss(1.0 - shading_extra(1), 1.0, a) * keep;
+    if (gsk > 0.0) {
+        let lg = out_lab.x + max(1.0 - out_lab.x, 0.0) * gsk * select(0.85, 0.5, metallic);
+        var tg = op.p2.xy * op.p3.w * 0.35;
+        if (metallic) {
+            let cm = max(shading_max_chroma(lg, h2), 0.0) * 0.8 * w;
+            tg = vec2(cm * cos(r), cm * sin(r));
+        }
+        out_lab = vec3(lg, out_lab.yz + (tg - out_lab.yz) * gsk);
+    }
+    let out_lin = clamp(shading_from_oklab(out_lab), vec3(0.0), vec3(1.0));
+    return vec4(t_encode(out_lin.r, g), t_encode(out_lin.g, g), t_encode(out_lin.b, g), keep * w);
 }
 
 // Grain: compose::adjust::{grain_hash, grain_white, grain_noise}; the raw noise is integer-exact.
@@ -1029,9 +1362,23 @@ fn fs_adjust(in: VOut) -> @location(0) vec4<f32> {
 fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     let b = textureLoad(tex_a, p, 0);
-    let k = op.opacity * mask_value(doc_px(p));
+    var k = op.opacity * mask_value(doc_px(p));
     if (k <= 0.0) { return b; }
-    let a = textureLoad(tex_b, p, 0);
+    var a = textureLoad(tex_b, p, 0);
+    if (op.kind == SHADING_KIND) {
+        // Shading: opacity × mask is the shadow amount; the shaded colour goes in at full
+        // strength (compose::composite_layer).
+        if (b.a <= 0.0) { return b; }
+        a = vec4(shading_px(b.rgb, k), b.a);
+        k = 1.0;
+    } else if (op.kind == LIGHTING_KIND) {
+        // Lighting, likewise: opacity × mask is the light amount.
+        if (b.a <= 0.0) { return b; }
+        a = vec4(lighting_px(b.rgb, k), b.a);
+        k = 1.0;
+    } else if ((op.flags & F_AMOUNT_COVER) != 0u) {
+        k = 1.0;
+    }
     if (op.mode == M_DISSOLVE) {
         return select(b, vec4(a.rgb, b.a), dissolve_noise(doc_px(p)) < k);
     }

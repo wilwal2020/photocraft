@@ -434,6 +434,18 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         }
         let mut adjusted = Buffer::transparent(rect);
         adjusted.px.copy_from_slice(&backdrop.px);
+        // Shading and Lighting read their opacity × mask as the amount (each amount its own
+        // colour, see adjust::shading), and the result then replaces the backdrop wherever it acts.
+        if crate::adjust::reads_mask_as_amount(adj) && layer.blend != BlendMode::Dissolve {
+            let (k, fill) =
+                if layer.fill_opacity < 1.0 && psblend::fill_is_special(layer.blend) { (layer.opacity, layer.fill_opacity) } else { (opacity, 1.0) };
+            let amounts: Vec<f32> = (0..adjusted.px.len()).map(|i| k * mask_k(&mv, i)).collect();
+            crate::adjust::apply_at_amounts(adj, &mut adjusted, &amounts, cx.transfer);
+            advanced::composite_clipped(clipped, &mut adjusted, cx);
+            blend_back(&mut backdrop.px, &adjusted.px, amounts.iter().map(|&a| if a > 0.0 { 1.0 } else { 0.0 }), layer.blend, fill);
+            recycle_mask(mv);
+            return;
+        }
         cx.apply_adjustment(adj, &mut adjusted);
         // Clipped layers onto an adjustment are uncommon; they composite atop the adjusted result.
         advanced::composite_clipped(clipped, &mut adjusted, cx);
@@ -650,10 +662,19 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let rect = base.rect;
     if let LayerContent::Adjustment(adj) = &layer.content {
         let mut adjusted = base.clone();
-        cx.apply_adjustment(adj, &mut adjusted);
         let mv = mask_vals(layer, rect, cx);
+        // Shading and Lighting: opacity × mask is the amount, and the result goes in at full
+        // strength wherever there is any (see `composite_layer`).
+        let shading = crate::adjust::reads_mask_as_amount(adj) && layer.blend != BlendMode::Dissolve;
+        if shading {
+            let amounts: Vec<f32> = (0..adjusted.px.len()).map(|i| layer.opacity * layer.fill_opacity * mask_k(&mv, i)).collect();
+            crate::adjust::apply_at_amounts(adj, &mut adjusted, &amounts, cx.transfer);
+        } else {
+            cx.apply_adjustment(adj, &mut adjusted);
+        }
         for (i, p) in base.px.iter_mut().enumerate() {
             let k = layer.opacity * layer.fill_opacity * mask_k(&mv, i);
+            let k = if shading && k > 0.0 { 1.0 } else { k };
             let a = adjusted.px[i];
             if layer.blend == BlendMode::Dissolve {
                 let x = rect.x0 + (i % rect.width() as usize) as i32;

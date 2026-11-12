@@ -11,7 +11,7 @@
 
 use photocraft_color::ColorMode;
 use photocraft_doc::Adjustment;
-use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, ToneSpace, curve_map, curve_map_outputs};
+use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, Lighting, Shading, ToneSpace, curve_map, curve_map_outputs};
 use serde_json::{Map, Value, json};
 
 use crate::{EngineError, Result};
@@ -277,6 +277,71 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
                 seed,
             }
         }
+        // "shading2" is Shading on the colour picker's axes (`Shading::picker_axes`).
+        "shading" | "shading2" => {
+            let picker_axes = kind == "shading2";
+            let b = match base {
+                Some(Adjustment::Shading(s)) => s.clone(),
+                _ if picker_axes => Shading::picker(),
+                _ => Shading::default(),
+            };
+            // Percentages in the params, fractions in the document.
+            let pct = |key: &str, v: f32| r.num(key, v * 100.0, 0.0, 100.0).map(|x| x / 100.0);
+            Adjustment::Shading(Shading {
+                depth: pct("depth", b.depth)?,
+                saturation: pct("saturation", b.saturation)?,
+                saturation_curve: r.num("saturationCurve", b.saturation_curve * 100.0, -100.0, 100.0)? / 100.0,
+                hue_shift: r.num("hueShift", b.hue_shift, 0.0, 90.0)?,
+                split_hue: r.num("splitHue", b.split_hue, 0.0, 360.0)?,
+                protect_neutrals: pct("protectNeutrals", b.protect_neutrals)?,
+                ambient: r.color("ambient", b.ambient)?,
+                ambient_amount: pct("ambientAmount", b.ambient_amount)?,
+                mood: r.color("mood", b.mood)?,
+                mood_amount: pct("moodAmount", b.mood_amount)?,
+                protect_darks: pct("protectDarks", b.protect_darks)?,
+                steps: r.num("steps", b.steps as f32, 0.0, 8.0)?.round() as u32,
+                chroma_retention: pct("chromaRetention", b.chroma_retention)?,
+                self_bounce: pct("selfBounce", b.self_bounce)?,
+                terminator: r.color("terminator", b.terminator)?,
+                terminator_amount: pct("terminatorAmount", b.terminator_amount)?,
+                terminator_position: pct("terminatorPosition", b.terminator_position)?,
+                terminator_width: r.num("terminatorWidth", b.terminator_width * 100.0, 5.0, 100.0)? / 100.0,
+                physical: r.boolean("physical", b.physical)?,
+                picker_axes,
+                saturation_shift: r.num("saturationShift", b.saturation_shift * 100.0, -100.0, 100.0)? / 100.0,
+                saturation_points: saturation_points(&r, &b.saturation_points)?,
+                hue_points: hue_points(&r, &b.hue_points)?,
+                literal_curve: r.boolean("literalCurve", b.literal_curve)?,
+            })
+        }
+        "lighting" => {
+            let b = match base {
+                Some(Adjustment::Lighting(s)) => s.clone(),
+                _ => Lighting::default(),
+            };
+            let pct = |key: &str, v: f32| r.num(key, v * 100.0, 0.0, 100.0).map(|x| x / 100.0);
+            Adjustment::Lighting(Lighting {
+                lift: pct("lift", b.lift)?,
+                saturation: pct("saturation", b.saturation)?,
+                saturation_curve: r.num("saturationCurve", b.saturation_curve * 100.0, -100.0, 100.0)? / 100.0,
+                highlight_fade: pct("highlightFade", b.highlight_fade)?,
+                hue_shift: r.num("hueShift", b.hue_shift, 0.0, 90.0)?,
+                light_hue: r.num("lightHue", b.light_hue, 0.0, 360.0)?,
+                protect_neutrals: pct("protectNeutrals", b.protect_neutrals)?,
+                light: r.color("light", b.light)?,
+                light_amount: pct("lightAmount", b.light_amount)?,
+                glow: r.color("glow", b.glow)?,
+                glow_amount: pct("glowAmount", b.glow_amount)?,
+                protect_darks: pct("protectDarks", b.protect_darks)?,
+                steps: r.num("steps", b.steps as f32, 0.0, 8.0)?.round() as u32,
+                gloss: pct("gloss", b.gloss)?,
+                gloss_size: r.num("glossSize", b.gloss_size * 100.0, 2.0, 50.0)? / 100.0,
+                metallic: r.boolean("metallic", b.metallic)?,
+                saturation_points: saturation_points(&r, &b.saturation_points)?,
+                hue_points: hue_points(&r, &b.hue_points)?,
+                literal_curve: r.boolean("literalCurve", b.literal_curve)?,
+            })
+        }
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
 }
@@ -361,6 +426,58 @@ pub fn to_params(adj: &Adjustment) -> Value {
             json!({"interpolation": if *tetrahedral { "tetrahedral" } else { "trilinear" }, "dither": dither})
         }
         Adjustment::Grain { amount, size, roughness, .. } => json!({"amount": amount, "size": size, "roughness": roughness}),
+        Adjustment::Shading(s) => {
+            let pct = |v: f32| (v * 10000.0).round() / 100.0;
+            json!({
+                "depth": pct(s.depth),
+                "saturation": pct(s.saturation),
+                "saturationCurve": pct(s.saturation_curve),
+                "hueShift": s.hue_shift,
+                "splitHue": s.split_hue,
+                "protectNeutrals": pct(s.protect_neutrals),
+                "ambient": hex(s.ambient),
+                "ambientAmount": pct(s.ambient_amount),
+                "mood": hex(s.mood),
+                "moodAmount": pct(s.mood_amount),
+                "protectDarks": pct(s.protect_darks),
+                "steps": s.steps,
+                "chromaRetention": pct(s.chroma_retention),
+                "selfBounce": pct(s.self_bounce),
+                "terminator": hex(s.terminator),
+                "terminatorAmount": pct(s.terminator_amount),
+                "terminatorPosition": pct(s.terminator_position),
+                "terminatorWidth": pct(s.terminator_width),
+                "physical": s.physical,
+                "saturationShift": pct(s.saturation_shift),
+                "saturationPoints": saturation_points_arr(&s.saturation_points),
+                "huePoints": saturation_points_arr(&s.hue_points),
+                "literalCurve": s.literal_curve,
+            })
+        }
+        Adjustment::Lighting(s) => {
+            let pct = |v: f32| (v * 10000.0).round() / 100.0;
+            json!({
+                "lift": pct(s.lift),
+                "saturation": pct(s.saturation),
+                "saturationCurve": pct(s.saturation_curve),
+                "highlightFade": pct(s.highlight_fade),
+                "hueShift": s.hue_shift,
+                "lightHue": s.light_hue,
+                "protectNeutrals": pct(s.protect_neutrals),
+                "light": hex(s.light),
+                "lightAmount": pct(s.light_amount),
+                "glow": hex(s.glow),
+                "glowAmount": pct(s.glow_amount),
+                "protectDarks": pct(s.protect_darks),
+                "steps": s.steps,
+                "gloss": pct(s.gloss),
+                "glossSize": pct(s.gloss_size),
+                "metallic": s.metallic,
+                "saturationPoints": saturation_points_arr(&s.saturation_points),
+                "huePoints": saturation_points_arr(&s.hue_points),
+                "literalCurve": s.literal_curve,
+            })
+        }
     }
 }
 
@@ -540,6 +657,60 @@ fn levels(r: &Reader<'_>, base: Option<&Adjustment>, mode: ColorMode) -> Result<
     }
     let [c0, c1, c2, black] = chans;
     Ok(Adjustment::Levels { master, per_channel: [c0, c1, c2], space, black: if space == ToneSpace::Cmyk { black } else { LevelsChannel::default() } })
+}
+
+/// Shading's and Lighting's Advanced Curve (`saturationPoints`): the path `[[x, y], …]` in the
+/// order drawn, in Curves' 0..255 units with the base colour at [0, 255] and full shadow or light
+/// at [255, 0]; points may sit up to half the box past it (-127.5..382.5), where the curve runs
+/// on toward the picker's edges. Null, or nothing between the ends, is no curve (the Saturation
+/// Curve slider's then).
+fn saturation_points(r: &Reader<'_>, base: &[CurvePoint]) -> Result<Vec<CurvePoint>> {
+    let err = || bad(r.cmd, "`saturationPoints` must be null or an array of up to 16 [x, y] pairs in -127.5..382.5");
+    match r.p.get("saturationPoints") {
+        None => Ok(base.to_vec()),
+        Some(Value::Null) => Ok(Vec::new()),
+        Some(v) => {
+            let a = v.as_array().filter(|a| a.len() <= 64).ok_or_else(err)?;
+            let mut pts = Vec::with_capacity(a.len());
+            for q in a {
+                let q = q.as_array().filter(|q| q.len() == 2).ok_or_else(err)?;
+                let n = |v: Option<&Value>| v.and_then(Value::as_f64).filter(|v| (-127.5 - 1e-6..=382.5 + 1e-6).contains(v));
+                pts.push(CurvePoint { input: n(q.first()).ok_or_else(err)? as f32 / 255.0, output: n(q.get(1)).ok_or_else(err)? as f32 / 255.0 });
+            }
+            Ok(photocraft_doc::adjust::sanitized_points(&pts))
+        }
+    }
+}
+
+/// Shading's and Lighting's Hue Curve (`huePoints`): `[[amount, turn], …]` in Curves' 0..255
+/// units, the base colour's hue at [0, 255] and full shadow's or light's at [255, 0]; the turn may
+/// go half the box past it (-127.5..382.5: below turns further, above turns back). Null, or
+/// nothing between the ends, is no curve.
+fn hue_points(r: &Reader<'_>, base: &[CurvePoint]) -> Result<Vec<CurvePoint>> {
+    let err = || bad(r.cmd, "`huePoints` must be null or an array of up to 16 [amount, turn] pairs, amount in 0..255 and turn in -127.5..382.5");
+    match r.p.get("huePoints") {
+        None => Ok(base.to_vec()),
+        Some(Value::Null) => Ok(Vec::new()),
+        Some(v) => {
+            let a = v.as_array().filter(|a| a.len() <= 64).ok_or_else(err)?;
+            let mut pts = Vec::with_capacity(a.len());
+            for q in a {
+                let q = q.as_array().filter(|q| q.len() == 2).ok_or_else(err)?;
+                let x = q.first().and_then(Value::as_f64).filter(|v| (-1e-6..=255.0 + 1e-6).contains(v)).ok_or_else(err)?;
+                let y = q.get(1).and_then(Value::as_f64).filter(|v| (-127.5 - 1e-6..=382.5 + 1e-6).contains(v)).ok_or_else(err)?;
+                pts.push(CurvePoint { input: x as f32 / 255.0, output: y as f32 / 255.0 });
+            }
+            Ok(photocraft_doc::adjust::sanitized_hue_points(&pts))
+        }
+    }
+}
+
+/// [`saturation_points`] (or [`hue_points`]) as params: the straight line when there is no curve.
+fn saturation_points_arr(c: &[CurvePoint]) -> Value {
+    if c.len() < 2 {
+        return json!([[0.0, 255.0], [255.0, 0.0]]);
+    }
+    curve_arr(c)
 }
 
 fn identity_curve() -> Vec<CurvePoint> {

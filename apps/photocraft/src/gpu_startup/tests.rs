@@ -597,3 +597,54 @@ fn intel_macs_skip_the_indirect_validation_shaders() {
         assert!(!create.instance_descriptor.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
     }
 }
+
+#[test]
+fn the_dx12_vendors_are_remembered_between_launches() {
+    const NVIDIA: u32 = 0x10de;
+    const WARP: u32 = 0x1414;
+    let dir = std::env::temp_dir().join(format!("photocraft-gpu-vendors-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(VENDORS_FILE);
+    let _ = std::fs::remove_file(&file);
+    let refreshed = std::cell::RefCell::new(Vec::new());
+    let refresh = |f: PathBuf| refreshed.borrow_mut().push(f);
+    // First launch: listed now and remembered, nothing to refresh.
+    assert_eq!(remembered_vendors(Some(&file), || vec![NVIDIA, INTEL], refresh), vec![NVIDIA, INTEL]);
+    assert!(refreshed.borrow().is_empty());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("dx12-vendors:{NVIDIA},{INTEL}\n"));
+    // Next launch: the remembered list, no listing now, a refresh for the one after.
+    let listed = std::cell::Cell::new(false);
+    let refresh = |f: PathBuf| refreshed.borrow_mut().push(f);
+    assert_eq!(remembered_vendors(Some(&file), || { listed.set(true); vec![] }, refresh), vec![NVIDIA, INTEL]);
+    assert!(!listed.get() && refreshed.borrow().as_slice() == [file.clone()]);
+    // An unreadable file is listed again; no settings directory lists every time.
+    std::fs::write(&file, "garbage").unwrap();
+    assert_eq!(remembered_vendors(Some(&file), || vec![WARP], |_| panic!("no refresh")), vec![WARP]);
+    assert_eq!(parse_vendors(&format_vendors(&[])), Some(vec![]));
+    assert_eq!(remembered_vendors(None, || vec![INTEL], |_| panic!("no refresh")), vec![INTEL]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gl_is_left_out_after_a_start_that_worked_on_dx12() {
+    let dir = std::env::temp_dir().join(format!("photocraft-last-good-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(LAST_GOOD_FILE);
+    let _ = std::fs::remove_file(&file);
+    let both = wgpu::Backends::DX12 | wgpu::Backends::GL;
+    // Nothing remembered yet: GL stays as the last resort.
+    assert_eq!(dx12_only_after_a_good_start(both, Some(&file)), both);
+    assert_eq!(dx12_only_after_a_good_start(both, None), both);
+    // A start that rendered on DX12 is remembered; the next leaves GL out.
+    remember_good_start(Some(&dir), &Marker { adapter_backend: "dx12".into(), ..Default::default() });
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "dx12\n");
+    assert_eq!(dx12_only_after_a_good_start(both, Some(&file)), wgpu::Backends::DX12);
+    // A start that worked on GL turns it off again; no adapter recorded changes nothing.
+    remember_good_start(Some(&dir), &Marker { adapter_backend: "gl".into(), ..Default::default() });
+    assert_eq!(dx12_only_after_a_good_start(both, Some(&file)), both);
+    remember_good_start(Some(&dir), &Marker::default());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "gl\n");
+    // Only DX12 plans are narrowed.
+    assert_eq!(dx12_only_after_a_good_start(wgpu::Backends::GL, Some(&file)), wgpu::Backends::GL);
+    let _ = std::fs::remove_dir_all(&dir);
+}

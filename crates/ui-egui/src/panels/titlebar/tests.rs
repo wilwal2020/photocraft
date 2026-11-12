@@ -219,7 +219,7 @@ fn minimize_and_maximize_follow_the_window_state() {
 fn empty_bar_space_drags_and_double_click_maximizes() {
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
-    let empty = pos2(980.0, 16.0);
+    let empty = pos2(900.0, 16.0);
     assert!(w.bar_widgets().iter().all(|r| !r.contains(empty)), "the probe point must be empty bar space");
     let cmds = w.gesture(&[empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)]);
     assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
@@ -246,7 +246,7 @@ fn empty_bar_space_drags_and_double_click_maximizes() {
 fn a_move_the_os_did_not_start_moves_the_window_from_the_app() {
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
-    let empty = pos2(980.0, 16.0);
+    let empty = pos2(900.0, 16.0);
     let cmds = w.gesture(&[empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0), empty + vec2(50.0, 10.0)]);
     assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
     assert!(cmds.iter().any(|c| matches!(c, ViewportCommand::OuterPosition(_))), "the app moved it: {cmds:?}");
@@ -266,7 +266,7 @@ fn a_window_the_app_moves_stays_under_the_pointer_onto_a_screen_scaled_different
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
     // The pointer on the screen, in pixels; events carry it in the window's points.
-    let mut pointer = w.outer_px + vec2(980.0, 16.0);
+    let mut pointer = w.outer_px + vec2(900.0, 16.0);
     let local = |w: &Win, p: Pos2| ((p - w.outer_px) / w.scale).to_pos2();
     fn step(w: &mut Win, events: Vec<Event>) {
         for c in w.frame(events).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default() {
@@ -320,7 +320,7 @@ fn empty_bar_space_still_drags_with_a_modal_open() {
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
     w.frame_with_modal(vec![], true);
-    let empty = pos2(980.0, 16.0);
+    let empty = pos2(900.0, 16.0);
     let drag_area = w.ctx.data(|d| d.get_temp::<Rect>(modal_drag_area_id()));
     assert!(drag_area.is_some_and(|r| r.contains(empty)), "the test point must be in the current title-bar gap: {drag_area:?}");
     assert!(w.bar_widgets().iter().all(|r| !r.contains(empty)), "the probe point must be empty bar space");
@@ -332,7 +332,7 @@ fn empty_bar_space_still_drags_with_a_modal_open() {
 fn middle_button_drag_in_the_gap_does_not_start_a_window_drag() {
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
-    let empty = pos2(980.0, 16.0);
+    let empty = pos2(900.0, 16.0);
     let path = [empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)];
     let cmds = w.gesture_by(&path, false, egui::PointerButton::Middle);
     assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
@@ -351,7 +351,7 @@ fn modal_drag_overlay_does_not_cover_a_dialog_moved_into_the_gap() {
     w.frame(vec![]);
     w.frame_with_modal(vec![], true);
     let area = w.ctx.data(|d| d.get_temp::<Rect>(modal_drag_area_id())).unwrap_or(Rect::NOTHING);
-    assert!(area.contains(pos2(980.0, 16.0)), "the probe point must be in the gap: {area:?}");
+    assert!(area.contains(pos2(900.0, 16.0)), "the probe point must be in the gap: {area:?}");
     w.ctx.data_mut(|d| d.insert_temp(Id::unique("pc-dialog-rects"), vec![area]));
     let cmds = w.gesture_with_modal(&[area.center(), area.center() + vec2(12.0, 4.0)], true);
     assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
@@ -419,7 +419,7 @@ fn after_an_os_move_the_bar_and_the_edges_take_the_next_press() {
     let moves = |cmds: &[ViewportCommand]| cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count();
     let mut w = Win::new(1440.0);
     w.frame(vec![]);
-    let empty = pos2(980.0, 16.0);
+    let empty = pos2(900.0, 16.0);
     assert!(w.bar_widgets().iter().all(|r| !r.contains(empty)), "the probe point must be empty bar space");
     let drag = [empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)];
     assert_eq!(moves(&handed_off(&mut w, &drag)), 1);

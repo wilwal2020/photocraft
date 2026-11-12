@@ -595,6 +595,7 @@ mod multi_channel_tests {
             dialog: true,
             dynamic_color_sliders: false,
             isolated_curve: channel_cmds::isolated_curve_channel(s.active().unwrap()),
+            presets: Vec::new(),
         }
     }
     #[test]

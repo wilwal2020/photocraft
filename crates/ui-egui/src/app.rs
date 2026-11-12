@@ -203,6 +203,7 @@ impl PhotocraftApp {
             prefs_rt: Default::default(),
             gigapixel: None,
             timelapse: Default::default(),
+            ai_funds: Default::default(),
             updates_rt: Default::default(),
             discard: None,
             file_dialog: None,

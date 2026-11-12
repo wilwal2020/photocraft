@@ -84,6 +84,10 @@ pub(crate) const ADJUSTMENT_MENU: [&[(&str, &str)]; 5] = [
         ("layer.newAdjustmentLayer.channelMixer", "Channel Mixer…"),
         ("layer.newAdjustmentLayer.colorLookup", "Color Lookup…"),
         ("layer.newAdjustmentLayer.selectiveColor", "Selective Color…"),
+        // PhotoCraft's own: shadows (or light) painted on the mask, each colour its own shade.
+        ("layer.newAdjustmentLayer.shading", "Shading…"),
+        ("layer.newAdjustmentLayer.shading2", "Shading 2…"),
+        ("layer.newAdjustmentLayer.lighting", "Lighting…"),
     ],
     &[
         ("layer.newAdjustmentLayer.invert", "Invert"),
@@ -2323,7 +2327,8 @@ mod adjustment_menu_tests {
             assert_eq!(listed.iter().filter(|l| *l == id).count(), 1, "{id}");
         }
         assert_eq!(listed.len(), wanted.len(), "{listed:?}");
-        assert_eq!(super::ADJUSTMENT_MENU.map(|g| g.len()), [3, 3, 7, 4, 3]);
+        // The colour group also holds PhotoCraft's own Shading.
+        assert_eq!(super::ADJUSTMENT_MENU.map(|g| g.len()), [3, 3, 10, 4, 3]);
     }
 }
 

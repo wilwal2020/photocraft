@@ -1105,3 +1105,16 @@ fn arrow_document_is_backward_compatible() {
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
 }
+
+/// PhotoCraft's Shading and Lighting adjustment layers keep every setting in `.pcraft` (user
+/// request, 2026-11-09).
+#[test]
+fn shading_adjustment_round_trips() {
+    let shading = photocraft_doc::adjust::Shading { depth: 0.42, chroma_retention: 0.8, self_bounce: 0.6, terminator_amount: 0.5, physical: true, hue_shift: 31.0, split_hue: 200.0, steps: 3, mood_amount: 0.2, saturation_curve: 0.3, ..Default::default() };
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    doc.insert_above(None, Layer::new("Shading 1", LayerContent::Adjustment(photocraft_doc::Adjustment::Shading(shading))));
+    let lighting = photocraft_doc::adjust::Lighting { lift: 0.6, light_hue: 40.0, saturation_curve: -0.4, highlight_fade: 0.7, gloss: 0.5, metallic: true, light: [0.9, 0.8, 1.0], glow_amount: 0.3, steps: 2, ..Default::default() };
+    doc.insert_above(None, Layer::new("Lighting 1", LayerContent::Adjustment(photocraft_doc::Adjustment::Lighting(lighting))));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, doc);
+}

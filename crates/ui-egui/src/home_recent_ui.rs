@@ -521,6 +521,8 @@ pub(crate) enum RecentAction {
     Remove(String),
     Clear,
     OpenDialog,
+    /// Hide the Home screen's recent files (Preferences › Interface › Show Home Recent Files).
+    Hide,
 }
 
 /// Card width in the grid.
@@ -532,8 +534,9 @@ pub const GRID_PREVIEW_HEIGHT: f32 = 168.0;
 /// Row height in list view.
 pub const LIST_ROW_HEIGHT: f32 = 34.0;
 
-/// Render the header for Recent files with title and Grid/List toggle buttons.
-pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) {
+/// Render the header for Recent files with title, a Hide button and Grid/List toggle buttons.
+/// Returns whether Hide was clicked.
+pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) -> bool {
     let t = Tokens::get(ui.ctx());
     let (header_rect, _) = ui.allocate_exact_size(vec2(total_width, 28.0), Sense::hover());
 
@@ -584,6 +587,22 @@ pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) {
     if list_resp.clicked() {
         *is_grid = false;
     }
+
+    // Hide, left of the view switch.
+    let hide_text = tl!("Hide");
+    let hide_galley = ui.painter().layout_no_wrap(hide_text.to_string(), crate::theme::medium(12.0), t.text_dim);
+    let hide_rect = Rect::from_min_size(pos2(box_rect.left() - 10.0 - hide_galley.size().x - 16.0, box_rect.top() + 2.0), vec2(hide_galley.size().x + 16.0, 24.0));
+    let hide_resp = ui.interact(hide_rect, ui.scope_id().with("recent_hide"), Sense::click());
+    hide_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Hide recent files")));
+    let hide_resp = hide_resp
+        .on_hover_text(tl!("Hide recent files on the Home screen (Preferences › Interface › Show Home Recent Files brings them back)"))
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if hide_resp.hovered() {
+        ui.painter().rect_filled(hide_rect, 3.0, t.hover);
+    }
+    let tint = if hide_resp.hovered() { t.text } else { t.text_dim };
+    ui.painter().galley(pos2(hide_rect.left() + 8.0, hide_rect.center().y - hide_galley.size().y / 2.0), hide_galley, tint);
+    hide_resp.clicked()
 }
 
 /// Render a single visual thumbnail card in grid view.
@@ -778,13 +797,20 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
         drain_pending_thumbnails(app, ui.ctx(), opts);
     }
 
-    let is_grid = app.ui.chrome.home_recent_grid;
+    // Remembered in Preferences across launches (the chrome field mirrors it).
+    let is_grid = crate::dialog_memory::home_recent_grid(app);
+    app.ui.chrome.home_recent_grid = is_grid;
     let content_width = avail_width;
 
     let mut toggle_grid = is_grid;
-    recent_header(ui, &mut toggle_grid, content_width);
+    let hide = recent_header(ui, &mut toggle_grid, content_width);
     if toggle_grid != is_grid {
+        crate::dialog_memory::set_home_recent_grid(app, toggle_grid);
         app.ui.chrome.home_recent_grid = toggle_grid;
+    }
+    if hide {
+        app.session.prefs.edit(|p| p.interface.show_home_recent_files = false);
+        return;
     }
 
     ui.add_space(14.0);
@@ -821,6 +847,10 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
                     }
                     if ui.button(tl!("Clear Recent Files")).clicked() {
                         action_to_take = Some(RecentAction::Clear);
+                        ui.close();
+                    }
+                    if ui.button(tl!("Hide Recent Files")).clicked() {
+                        action_to_take = Some(RecentAction::Hide);
                         ui.close();
                     }
                 });
@@ -861,6 +891,10 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
                     action_to_take = Some(RecentAction::Clear);
                     ui.close();
                 }
+                if ui.button(tl!("Hide Recent Files")).clicked() {
+                    action_to_take = Some(RecentAction::Hide);
+                    ui.close();
+                }
             });
         }
     }
@@ -880,6 +914,9 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
             }
             RecentAction::OpenDialog => {
                 let _ = app.open_dialog_file();
+            }
+            RecentAction::Hide => {
+                app.session.prefs.edit(|p| p.interface.show_home_recent_files = false);
             }
         }
     }
@@ -934,10 +971,42 @@ mod tests {
         h.run_steps(2);
         assert!(!h.state().0.ui.chrome.home_recent_grid);
 
+        // Remembered in Preferences, so the next launch opens in List view.
+        assert!(!crate::dialog_memory::home_recent_grid(&h.state().0));
+        assert_eq!(h.state().0.session.prefs().dialog_choices["homeRecentView"], "list");
+
         // Toggle back to Grid view
         h.get_by_label("Grid view").click();
         h.run_steps(2);
         assert!(h.state().0.ui.chrome.home_recent_grid);
+        assert!(crate::dialog_memory::home_recent_grid(&h.state().0));
+    }
+
+    #[test]
+    fn recent_view_is_read_back_and_hide_turns_the_list_off() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent("/tmp/photocraft-recent-hide/a.png");
+        crate::dialog_memory::set_home_recent_grid(&mut app, false);
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 760.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    let recent: Vec<String> = app.ui.recent_files.clone();
+                    show_home_recent(app, ui, &recent, 600.0);
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.state_mut().1 = true;
+        h.run_steps(2);
+        assert!(!h.state().0.ui.chrome.home_recent_grid, "a remembered List view opens as a list");
+
+        assert!(h.state().0.session.prefs().interface.show_home_recent_files);
+        h.get_by_label("Hide recent files").click();
+        h.run_steps(2);
+        assert!(!h.state().0.session.prefs().interface.show_home_recent_files);
+        assert_eq!(h.state().0.ui.recent_files.len(), 1, "hiding keeps the recent files");
     }
 
     #[test]

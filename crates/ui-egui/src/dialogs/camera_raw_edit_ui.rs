@@ -144,8 +144,27 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, alt: &mut Option
             }
         });
     });
-    let profile = if p.monochrome { tl!("Adobe Monochrome") } else { tl!("Adobe Color") };
-    ui.label(egui::RichText::new(format!("{}: {profile}", tl!("Profile"))).color(Tokens::get(ui.ctx()).text_faint));
+    let faint = Tokens::get(ui.ctx()).text_faint;
+    // A creative profile from a preset: its name, its Amount (0–200 %) and a way to take it off.
+    let mut remove = false;
+    if let Some(prof) = &mut p.profile {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{}: {}", tl!("Profile"), prof.name)).color(faint));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                remove = widgets::secondary_button(ui, tl!("Remove"), 64.0).clicked();
+            });
+        });
+        let mut percent = prof.amount * 100.0;
+        slider_to(ui, dirty, "Amount", &mut percent, 0.0..=200.0, None, 100.0);
+        prof.amount = (percent / 100.0).clamp(0.0, 2.0);
+    } else {
+        let profile = if p.monochrome { tl!("Adobe Monochrome") } else { tl!("Adobe Color") };
+        ui.label(egui::RichText::new(format!("{}: {profile}", tl!("Profile"))).color(faint));
+    }
+    if remove {
+        p.profile = None;
+        *dirty = true;
+    }
     ui.add_space(2.0);
     section(ui, "Light", true, |ui| {
         tone_row(ui, dirty, alt, ToneZone::Exposure, &mut p.exposure, &dark);

@@ -145,6 +145,7 @@ fn layer_editor_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj:
         dialog: false,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
         isolated_curve: None,
+        presets: super::saved_presets(app, kind),
     };
     if kind == "levels" {
         crate::layer_picker::controls(app, ui, id);
@@ -162,6 +163,7 @@ fn layer_editor_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj:
     if e.import_gradients {
         crate::preset_files_ui::import_gradients_dialog(app);
     }
+    super::apply_pending_preset(app, ui.ctx());
     if e.changed {
         app.live_adjust = Some((id, values.clone()));
     }

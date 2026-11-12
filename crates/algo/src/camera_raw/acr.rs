@@ -27,17 +27,17 @@ use super::acr_vibrance_tables::{VIB_HUE, VIB_K, VIB_LEVELS, VIB_T};
 use super::{CameraRaw, Curves, Encoding, Wheel, luma, rgb_to_hsv};
 use crate::photo_util::par_rows;
 
-type M3 = [[f32; 3]; 3];
+pub(super) type M3 = [[f32; 3]; 3];
 
-fn mul(a: &M3, b: &M3) -> M3 {
+pub(super) fn mul(a: &M3, b: &M3) -> M3 {
     std::array::from_fn(|r| std::array::from_fn(|c| (0..3).map(|k| a[r][k] * b[k][c]).sum()))
 }
 
-fn apply(m: &M3, v: [f32; 3]) -> [f32; 3] {
+pub(super) fn apply(m: &M3, v: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
 }
 
-fn inverse(m: &M3) -> Option<M3> {
+pub(super) fn inverse(m: &M3) -> Option<M3> {
     let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
     if !det.is_finite() || det.abs() < 1e-12 {
@@ -53,9 +53,9 @@ fn inverse(m: &M3) -> Option<M3> {
 
 const SRGB_XYZ: M3 = [[0.412_456_4, 0.357_576_1, 0.180_437_5], [0.212_672_9, 0.715_152_2, 0.072_175], [0.019_333_9, 0.119_192, 0.950_304_1]];
 const ADOBE_XYZ: M3 = [[0.576_730_9, 0.185_554, 0.188_185_2], [0.297_376_9, 0.627_349_1, 0.075_274_1], [0.027_034_3, 0.070_687_2, 0.991_108_5]];
-const PROPHOTO_XYZ: M3 = [[0.797_674_9, 0.135_191_7, 0.031_353_4], [0.288_040_2, 0.711_874_1, 0.000_085_7], [0.0, 0.0, 0.825_21]];
+pub(super) const PROPHOTO_XYZ: M3 = [[0.797_674_9, 0.135_191_7, 0.031_353_4], [0.288_040_2, 0.711_874_1, 0.000_085_7], [0.0, 0.0, 0.825_21]];
 /// Bradford adaptation from D65 to D50.
-const D65_TO_D50: M3 = [[1.047_811_2, 0.022_886_6, -0.050_127], [0.029_542_4, 0.990_484_4, -0.017_049_1], [-0.009_234_5, 0.015_043_6, 0.752_131_6]];
+pub(super) const D65_TO_D50: M3 = [[1.047_811_2, 0.022_886_6, -0.050_127], [0.029_542_4, 0.990_484_4, -0.017_049_1], [-0.009_234_5, 0.015_043_6, 0.752_131_6]];
 
 /// The document's linear RGB to linear ProPhoto and back, by its transfer curve: ProPhoto's 1.8
 /// is ProPhoto itself, Adobe RGB's 2.2 Adobe RGB, anything else sRGB.

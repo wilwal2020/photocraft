@@ -11,8 +11,11 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-const ALL_KINDS: [&str; 17] = [
+const ALL_KINDS: [&str; 20] = [
     "grain",
+    "shading",
+    "shading2",
+    "lighting",
     "brightnessContrast",
     "levels",
     "curves",
@@ -132,6 +135,9 @@ fn every_adjustment_layer_edits_through_properties() {
                 "threshold" => Some("Threshold Level"),
                 "selectiveColor" => Some("Cyan"),
                 "grain" => Some("Amount:"),
+                "shading" => Some("Depth"),
+                "shading2" => Some("Brightness"),
+                "lighting" => Some("Brightness"),
                 _ => None,
             };
             match kind {
@@ -165,6 +171,26 @@ fn every_adjustment_layer_edits_through_properties() {
                 assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{kind} {mode}: one history step");
             }
         }
+    }
+}
+
+/// Shading and Lighting have a Saturation Curve slider and no Variation any more (user
+/// request, 2026-11-09); dragging the curve reaches the layer.
+#[test]
+fn shading_and_lighting_show_the_saturation_curve_and_no_variation() {
+    for kind in ["shading", "lighting"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        assert!(label_rect(&h, "Variation").is_none() && label_rect(&h, "Variation Size").is_none(), "{kind}: Variation is gone");
+        let r = label_rect(&h, "Saturation Curve").unwrap_or_else(|| panic!("{kind}: no Saturation Curve"));
+        let y = r.bottom() + 14.0;
+        drag(&mut h, Pos2::new(r.left() + 40.0, y), Pos2::new(r.left() + 160.0, y));
+        h.run_steps(4);
+        let curve = match layer(&h).1 {
+            Adjustment::Shading(s) => s.saturation_curve,
+            Adjustment::Lighting(l) => l.saturation_curve,
+            other => panic!("{other:?}"),
+        };
+        assert!(curve != 0.0 && (-1.0..=1.0).contains(&curve), "{kind}: {curve}");
     }
 }
 
@@ -737,6 +763,7 @@ fn gradient_map_stop_controls_fit_a_narrow_properties_panel_in_every_theme() {
                         dialog: false,
                         dynamic_color_sliders: true,
                         isolated_curve: None,
+                        presets: Vec::new(),
                     };
                     editor(ui, "gradientMap", values, &cx);
                 },
@@ -951,6 +978,7 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
                 dialog: true,
                 dynamic_color_sliders: true,
                 isolated_curve: None,
+                presets: Vec::new(),
             };
             editor(ui, kind, values, &cx);
         },
@@ -977,6 +1005,7 @@ fn hue_saturation_bars_fill_the_panel_width() {
                     dialog: false,
                     dynamic_color_sliders: true,
                     isolated_curve: None,
+                    presets: Vec::new(),
                 };
                 let avail = ui.available_width();
                 editor(ui, "hueSaturation", values, &cx);

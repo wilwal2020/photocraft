@@ -28,8 +28,18 @@ const GRAIN_VERSION: u32 = 1;
 /// Photoshop's Grain adjustment block.
 pub const GRAIN_PS_KEY: [u8; 4] = *b"grnA";
 
+/// PhotoCraft's private block for a Shading adjustment layer (PhotoCraft's own adjustment,
+/// with no Photoshop equivalent): a big-endian version, then the settings as JSON. Photoshop
+/// skips the block and shows the layer as empty; the file's merged image still has the shading.
+pub const SHADING_KEY: [u8; 4] = *b"PCsd";
+const SHADING_VERSION: u32 = 1;
+
+/// PhotoCraft's private block for a Lighting adjustment layer, laid out like [`SHADING_KEY`].
+pub const LIGHTING_KEY: [u8; 4] = *b"PClt";
+const LIGHTING_VERSION: u32 = 1;
+
 /// All PSD adjustment keys recognized as adjustment layers.
-pub const ADJUSTMENT_KEYS: [&[u8; 4]; 18] = [
+pub const ADJUSTMENT_KEYS: [&[u8; 4]; 20] = [
     b"levl",
     b"curv",
     b"hue2",
@@ -48,7 +58,16 @@ pub const ADJUSTMENT_KEYS: [&[u8; 4]; 18] = [
     b"clrL",
     &GRAIN_KEY,
     &GRAIN_PS_KEY,
+    &SHADING_KEY,
+    &LIGHTING_KEY,
 ];
+
+/// The JSON of a private PhotoCraft block without the zero bytes PSD pads blocks with to an
+/// even length (JSON itself never ends in one).
+fn json_body(data: &[u8]) -> &[u8] {
+    let end = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    data.get(..end).unwrap_or_default()
+}
 
 fn be16(d: &[u8], at: usize) -> Option<u16> {
     d.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]))
@@ -265,6 +284,17 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
             };
             Adjustment::Grain { amount: pct("grainAmount", 0.0), size: pct("grainSize", 25.0), roughness: pct("grainRoughness", 50.0), seed }
         }),
+        // Out-of-range settings are clamped (NaN → the default) wherever they're evaluated.
+        b"PCsd" => data
+            .get(4..)
+            .filter(|_| data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == SHADING_VERSION))
+            .and_then(|json| serde_json::from_slice::<photocraft_doc::adjust::Shading>(json_body(json)).ok())
+            .map(|s| Adjustment::Shading(s.sanitized())),
+        b"PClt" => data
+            .get(4..)
+            .filter(|_| data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == LIGHTING_VERSION))
+            .and_then(|json| serde_json::from_slice::<photocraft_doc::adjust::Lighting>(json_body(json)).ok())
+            .map(|s| Adjustment::Lighting(s.sanitized())),
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
         // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
@@ -782,6 +812,16 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
                 .with("grainRoughness", int(roughness))
                 .with("grainSeed", Value::Integer(*seed as i32));
             return vec![(GRAIN_PS_KEY, VersionedDescriptor::new(d).to_bytes())];
+        }
+        Adjustment::Shading(s) => {
+            let mut data = SHADING_VERSION.to_be_bytes().to_vec();
+            data.extend(serde_json::to_vec(&s.sanitized()).unwrap_or_default());
+            return vec![(SHADING_KEY, data)];
+        }
+        Adjustment::Lighting(s) => {
+            let mut data = LIGHTING_VERSION.to_be_bytes().to_vec();
+            data.extend(serde_json::to_vec(&s.sanitized()).unwrap_or_default());
+            return vec![(LIGHTING_KEY, data)];
         }
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();

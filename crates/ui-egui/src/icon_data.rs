@@ -13,6 +13,8 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("adj-exposure", include_bytes!("../../../assets/icons/adj-exposure.svg")),
     ("adj-gradient-map", include_bytes!("../../../assets/icons/adj-gradient-map.svg")),
     ("adj-grain", include_bytes!("../../../assets/icons/adj-grain.svg")),
+    ("adj-shading", include_bytes!("../../../assets/icons/adj-shading.svg")),
+    ("adj-lighting", include_bytes!("../../../assets/icons/adj-lighting.svg")),
     ("adj-hue-saturation", include_bytes!("../../../assets/icons/adj-hue-saturation.svg")),
     ("adj-invert", include_bytes!("../../../assets/icons/adj-invert.svg")),
     ("adj-levels", include_bytes!("../../../assets/icons/adj-levels.svg")),

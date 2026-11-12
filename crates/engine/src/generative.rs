@@ -48,7 +48,20 @@ pub fn search_dirs() -> Vec<PathBuf> {
 /// credential store, never in the preferences, and never goes through a command (a command's
 /// params can be journaled or recorded in an action).
 pub mod nano_banana {
+    pub use photocraft_ml::exchange_rate::Rate;
     pub use photocraft_ml::gemini::{ENV_KEY, KeySource, MAX_1K, NAME, PRICE_1K, PRICE_2K};
+
+    /// What Google billed this run, USD (worked out from each answer's token usage at Google's
+    /// list prices); it only grows.
+    pub fn billed() -> f64 {
+        photocraft_ml::gemini::billed()
+    }
+
+    /// Today's USD → NOK rate from Norges Bank (one blocking HTTPS request: call it off the UI
+    /// thread).
+    pub fn usd_nok() -> Result<Rate, String> {
+        photocraft_ml::exchange_rate::usd_nok().map_err(|e| e.to_string())
+    }
 
     /// Where the key in use comes from, `None` when there is none.
     pub fn key_source() -> Option<KeySource> {

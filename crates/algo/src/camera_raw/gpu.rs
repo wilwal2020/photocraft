@@ -411,7 +411,8 @@ pub fn measures(p: &CameraRaw) -> bool {
 /// smaller copy of the image), as GPU passes. `distort`: Manual Distortion moves the pixels (a
 /// whole image's develop); without, the input is taken as already moved (as
 /// [`develop_region`](super::develop_region) takes it). `Err` when `context` lacks a measurement
-/// the settings need, or the planes would not fit 32-bit offsets.
+/// the settings need, the settings have a creative profile (no GPU pass yet), or the planes would
+/// not fit 32-bit offsets.
 #[allow(clippy::cognitive_complexity)]
 pub fn program(p: &CameraRaw, w: usize, h: usize, frame: Frame, context: &std::sync::Arc<Context>, float: bool, distort: bool) -> Result<GpuProgram, String> {
     let mut prog = GpuProgram {
@@ -425,6 +426,9 @@ pub fn program(p: &CameraRaw, w: usize, h: usize, frame: Frame, context: &std::s
     };
     if w == 0 || h == 0 || p.is_identity() {
         return Ok(prog);
+    }
+    if p.profile.as_ref().is_some_and(|q| !q.is_neutral()) {
+        return Err("a creative profile develops on the CPU".into());
     }
     if let Some(what) = missing(p, context) {
         return Err(format!("Camera Raw on the GPU needs {what} measured first"));

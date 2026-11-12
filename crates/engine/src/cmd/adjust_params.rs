@@ -213,6 +213,9 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
         Adjustment::SelectiveColor { .. } => "selectiveColor",
         Adjustment::ColorLookup { .. } => "colorLookup",
         Adjustment::Grain { .. } => "grain",
+        Adjustment::Shading(s) if s.picker_axes => "shading2",
+        Adjustment::Shading(_) => "shading",
+        Adjustment::Lighting(_) => "lighting",
         Adjustment::Unsupported { .. } => "unsupported",
         _ => "invert",
     }

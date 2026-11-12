@@ -28,6 +28,8 @@ pub fn for_kind(kind: &str) -> &'static str {
         "gradientMap" => "adj-gradient-map",
         "selectiveColor" => "adj-selective-color",
         "grain" => "adj-grain",
+        "shading" | "shading2" => "adj-shading",
+        "lighting" => "adj-lighting",
         "clarityAndDehaze" => "adj-clarity-dehaze",
         "colorAndVibrance" => "adj-color-vibrance",
         "light" => "adj-light",
@@ -54,7 +56,7 @@ pub fn paint(ui: &egui::Ui, cell: Rect, adj: &Adjustment, tint: Color32) {
 mod tests {
     use super::*;
 
-    const KINDS: [&str; 20] = [
+    const KINDS: [&str; 22] = [
         "brightnessContrast",
         "levels",
         "curves",
@@ -72,6 +74,8 @@ mod tests {
         "gradientMap",
         "selectiveColor",
         "grain",
+        "shading",
+        "lighting",
         "clarityAndDehaze",
         "colorAndVibrance",
         "light",

@@ -70,7 +70,10 @@ mod acr_vibrance_tables;
 mod colour_lut;
 pub mod gpu;
 mod local_tone;
+mod profile;
 mod whites_blacks;
+
+pub use profile::{Profile, Table};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
@@ -277,6 +280,9 @@ pub struct CameraRaw {
     /// The document's transfer curve: 0 for sRGB's, else the gamma of a power-law space (1.8
     /// for ProPhoto). Set from the document's profile; Whites and Blacks act on light.
     pub encoding_gamma: f32,
+    /// A creative profile (`crs:Look`) and its Amount: its colour tables (see `profile`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Profile>,
 }
 
 impl Default for CameraRaw {
@@ -352,6 +358,7 @@ impl Default for CameraRaw {
             seed: 0,
             pixel_scale: 1.0,
             encoding_gamma: 0.0,
+            profile: None,
         }
     }
 }
@@ -613,6 +620,9 @@ impl CameraRaw {
         ] {
             validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
         }
+        if let Some(p) = &self.profile {
+            p.validate()?;
+        }
         Ok(())
     }
     /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
@@ -627,6 +637,11 @@ impl CameraRaw {
             if curve != kept {
                 validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
             }
+        }
+        if let Some(p) = &self.profile
+            && Some(p) != stored.profile.as_ref()
+        {
+            p.validate()?;
         }
         Ok(())
     }
@@ -662,9 +677,14 @@ impl CameraRaw {
             .iter()
             .all(|v| *v == 0.0)
     }
+    /// No creative profile, or one that changes nothing.
+    fn profile_neutral(&self) -> bool {
+        self.profile.as_ref().is_none_or(Profile::is_neutral)
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.front_neutral()
+            && self.profile_neutral()
             && !self.monochrome
             && self.wb_neutral()
             && self.tone_neutral()
@@ -1281,10 +1301,15 @@ fn finish_colour(px: &mut [[f32; 4]], w: usize, p: &CameraRaw) {
     if !p.grade_neutral() {
         acr::grade(px, w, p, Encoding::of(p.encoding_gamma));
     }
+    // 7b. The creative profile (see `profile`): last of the colour stages, where it matched
+    // Photoshop on a preset with "Artistic 04" (2.7 levels off on average; 4.3 with it first).
+    if let Some(prof) = &p.profile {
+        profile::apply(px, w, prof, Encoding::of(p.encoding_gamma));
+    }
 }
 
 fn finish_colour_active(p: &CameraRaw) -> bool {
-    !p.curves_neutral() || p.vibrance != 0.0 || p.saturation != 0.0 || p.monochrome || !p.hsl_neutral() || !p.grade_neutral()
+    !p.profile_neutral() || !p.curves_neutral() || p.vibrance != 0.0 || p.saturation != 0.0 || p.monochrome || !p.hsl_neutral() || !p.grade_neutral()
 }
 
 /// [`finish`], with steps 4–7 through a colour table when `lut` (a slider is being dragged) and

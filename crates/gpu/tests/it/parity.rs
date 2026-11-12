@@ -2,7 +2,7 @@
 //! the reference compositor within 2/255 (premultiplied). Skips when no GPU adapter exists.
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel};
+use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, Lighting, Shading};
 use photocraft_doc::{Adjustment, Document, Fill, GradientStyle, Layer, LayerContent, LayerMask};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_gpu::{Compositor, render_to_vec};
@@ -804,7 +804,149 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Grain { amount: 60.0, size: 34.0, roughness: 50.0, seed: 0 },
         Adjustment::Grain { amount: 100.0, size: 0.0, roughness: 0.0, seed: 0 },
         Adjustment::Grain { amount: 40.0, size: 100.0, roughness: 100.0, seed: 0 },
+        // PhotoCraft's Shading (its mask is the shadow amount, planned as a shading mix).
+        Adjustment::Shading(Default::default()),
+        Adjustment::Shading(Shading { steps: 3, hue_shift: 45.0, saturation: 0.9, saturation_curve: 0.7, ..Default::default() }),
+        Adjustment::Shading(Shading { saturation_curve: -0.8, steps: 4, ..Default::default() }),
+        Adjustment::Shading(Shading { ambient_amount: 0.8, mood_amount: 0.5, split_hue: 30.0, depth: 0.7, protect_darks: 0.0, protect_neutrals: 0.0, ..Default::default() }),
+        // Lighting, its mirror.
+        Adjustment::Lighting(Default::default()),
+        Adjustment::Lighting(Lighting { steps: 3, hue_shift: 45.0, saturation: 0.9, saturation_curve: -0.6, ..Default::default() }),
+        Adjustment::Lighting(Lighting { saturation_curve: 0.9, steps: 4, ..Default::default() }),
+        Adjustment::Lighting(Lighting { highlight_fade: 1.0, light: [0.6, 0.8, 1.0], light_amount: 0.6, ..Default::default() }),
+        Adjustment::Lighting(Lighting { gloss: 0.9, gloss_size: 0.3, ..Default::default() }),
+        Adjustment::Lighting(Lighting { gloss: 0.7, metallic: true, saturation_curve: 0.4, ..Default::default() }),
+        Adjustment::Shading(Shading { physical: true, self_bounce: 0.8, terminator_amount: 0.9, ..Default::default() }),
+        Adjustment::Shading(Shading { chroma_retention: 0.0, self_bounce: 1.0, terminator_amount: 1.0, terminator_position: 0.7, terminator_width: 0.6, ..Default::default() }),
+        Adjustment::Shading(Shading { chroma_retention: 1.0, physical: true, ambient: [0.9, 0.6, 0.3], ..Default::default() }),
+        Adjustment::Shading(Shading { saturation_shift: -0.7, saturation_curve: 0.5, ..Shading::picker() }),
+        Adjustment::Shading(Shading { saturation_shift: 0.9, steps: 3, ..Shading::picker() }),
+        Adjustment::Lighting(Lighting { light_amount: 0.9, glow_amount: 0.5, light_hue: 200.0, lift: 0.8, protect_darks: 0.0, protect_neutrals: 0.0, ..Default::default() }),
+        // The advanced Saturation Curve (drawn: saturation held near the base, then dropping).
+        Adjustment::Shading(Shading { saturation_points: held(), ..Default::default() }),
+        Adjustment::Shading(Shading { saturation_points: early(), saturation_shift: -0.6, steps: 4, ..Shading::picker() }),
+        Adjustment::Lighting(Lighting { saturation_points: held(), saturation_curve: 0.4, ..Default::default() }),
+        // The Advanced Curve past its box: on toward the picker's edges, and back on itself.
+        Adjustment::Shading(Shading { saturation_points: outside(), ..Shading::picker() }),
+        Adjustment::Lighting(Lighting { saturation_points: outside(), ..Default::default() }),
+        // Literal Curve: the drawn shape, past the box and back on itself.
+        Adjustment::Shading(Shading { saturation_points: outside(), literal_curve: true, ..Shading::picker() }),
+        Adjustment::Lighting(Lighting { saturation_points: held(), literal_curve: true, saturation_curve: 0.6, ..Default::default() }),
+        // The Hue Curve, alone and with the Advanced Curve (turning further, past the box).
+        Adjustment::Shading(Shading { hue_points: hue_early(), hue_shift: 50.0, ..Default::default() }),
+        Adjustment::Lighting(Lighting { hue_points: hue_early(), saturation_points: held(), hue_shift: 40.0, ..Default::default() }),
     ]
+}
+
+/// A drawn Saturation Curve that holds the base colour's saturation, then drops late (the
+/// user's sketch, 2026-11-10).
+fn held() -> Vec<CurvePoint> {
+    [(0.0, 1.0), (0.34, 0.79), (0.65, 0.77), (0.81, 0.47), (1.0, 0.0)].map(|(input, output)| CurvePoint { input, output }).to_vec()
+}
+
+/// One that reaches full shadow's saturation early.
+fn hue_early() -> Vec<CurvePoint> {
+    [(0.0, 1.0), (0.3, -0.3), (0.7, 0.2), (1.0, 0.0)].into_iter().map(|(input, output)| CurvePoint { input, output }).collect()
+}
+
+fn outside() -> Vec<CurvePoint> {
+    [(0.0, 1.0), (0.45, 1.25), (1.35, 0.7), (0.6, 0.3), (-0.3, 0.1), (1.0, 0.0)].into_iter().map(|(input, output)| CurvePoint { input, output }).collect()
+}
+
+fn early() -> Vec<CurvePoint> {
+    [(0.0, 1.0), (0.3, 0.15), (1.0, 0.0)].map(|(input, output)| CurvePoint { input, output }).to_vec()
+}
+
+/// Shading and Lighting on the GPU match the CPU at every depth: plain, masked at part opacity,
+/// and clipped to a layer (their opacity × mask is the amount in each).
+#[test]
+fn shading_matches_cpu_plain_masked_and_clipped() {
+    let Some(mut g) = gpu() else { return };
+    for (depth, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+        let mut d = Document::new("t", Size::new(48, 40), ColorMode::Rgb, depth);
+        d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, 48, 40), 1, 0.3));
+        let mut plain = Layer::new("shade", LayerContent::Adjustment(Adjustment::Shading(Default::default())));
+        plain.mask = Some(mask(Rect::new(0, 0, 48, 30), 4, 0.2));
+        plain.opacity = 0.8;
+        d.layers.push(plain);
+        check(&mut g, &d, &format!("shading {depth:?}"));
+        d.layers.push(noise_layer("mid", fmt, Rect::new(8, 8, 40, 32), 3, 0.5));
+        // Saturation Curve's swing scales Protect Neutrals' steep ramp, so GPU rounding in the OKLab
+        // chroma of near-greys grows with the curve (0.8 reached 1.3/255 at one 16-bit pixel).
+        let mut clipped = Layer::new("clip", LayerContent::Adjustment(Adjustment::Shading(Shading { steps: 2, hue_shift: 40.0, saturation_curve: 0.5, ..Default::default() })));
+        clipped.clipped = true;
+        clipped.mask = Some(mask(Rect::new(4, 4, 44, 36), 7, 0.0));
+        d.layers.push(clipped);
+        check(&mut g, &d, &format!("clipped shading {depth:?}"));
+        // Lighting over all of it, then clipped to the middle layer too.
+        let mut lit = Layer::new("light", LayerContent::Adjustment(Adjustment::Lighting(Default::default())));
+        lit.mask = Some(mask(Rect::new(0, 10, 48, 40), 5, 0.1));
+        lit.opacity = 0.9;
+        d.layers.push(lit);
+        check(&mut g, &d, &format!("lighting {depth:?}"));
+        d.layers.push(noise_layer("top", fmt, Rect::new(2, 2, 30, 30), 9, 0.4));
+        let mut lit_clip = Layer::new("light clip", LayerContent::Adjustment(Adjustment::Lighting(Lighting { steps: 2, glow_amount: 0.4, ..Default::default() })));
+        lit_clip.clipped = true;
+        lit_clip.mask = Some(mask(Rect::new(0, 0, 30, 30), 11, 0.0));
+        d.layers.push(lit_clip);
+        check(&mut g, &d, &format!("clipped lighting {depth:?}"));
+    }
+}
+
+/// Shading and Lighting with Blend If (judged by their full-strength result) and with layers
+/// clipped to them (a Lighting clipped to a Shading, a pixel layer over it) stay on the GPU and
+/// match `compose::composite_layer` (user report, 2026-11-10: both fell back to the CPU).
+#[test]
+fn shading_with_blend_if_and_clipped_layers() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    let r = |b0: u8, b1: u8, w0: u8, w1: u8| BlendRange { black: [b0, b1], white: [w0, w1] };
+    for (depth, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+        let base = || {
+            let mut d = Document::new("t", Size::new(48, 40), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, 48, 40), 1, 0.3));
+            d.layers.push(noise_layer("mid", fmt, Rect::new(6, 6, 42, 34), 3, 0.5));
+            d
+        };
+        // Blend If on a masked Shading: underlying split, then this-layer split.
+        for (e, pair) in [(0, [BlendRange::FULL, r(30, 140, 150, 230)]), (1, [r(0, 60, 190, 230), BlendRange::FULL])] {
+            let mut d = base();
+            let mut sh = Layer::new("shade", LayerContent::Adjustment(Adjustment::Shading(Shading { saturation_curve: 0.4, ..Default::default() })));
+            sh.mask = Some(mask(Rect::new(0, 0, 48, 40), 4, 0.2));
+            sh.opacity = 0.8;
+            sh.blend_if.set(e, pair);
+            d.layers.push(sh);
+            check(&mut g, &d, &format!("Shading with Blend If {e} {depth:?}"));
+        }
+        // A Shading as a clip base: a Lighting and a pixel layer clipped to it.
+        let mut d = base();
+        let mut sh = Layer::new("shade", LayerContent::Adjustment(Adjustment::Shading(Default::default())));
+        sh.mask = Some(mask(Rect::new(0, 0, 40, 36), 5, 0.0));
+        sh.opacity = 0.9;
+        d.layers.push(sh);
+        let mut lit = Layer::new("light", LayerContent::Adjustment(Adjustment::Lighting(Lighting { gloss: 0.5, ..Default::default() })));
+        lit.mask = Some(mask(Rect::new(8, 0, 48, 40), 6, 0.0));
+        lit.clipped = true;
+        d.layers.push(lit);
+        check(&mut g, &d, &format!("Lighting clipped to Shading {depth:?}"));
+        let mut c = noise_layer("clip", fmt, Rect::new(10, 10, 30, 30), 7, 0.4);
+        c.clipped = true;
+        c.blend = BlendMode::Multiply;
+        d.layers.push(c);
+        check(&mut g, &d, &format!("pixels clipped to Shading {depth:?}"));
+        // A Lighting base in Screen with Blend If, a Shading clipped to it.
+        let mut d = base();
+        let mut lit = Layer::new("light", LayerContent::Adjustment(Adjustment::Lighting(Default::default())));
+        lit.mask = Some(mask(Rect::new(0, 0, 48, 40), 8, 0.1));
+        lit.blend = BlendMode::Screen;
+        lit.blend_if.set(0, [BlendRange::FULL, r(20, 90, 200, 250)]);
+        d.layers.push(lit);
+        let mut sh = Layer::new("shade", LayerContent::Adjustment(Adjustment::Shading(Default::default())));
+        sh.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.0));
+        sh.clipped = true;
+        d.layers.push(sh);
+        check(&mut g, &d, &format!("Shading clipped to a Blend If Lighting {depth:?}"));
+    }
 }
 
 fn selective() -> [[f32; 4]; 9] {

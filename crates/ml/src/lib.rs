@@ -23,6 +23,7 @@
 
 pub mod clip_tokenizer;
 pub mod diffusion;
+pub mod exchange_rate;
 pub mod gemini;
 #[cfg(not(target_arch = "wasm32"))]
 mod idle;

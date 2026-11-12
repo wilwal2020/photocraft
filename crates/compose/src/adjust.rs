@@ -12,6 +12,8 @@ use crate::Buffer;
 
 mod channels;
 mod color;
+pub mod lighting;
+pub mod shading;
 mod tone;
 
 #[cfg(test)]
@@ -36,6 +38,22 @@ pub use tone::{
     levels_float, levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth, tone_luts_q,
 };
 use tone::{lut, map_rgb};
+
+/// Whether `adj` reads its layer's opacity × mask as a per-pixel amount (Shading, Lighting): its
+/// result then replaces the backdrop wherever the amount is above 0.
+pub fn reads_mask_as_amount(adj: &Adjustment) -> bool {
+    matches!(adj, Adjustment::Shading(_) | Adjustment::Lighting(_))
+}
+
+/// Apply an adjustment that [`reads_mask_as_amount`] at each pixel's amount; any other one is
+/// applied in full.
+pub fn apply_at_amounts(adj: &Adjustment, buf: &mut Buffer, amounts: &[f32], transfer: Transfer) {
+    match adj {
+        Adjustment::Shading(s) => shading::apply_shading(s, buf, Some(amounts), transfer),
+        Adjustment::Lighting(s) => lighting::apply_lighting(s, buf, Some(amounts), transfer),
+        _ => {}
+    }
+}
 
 /// The document tone curve used to linearize values for adjustments that
 /// work in linear light (Exposure). Until ICC profiles are wired in (M8) this
@@ -295,6 +313,8 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 apply_grain(&g, buf, depth == Some(SampleType::F32));
             }
         }
+        Adjustment::Shading(s) => shading::apply_shading(s, buf, None, transfer),
+        Adjustment::Lighting(s) => lighting::apply_lighting(s, buf, None, transfer),
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
     }

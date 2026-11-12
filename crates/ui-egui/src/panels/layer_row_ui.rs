@@ -457,23 +457,33 @@ fn clock_id() -> egui::Id {
     egui::Id::unique("pc-frame-clock")
 }
 
-/// A frame starts (the app's logic pass).
-pub(crate) fn frame_began(ctx: &egui::Context) {
+/// A pass starts (the app's logic pass). `prev_frame_s` is how long the previous frame took as
+/// eframe measured it (`IntegrationInfo::cpu_usage`): all its passes and its painting, which the
+/// passes' own times leave out. egui may run a frame's UI twice (a discarded pass, laying out
+/// again what the first changed); both passes have the frame's input time, and the second one
+/// continues the frame's clock rather than starting a new frame (user report, fifth: the second
+/// pass restarted it, so a slow first click looked as quick as that pass and the second click,
+/// queued behind it, was timed from the next frame).
+pub(crate) fn frame_began(ctx: &egui::Context, prev_frame_s: Option<f32>) {
     let now = ctx.input(|i| i.time);
     ctx.data_mut(|d| {
         let c = d.get_temp::<FrameClock>(clock_id()).unwrap_or_default();
-        d.insert_temp(clock_id(), FrameClock { prev_start: c.start, prev_end: c.end, start: now, end: now });
+        if c.start == now {
+            return;
+        }
+        let whole = prev_frame_s.map(f64::from).filter(|s| s.is_finite() && *s > 0.0).map_or(c.end, |s| c.end.max(c.start + s));
+        d.insert_temp(clock_id(), FrameClock { prev_start: c.start, prev_end: whole, start: now, end: now });
     });
 }
 
-/// The frame's own work took `ms` (wall clock), commands it ran included.
+/// The pass's own work took `ms` (wall clock), commands it ran included; a frame's passes add up.
 pub(crate) fn frame_ended(ctx: &egui::Context, ms: f64) {
     if !ms.is_finite() || ms < 0.0 {
         return;
     }
     ctx.data_mut(|d| {
         let mut c = d.get_temp::<FrameClock>(clock_id()).unwrap_or_default();
-        c.end = c.start + ms / 1000.0;
+        c.end += ms / 1000.0;
         d.insert_temp(clock_id(), c);
     });
 }

@@ -620,6 +620,8 @@ fn main() -> eframe::Result {
             let remember = gpu_startup::backend_to_remember(&plan);
             app.on_started(move |app| {
                 if let Some(s) = started_sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                    // The first frames rendered: the backend they used is safe to go straight to.
+                    gpu_startup::remember_good_start(services::config_dir().as_deref(), s.marker());
                     s.finish();
                 }
                 if let Some(b) = remember

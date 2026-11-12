@@ -11,6 +11,13 @@ use crate::PhotocraftApp;
 const PREVIEW: &str = "colorRangePreview";
 const MODEL: &str = "generativeFillModel";
 const COLOR_RANGE: &str = "colorRange";
+/// The Home screen's Recent view: "grid" or "list" (user request, 2026-11-11: it was forgotten
+/// at every launch).
+const HOME_RECENT_VIEW: &str = "homeRecentView";
+/// Shading's, Shading 2's and Lighting's saved presets: `{kind: [{name, params}, …]}`.
+const ADJUST_PRESETS: &str = "adjustPresets";
+/// Most presets kept per kind.
+const ADJUST_PRESETS_MAX: usize = 100;
 
 /// Color Range's numeric settings that come back at the next opening.
 const COLOR_RANGE_NUMBERS: &[&str] = &["fuzziness", "range", "toneFuzziness", "shadowsLevel", "highlightsLevel", "midtonesLow", "midtonesHigh"];
@@ -113,6 +120,68 @@ pub fn restore(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().dialog_choices.get(PREVIEW).and_then(Value::as_str).map(str::to_string);
     if let Some(mode) = saved.filter(|m| crate::color_range_ui::is_preview(m)) {
         app.ui.color_range.selection_preview = mode;
+    }
+}
+
+/// The saved presets of adjustment `kind` (name, params), in the order saved. Entries without a
+/// name or a params object are skipped.
+pub fn adjust_presets(app: &PhotocraftApp, kind: &str) -> Vec<(String, Value)> {
+    app.session
+        .prefs()
+        .dialog_choices
+        .get(ADJUST_PRESETS)
+        .and_then(|m| m.get(kind))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| Some((e.get("name")?.as_str().filter(|n| !n.trim().is_empty())?.to_string(), e.get("params").filter(|p| p.is_object())?.clone())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn set_adjust_presets(app: &mut PhotocraftApp, kind: &str, list: Vec<(String, Value)>) {
+    let mut all = app.session.prefs().dialog_choices.get(ADJUST_PRESETS).and_then(Value::as_object).cloned().unwrap_or_default();
+    all.insert(kind.into(), Value::Array(list.into_iter().map(|(name, params)| json!({"name": name, "params": params})).collect()));
+    set(app, ADJUST_PRESETS, Value::Object(all));
+}
+
+/// Saves `params` as preset `name` of `kind` (replacing one of that name, else added last).
+pub fn save_adjust_preset(app: &mut PhotocraftApp, kind: &str, name: &str, params: Value) {
+    let name = name.trim();
+    if name.is_empty() || !params.is_object() {
+        return;
+    }
+    let mut list = adjust_presets(app, kind);
+    if let Some(entry) = list.iter_mut().find(|(n, _)| n == name) {
+        entry.1 = params;
+    } else if list.len() < ADJUST_PRESETS_MAX {
+        list.push((name.to_string(), params));
+    } else {
+        return;
+    }
+    set_adjust_presets(app, kind, list);
+}
+
+/// Deletes preset `name` of `kind`.
+pub fn delete_adjust_preset(app: &mut PhotocraftApp, kind: &str, name: &str) {
+    let mut list = adjust_presets(app, kind);
+    let before = list.len();
+    list.retain(|(n, _)| n != name);
+    if list.len() != before {
+        set_adjust_presets(app, kind, list);
+    }
+}
+
+/// Whether the Home screen lists recent files as a grid of cards (the default) rather than a list.
+pub fn home_recent_grid(app: &PhotocraftApp) -> bool {
+    app.session.prefs().dialog_choices.get(HOME_RECENT_VIEW).and_then(Value::as_str) != Some("list")
+}
+
+/// Remembers the Home screen's Recent view across launches.
+pub fn set_home_recent_grid(app: &mut PhotocraftApp, grid: bool) {
+    if home_recent_grid(app) != grid {
+        set(app, HOME_RECENT_VIEW, json!(if grid { "grid" } else { "list" }));
     }
 }
 

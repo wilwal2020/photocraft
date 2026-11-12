@@ -1343,6 +1343,10 @@ pub struct Preferences {
     /// Small dialog choices remembered across restarts: Select › Color Range's Selection Preview,
     /// Edit › Generative Fill's model. JSON owned by the shell (`dialog_memory`).
     pub dialog_choices: Value,
+    /// The title bar's generative AI funds box: the AI Studio balance the user typed, what Nano
+    /// Banana cost since (USD, from each answer's token usage) and in all, and the last USD → NOK
+    /// rate fetched from Norges Bank. JSON owned by the shell (`ai_funds_ui`).
+    pub ai_funds: Value,
     /// Recently Used Colors (`"#rrggbb"`, newest first), shown by the shape Fill and Stroke
     /// popovers and kept between sessions as in Photoshop. Owned by the shell.
     pub recent_colors: Vec<String>,

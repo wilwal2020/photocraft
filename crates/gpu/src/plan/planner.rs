@@ -112,6 +112,11 @@ pub const F_LAYER_SHAPE: u32 = 1_048_576;
 /// (`params[0]`: x linear, y A reads as zero).
 pub const F_FX_MASK: u32 = 2_097_152;
 
+/// `AdjMix` of a precomputed Shading/Lighting result (B, with the layers clipped to it): laid in
+/// at full strength wherever opacity × mask is above 0 (`compose::composite_layer`'s
+/// `blend_back` with 0/1 coverage).
+pub const F_AMOUNT_COVER: u32 = 4_194_304;
+
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
 /// [this layer, underlying layer]; every range as two floats, `black low × 256 + black high` and
 /// `white low × 256 + white high` (exact in f32), so entry `e`, side `s` starts at float
@@ -330,7 +335,12 @@ impl<'a> Planner<'a> {
         let own = match &layer.content {
             LayerContent::Adjustment(adj) => {
                 let b = self.retain(before);
-                self.adjust(adj, b)?
+                match super::lower::amount_program(adj, self.cx.transfer) {
+                    // Shading and Lighting at full strength everywhere (`adjust::apply_in` with
+                    // no amounts), whatever their mask.
+                    Some(program) => self.amount_pass(program, b, BlendMode::Normal, 1.0, 1.0, None),
+                    None => self.adjust(adj, b)?,
+                }
             }
             _ => self.content(layer)?,
         };
@@ -510,6 +520,31 @@ impl<'a> Planner<'a> {
         }
 
         if let LayerContent::Adjustment(adj) = &layer.content {
+            if let Some(program) = super::lower::amount_program(adj, self.cx.transfer)
+                && layer.blend != BlendMode::Dissolve
+            {
+                let (o, f) = adjustment_fill(layer, opacity);
+                if visible_clipped.is_empty() {
+                    return Ok(self.amount_mix(program, layer, backdrop, o, f));
+                }
+                // compose::composite_layer: shaded at the amounts (Normal at full coverage is the
+                // shaded backdrop itself), the clipped layers atop that, then laid back in at full
+                // strength wherever the amount is above 0.
+                let before = self.retain(backdrop);
+                let mask = self.mask_use(layer);
+                let mut adjusted = self.amount_pass(program, backdrop, BlendMode::Normal, o, 1.0, mask);
+                for c in visible_clipped {
+                    adjusted = self.atop(c, adjusted)?;
+                }
+                let mut p = Pass::new(Kernel::AdjMix, 0);
+                p.a = Some(before);
+                p.b = Some(adjusted);
+                p.mode = layer.blend;
+                (p.opacity, p.fill) = (o, f);
+                p.mask = self.mask_use(layer);
+                p.flags = F_AMOUNT_COVER;
+                return Ok(self.emit(p));
+            }
             let before = self.retain(backdrop);
             let mut adjusted = self.adjust(adj, backdrop)?;
             for c in visible_clipped {
@@ -778,6 +813,12 @@ impl<'a> Planner<'a> {
     fn atop_any(&mut self, layer: &'a Layer, base: Slot) -> Result<Slot, Unsupported> {
         let opacity = layer.opacity * layer.fill_opacity;
         if let LayerContent::Adjustment(adj) = &layer.content {
+            if let Some(program) = super::lower::amount_program(adj, self.cx.transfer)
+                && layer.blend != BlendMode::Dissolve
+            {
+                // A clipped adjustment takes Fill as coverage in every mode.
+                return Ok(self.amount_mix(program, layer, base, opacity, 1.0));
+            }
             let before = self.retain(base);
             let adjusted = self.adjust(adj, base)?;
             let mut p = Pass::new(Kernel::AdjMix, 0);
@@ -803,8 +844,39 @@ impl<'a> Planner<'a> {
         Ok(self.emit(p))
     }
 
+    /// Shading or Lighting (`program`, from `lower::amount_program`) over `backdrop` (consumed):
+    /// `fs_adjmix` works each pixel at its opacity × mask and lays the result in at full
+    /// strength wherever that is above 0 (`compose::composite_layer`).
+    fn amount_mix(&mut self, program: super::lower::AmountProgram, layer: &'a Layer, backdrop: Slot, opacity: f32, fill: f32) -> Slot {
+        let mask = self.mask_use(layer);
+        self.amount_pass(program, backdrop, layer.blend, opacity, fill, mask)
+    }
+
+    /// The `fs_adjmix` pass of [`Self::amount_mix`] with its blend, amount factor, fill and mask
+    /// given (consumes `backdrop`).
+    fn amount_pass(&mut self, program: super::lower::AmountProgram, backdrop: Slot, mode: BlendMode, opacity: f32, fill: f32, mask: Option<MaskUse<'a>>) -> Slot {
+        let (kind, color, params, rows) = program;
+        let mut p = Pass::new(Kernel::AdjMix, 0);
+        // The kernel reads only the backdrop; `b` is bound to it too.
+        p.b = Some(self.retain(backdrop));
+        p.a = Some(backdrop);
+        p.mode = mode;
+        (p.opacity, p.fill) = (opacity, fill);
+        p.mask = mask;
+        p.adjust_kind = kind;
+        p.color = color;
+        p.params = params;
+        p.lut = Some(rows);
+        self.emit(p)
+    }
+
     /// adjust::apply_with on a slot (consumes it).
     fn adjust(&mut self, adj: &Adjustment, src: Slot) -> Result<Slot, Unsupported> {
+        // Shading and Lighting are planned by `amount_mix` (their mask is the amount); what
+        // reaches here (Dissolve) composites on the CPU.
+        if matches!(adj, Adjustment::Shading(_) | Adjustment::Lighting(_)) {
+            return Err(Unsupported(format!("{} with Dissolve (composited on the CPU)", adj.label())));
+        }
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
         }

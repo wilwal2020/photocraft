@@ -221,15 +221,80 @@ pub fn windows_auto_backends(plan: &Plan, os: Os, dx12_vendors: impl FnOnce() ->
 }
 
 /// The PCI vendor ids of the DX12 adapters, from a DX12-only instance (DXGI, no Vulkan driver)
-/// with `desc`'s flags and backend options (the shader compiler from [`dx12_compiler`]).
-fn dx12_vendors(desc: &wgpu::InstanceDescriptor) -> Vec<u32> {
+/// with the window instance's flags and backend options (the shader compiler from [`dx12_compiler`]).
+fn dx12_vendors(flags: wgpu::InstanceFlags, backend_options: &wgpu::BackendOptions) -> Vec<u32> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
-        flags: desc.flags,
-        backend_options: desc.backend_options.clone(),
+        flags,
+        backend_options: backend_options.clone(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     crate::services::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)).iter().map(|a| a.get_info().vendor).collect()
+}
+
+/// Where the backend of the last start that rendered its first frames is kept, in the settings
+/// directory ([`remember_good_start`]).
+pub const LAST_GOOD_FILE: &str = "gpu-last-good.txt";
+
+/// `backends` (Windows `auto` with an Intel adapter: DX12 with GL as the last resort) without GL
+/// when the last start that rendered its first frames did so on DX12 (`last_good`). Creating the GL
+/// backend and listing its adapter took about 0.4 s of every start (user report, 2026-11-11). If
+/// DX12 then fails, the renderer error restarts in CPU compatibility mode and the start marker moves
+/// the next start to a safer plan; a start that works on anything else turns this off again.
+pub fn dx12_only_after_a_good_start(backends: wgpu::Backends, last_good: Option<&Path>) -> wgpu::Backends {
+    let worked = last_good.and_then(|f| std::fs::read_to_string(f).ok()).is_some_and(|t| t.trim() == "dx12");
+    if worked && backends.contains(wgpu::Backends::DX12) { wgpu::Backends::DX12 } else { backends }
+}
+
+/// Record the backend `marker`'s start rendered its first frames on (`adapter_backend`, as
+/// `gpu_canvas::backend_name` names it), for [`dx12_only_after_a_good_start`].
+pub fn remember_good_start(dir: Option<&Path>, marker: &Marker) {
+    let Some(dir) = dir else { return };
+    if marker.adapter_backend.is_empty() {
+        return;
+    }
+    if let Err(e) = std::fs::write(dir.join(LAST_GOOD_FILE), format!("{}\n", marker.adapter_backend)) {
+        log::warn!("couldn't remember the GPU backend that started: {e}");
+    }
+}
+
+/// Where [`remembered_vendors`] keeps the DX12 adapters' vendor ids, in the settings directory.
+pub const VENDORS_FILE: &str = "gpu-vendors.txt";
+
+/// How long after startup the remembered vendor ids are brought up to date: after the window's
+/// own device is up, so the two don't compete for the drivers.
+const VENDORS_REFRESH_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The DX12 adapters' vendor ids as `file` remembers them from an earlier launch, with
+/// `refresh(file)` started to bring them up to date for the next one; the first time (or with an
+/// unreadable file) `enumerate`d now and remembered. Listing the adapters through a DX12 instance
+/// took 1–1.5 s of every start only to learn whether one is Intel's (user report, 2026-11-11). A
+/// GPU added or removed shows up one launch later; a crash in the Intel Vulkan driver that this
+/// misses once is still caught by the start marker, which moves the next start to DX12.
+pub fn remembered_vendors(file: Option<&Path>, enumerate: impl FnOnce() -> Vec<u32>, refresh: impl FnOnce(PathBuf)) -> Vec<u32> {
+    let Some(file) = file else { return enumerate() };
+    if let Some(v) = std::fs::read_to_string(file).ok().as_deref().and_then(parse_vendors) {
+        refresh(file.to_path_buf());
+        return v;
+    }
+    let v = enumerate();
+    write_vendors(file, &v);
+    v
+}
+
+fn parse_vendors(text: &str) -> Option<Vec<u32>> {
+    let rest = text.lines().next()?.strip_prefix("dx12-vendors:")?;
+    rest.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| s.parse().ok()).collect()
+}
+
+fn format_vendors(v: &[u32]) -> String {
+    format!("dx12-vendors:{}\n", v.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
+}
+
+fn write_vendors(file: &Path, v: &[u32]) {
+    if let Err(e) = std::fs::write(file, format_vendors(v)) {
+        log::warn!("couldn't remember the GPU vendors in {}: {e}", file.display());
+    }
 }
 
 /// The DX12 shader compiler (#712). wgpu's default loads `dxcompiler.dll` by name, and the
@@ -384,7 +449,25 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
             let env = std::env::var("WGPU_DX12_COMPILER").ok();
             create.instance_descriptor.backend_options.dx12.shader_compiler = dx12_compiler(env.as_deref(), exe.as_deref().and_then(Path::parent));
         }
-        let without_vulkan = windows_auto_backends(plan, os, || dx12_vendors(&create.instance_descriptor));
+        let (flags, options) = (create.instance_descriptor.flags, create.instance_descriptor.backend_options.clone());
+        // Tests run `configure` for real; they list the adapters every time rather than touch the
+        // user's settings directory.
+        let file = if cfg!(test) { None } else { crate::services::config_dir().map(|d| d.join(VENDORS_FILE)) };
+        let refresh = |file: PathBuf| {
+            let options = options.clone();
+            let spawned = std::thread::Builder::new().name("gpu-vendors".into()).spawn(move || {
+                std::thread::sleep(VENDORS_REFRESH_DELAY);
+                write_vendors(&file, &dx12_vendors(flags, &options));
+            });
+            if let Err(e) = spawned {
+                log::warn!("couldn't start the GPU vendor refresh: {e}");
+            }
+        };
+        let without_vulkan = windows_auto_backends(plan, os, || remembered_vendors(file.as_deref(), || dx12_vendors(flags, &options), refresh));
+        // GL is only the last resort there: after a start that worked on DX12, leave it out
+        // (setting up GL and listing its adapter took about 0.4 s of every start).
+        let last_good = if cfg!(test) { None } else { crate::services::config_dir().map(|d| d.join(LAST_GOOD_FILE)) };
+        let without_vulkan = without_vulkan.map(|b| dx12_only_after_a_good_start(b, last_good.as_deref()));
         if let Some(b) = without_vulkan {
             create.instance_descriptor.backends = b;
         }
@@ -518,6 +601,11 @@ impl Sentinel {
         f.flush()?;
         self.marker = m;
         Ok(())
+    }
+
+    /// This start's marker (its adapter once chosen).
+    pub fn marker(&self) -> &Marker {
+        &self.marker
     }
 
     /// The start succeeded: clear the marker and release the lock.

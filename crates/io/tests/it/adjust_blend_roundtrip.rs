@@ -129,6 +129,16 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
         (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0].into() }, true),
         // PhotoCraft's private Grain block (Photoshop's own layout isn't published).
         (Adjustment::Grain { amount: 32.0, size: 34.0, roughness: 50.0, seed: 0 }, true),
+        // PhotoCraft's own Shading, in its private block.
+        (
+            Adjustment::Shading(photocraft_doc::adjust::Shading { depth: 0.5, self_bounce: 0.7, terminator_amount: 0.4, terminator_width: 0.5, physical: true, hue_shift: 30.0, steps: 2, mood_amount: 0.25, saturation_curve: -0.5, ..Default::default() }),
+            true,
+        ),
+        // And its mirror, Lighting.
+        (
+            Adjustment::Lighting(photocraft_doc::adjust::Lighting { lift: 0.5, hue_shift: 30.0, steps: 2, glow_amount: 0.25, saturation_curve: 0.75, highlight_fade: 0.6, gloss: 0.4, gloss_size: 0.2, metallic: true, ..Default::default() }),
+            true,
+        ),
     ];
     // Compile-time guard: a new Adjustment kind must be added to the list above.
     for (a, _) in &all {
@@ -150,6 +160,8 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             | Adjustment::GradientMap { .. }
             | Adjustment::SelectiveColor { .. }
             | Adjustment::Grain { .. }
+            | Adjustment::Shading(_)
+            | Adjustment::Lighting(_)
             | Adjustment::Unsupported { .. } => {}
         }
     }

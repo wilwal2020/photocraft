@@ -177,6 +177,132 @@ fn transfer_exponent(t: Transfer) -> f32 {
     }
 }
 
+/// The `fs_adjmix` kind that shades the backdrop itself (`compose::adjust::shading`): the
+/// layer's opacity × mask is the shadow amount fed into the maths, not a mix of a full-strength
+/// result, so Shading doesn't go through the `adjust()` kernel.
+pub const SHADING_KIND: i32 = 19;
+
+/// Shading for `fs_adjmix` (`shading_px` in compose.wgsl): the colour word (mood colour and the
+/// transfer exponent), the parameters, and the gamut table as LUT rows (`TABLE_L` × `TABLE_H`
+/// entries, lightness-major).
+pub fn shading_program(s: &photocraft_doc::adjust::Shading, transfer: Transfer) -> ([f32; 4], [[f32; 4]; 4], Vec<[f32; 4096]>) {
+    use photocraft_compose::adjust::shading::Prepared;
+    let prepared = Prepared::new(s);
+    let (s, dir) = (prepared.settings(), prepared.ambient_direction());
+    let color = [s.mood[0], s.mood[1], s.mood[2], transfer_exponent(transfer)];
+    let amb = prepared.ambient_light();
+    let extras = vec![
+        s.chroma_retention,
+        s.self_bounce,
+        prepared.terminator_hue(),
+        s.terminator_amount,
+        s.terminator_position,
+        s.terminator_width,
+        if s.physical { 1.0 } else { 0.0 },
+        amb[0],
+        amb[1],
+        amb[2],
+        if s.picker_axes { 1.0 } else { 0.0 },
+        s.saturation_shift,
+    ];
+    let params = [
+        [s.depth, s.saturation, s.hue_shift, s.split_hue],
+        [s.protect_neutrals, s.ambient_amount, s.protect_darks, s.steps as f32],
+        [dir[0], dir[1], s.mood_amount, 0.0],
+        [if s.literal_curve { 1.0 } else { 0.0 }, s.saturation_curve, 0.0, 0.0],
+    ];
+    (color, params, rows_with(&with_curves(extras, prepared.path(), prepared.hue_curve())))
+}
+
+/// The `fs_adjmix` kind for Lighting (`compose::adjust::lighting`), planned like Shading.
+pub const LIGHTING_KIND: i32 = 20;
+
+/// Where the Advanced Curve's flag sits in the extras: the Hue Curve's flag follows, then the
+/// Advanced Curve's table (two words a point), then the Hue Curve's.
+const PATH_EXTRA: usize = 15;
+
+/// `extras` with the Advanced Curve (`photocraft_compose::adjust::shading::path_table`) and the
+/// Hue Curve (`hue_table`) after them, as `shading_path_at` and `shading_hue_at` in compose.wgsl
+/// read them; nothing when both are straight.
+fn with_curves(mut extras: Vec<f32>, path: Option<&[[f32; 2]]>, hue: Option<&[f32]>) -> Vec<f32> {
+    use photocraft_compose::adjust::shading::PATH_LEN;
+    if path.is_none() && hue.is_none() {
+        return extras;
+    }
+    debug_assert!(extras.len() <= PATH_EXTRA);
+    let (path_at, hue_at) = (PATH_EXTRA + 2, PATH_EXTRA + 2 + 2 * PATH_LEN);
+    extras.resize(hue_at + PATH_LEN, 0.0);
+    if let Some(t) = path {
+        extras[PATH_EXTRA] = 1.0;
+        for (i, v) in t.iter().flatten().take(2 * PATH_LEN).enumerate() {
+            extras[path_at + i] = *v;
+        }
+    }
+    if let Some(t) = hue {
+        extras[PATH_EXTRA + 1] = 1.0;
+        for (i, v) in t.iter().take(PATH_LEN).enumerate() {
+            extras[hue_at + i] = *v;
+        }
+    }
+    extras
+}
+
+/// The gamut table as LUT rows with `extras` (the parameters that don't fit the four words)
+/// right after it, read by `shading_extra` in compose.wgsl.
+fn rows_with(extras: &[f32]) -> Vec<[f32; 4096]> {
+    let mut rows = chroma_rows();
+    let base = photocraft_compose::adjust::shading::chroma_table().len();
+    for (i, v) in extras.iter().enumerate() {
+        let at = base + i;
+        while rows.len() * 4096 <= at {
+            rows.push([0.0; 4096]);
+        }
+        rows[at / 4096][at % 4096] = *v;
+    }
+    rows
+}
+
+/// The gamut table as LUT rows, shared by Shading and Lighting.
+fn chroma_rows() -> Vec<[f32; 4096]> {
+    static ROWS: std::sync::OnceLock<Vec<[f32; 4096]>> = std::sync::OnceLock::new();
+    ROWS.get_or_init(|| photocraft_compose::adjust::shading::chroma_table().chunks(4096).map(to_row).collect()).clone()
+}
+
+/// Lighting for `fs_adjmix` (`lighting_px` in compose.wgsl): the colour word (glow colour and
+/// the transfer exponent), the parameters, and the gamut table as LUT rows.
+pub fn lighting_program(s: &photocraft_doc::adjust::Lighting, transfer: Transfer) -> ([f32; 4], [[f32; 4]; 4], Vec<[f32; 4096]>) {
+    let prepared = photocraft_compose::adjust::lighting::Prepared::new(s);
+    let (s, dir) = (prepared.settings(), prepared.light_direction());
+    let color = [s.glow[0], s.glow[1], s.glow[2], transfer_exponent(transfer)];
+    let params = [
+        [s.lift, s.saturation, s.hue_shift, s.light_hue],
+        [s.protect_neutrals, s.light_amount, s.protect_darks, s.steps as f32],
+        [dir[0], dir[1], s.glow_amount, 0.0],
+        [if s.literal_curve { 1.0 } else { 0.0 }, s.saturation_curve, s.highlight_fade, prepared.light_chroma()],
+    ];
+    let extras = vec![s.gloss, s.gloss_size, if s.metallic { 1.0 } else { 0.0 }];
+    (color, params, rows_with(&with_curves(extras, prepared.path(), prepared.hue_curve())))
+}
+
+/// An `fs_adjmix` program: kind, colour word, parameters, LUT rows.
+pub type AmountProgram = (i32, [f32; 4], [[f32; 4]; 4], Vec<[f32; 4096]>);
+
+/// The `fs_adjmix` program of an adjustment that reads its mask as the amount (Shading,
+/// Lighting); None for any other adjustment.
+pub fn amount_program(adj: &Adjustment, transfer: Transfer) -> Option<AmountProgram> {
+    match adj {
+        Adjustment::Shading(s) => {
+            let (c, p, r) = shading_program(s, transfer);
+            Some((SHADING_KIND, c, p, r))
+        }
+        Adjustment::Lighting(s) => {
+            let (c, p, r) = lighting_program(s, transfer);
+            Some((LIGHTING_KIND, c, p, r))
+        }
+        _ => None,
+    }
+}
+
 /// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
 pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType, mode: photocraft_color::ColorMode) -> Program {
     let mut p = [[0.0f32; 4]; 4];
@@ -342,6 +468,8 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         }
         // Identity on the CPU too (not evaluated there).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
+        // Planned by `Planner::amount_mix`, never through `adjust()`.
+        Adjustment::Shading(_) | Adjustment::Lighting(_) => (0, p, None),
     }
 }
 

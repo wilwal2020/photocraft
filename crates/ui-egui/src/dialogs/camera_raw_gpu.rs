@@ -155,6 +155,10 @@ impl Shared {
         let (pw, ph) = job.size;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let p = job.params;
+        // A creative profile's colour tables have no GPU pass: those develops stay on the CPU.
+        if p.profile.as_ref().is_some_and(|q| !q.is_neutral()) {
+            return Ok(None);
+        }
         let context = self.measure(&mut state, job);
         let prog = program::program(p, pw, ph, Frame::whole(pw, ph), &context, job.float, true)?;
         if !gpu.fits(prog.width, prog.height, prog.plane_floats) {
