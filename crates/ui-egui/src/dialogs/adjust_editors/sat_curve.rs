@@ -277,8 +277,12 @@ pub(super) fn saturation_curve_editor(ui: &mut egui::Ui, v: &mut Value, mem: egu
     }
     let what = match (literal, lighting) {
         (true, _) => tl!("The path each colour takes on the colour picker, in the shape drawn: sized to each colour's own path, the same scale both ways."),
-        (false, true) => tl!("The path each colour takes on the colour picker, stretched from its own base colour to its full light. Outside the box it runs on toward the picker's edges."),
-        (false, false) => tl!("The path each colour takes on the colour picker, stretched from its own base colour to its full shadow. Outside the box it runs on toward the picker's edges."),
+        (false, true) => tl!(
+            "The path each colour takes on the colour picker, stretched from its own base colour to its full light. Outside the box it runs on toward the picker's edges."
+        ),
+        (false, false) => tl!(
+            "The path each colour takes on the colour picker, stretched from its own base colour to its full shadow. Outside the box it runs on toward the picker's edges."
+        ),
     };
     let hint = crate::i18n::fmt(tl!("Click to add a point · drag off or {key}-click or Delete to remove"), &[("key", &crate::shortcuts::pretty("Cmd"))]);
     ui.label(RichText::new(what).color(t.text_dim).size(11.0));
@@ -431,9 +435,13 @@ fn hue_curve_editor(ui: &mut egui::Ui, v: &mut Value, mem: egui::Id, lighting: b
         }
     }
     let what = if lighting {
-        tl!("When the hue turns, from no light (left) to full light (right). It times the turn Hue Shift and the light colour give; below the box it turns further, above it turns back.")
+        tl!(
+            "When the hue turns, from no light (left) to full light (right). It times the turn Hue Shift and the light colour give; below the box it turns further, above it turns back."
+        )
     } else {
-        tl!("When the hue turns, from no shadow (left) to full shadow (right). It times the turn Hue Shift and the ambient colour give; below the box it turns further, above it turns back.")
+        tl!(
+            "When the hue turns, from no shadow (left) to full shadow (right). It times the turn Hue Shift and the ambient colour give; below the box it turns further, above it turns back."
+        )
     };
     ui.label(RichText::new(what).color(t.text_dim).size(11.0));
     e

@@ -341,7 +341,7 @@ fn the_picker_window_is_no_bigger_than_photoshops() {
     assert!(widths[0] <= 136.0, "actions {} points wide, Photoshop's about 116", widths[0]);
     // …and they stay clear of the new/current swatch and the warnings beside it (user report:
     // the buttons ran over the swatch and were cut off).
-    let swatch = h.get_by_label("Click to restore the current colour").rect();
+    let swatch = h.get_by_label("Click to restore the current color").rect();
     for label in ["OK", "Cancel", "Add to Swatches"] {
         let b = h.get_by_label(label).rect();
         assert!(b.left() >= swatch.right() + 22.0, "{label} {b:?} clear of the swatch {swatch:?} and its warnings");
@@ -357,9 +357,32 @@ fn web_colors_and_current_swatch_still_update_the_picker() {
     assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("003366"), "hex field follows the snap while it has focus");
     h.get_by_label("Only Web Colors").click();
     h.run_steps(2);
-    h.get_by_label("Click to restore the current colour").click();
+    h.get_by_label("Click to restore the current color").click();
     h.run_steps(2);
     assert_eq!(color(&h), "#123456");
+}
+
+/// #8568: a picker seeded with the inks its colour was picked as gets them back from Current and
+/// from Reset after an edit, not inks recomputed from the colour.
+#[test]
+fn current_and_reset_restore_the_seeded_inks() {
+    let rich = [0.5, 0.5, 0.5, 1.0];
+    let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(rich).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let mut h = picker(&format!("#{r:02x}{g:02x}{b:02x}"));
+    seed_cmyk(h.state_mut(), rich);
+    let edit = |h: &mut Harness<'static, Map<String, Value>>| {
+        set_rgb(h.state_mut(), [1.0, 0.0, 0.0], Keep::Nothing);
+        h.run_steps(2);
+        assert_ne!(picked_cmyk(h.state()), Some(rich), "the edit replaced the inks");
+    };
+    edit(&mut h);
+    h.get_by_label("Click to restore the current color").click();
+    h.run_steps(2);
+    assert_eq!(picked_cmyk(h.state()), Some(rich), "Current restores the seeded inks");
+    edit(&mut h);
+    reset(h.state_mut());
+    h.run_steps(2);
+    assert_eq!(picked_cmyk(h.state()), Some(rich), "Reset restores the seeded inks");
 }
 
 /// Only Web Colors snaps hex, field and component edits to web-safe colours.

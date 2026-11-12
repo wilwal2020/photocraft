@@ -64,17 +64,18 @@ fn hold(repeat: KeyRepeat, times: &[f64], release: f64) -> Vec<f32> {
 }
 
 /// Holding ] grows the brush once at once, then at the settings' pace, and letting go stops it.
+/// Each step is Photoshop's (25 px between 100 and 200 px, upstream's bracket-key steps).
 #[test]
 fn holding_the_size_key_steps_at_the_chosen_pace() {
     // No pause, a step every 100 ms.
     let s = hold(KeyRepeat { pause: false, interval_ms: 100.0 }, &[0.05, 0.1, 0.15, 0.2, 0.3, 0.35, 0.4, 0.5], 0.35);
-    assert_eq!(s, vec![125.0, 125.0, 156.0, 156.0, 195.0, 244.0, 244.0, 244.0, 244.0], "a step at 0.1, 0.2, 0.3, none after the release at 0.35");
+    assert_eq!(s, vec![125.0, 125.0, 150.0, 150.0, 175.0, 200.0, 200.0, 200.0, 200.0], "a step at 0.1, 0.2, 0.3, none after the release at 0.35");
     // The pause: nothing more until half a second.
     let s = hold(KeyRepeat { pause: true, interval_ms: 100.0 }, &[0.1, 0.3, 0.45, 0.5, 0.6], 99.0);
-    assert_eq!(s, vec![125.0, 125.0, 125.0, 125.0, 156.0, 195.0]);
+    assert_eq!(s, vec![125.0, 125.0, 125.0, 125.0, 150.0, 175.0]);
     // A second between steps.
     let s = hold(KeyRepeat { pause: false, interval_ms: 1000.0 }, &[0.5, 0.99, 1.0, 1.5, 2.0], 99.0);
-    assert_eq!(s, vec![125.0, 125.0, 125.0, 156.0, 156.0, 195.0]);
+    assert_eq!(s, vec![125.0, 125.0, 125.0, 150.0, 150.0, 175.0]);
 }
 
 /// The system's own repeat presses of ] change nothing: the clock above does the repeating.

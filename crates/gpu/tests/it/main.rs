@@ -12,6 +12,7 @@ mod dx12_release;
 mod effect_noise;
 mod parity;
 mod pipeline_errors;
+mod pipelines;
 mod second_mask;
 mod timing;
 mod uniform_limits;

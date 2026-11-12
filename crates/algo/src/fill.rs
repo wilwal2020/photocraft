@@ -1302,7 +1302,7 @@ fn to_region(fill: &[bool], w: usize, h: usize, area: Rect, anti_alias: bool, fr
         return None;
     }
     let marks: Vec<u8> = fill.iter().map(|f| if *f { 255 } else { 0 }).collect();
-    let mut region = region_from_marks(&marks, w, h, area, (x0, y0, x1, y1), anti_alias);
+    let mut region = region_from_marks(&marks, w, h, area, (x0, y0, x1, y1), anti_alias, None);
     let Some(free) = free.filter(|f| anti_alias && f.len() == fill.len()) else { return Some(region) };
     let open = |i: usize| free.get(i) == Some(&true) && fill.get(i) == Some(&false);
     let (bx, by) = ((region.bbox.x0 - area.x0) as usize, (region.bbox.y0 - area.y0) as usize);

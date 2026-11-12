@@ -37,7 +37,8 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser always shows its sampling hotspot.
+/// Photoshop; the Background Eraser always shows its sampling hotspot, and the Remove tool its
+/// centre + (#12550).
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;
@@ -45,7 +46,7 @@ pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {
         return option || show_crosshair;
     }
-    show_crosshair || tool == Tool::BackgroundEraser
+    show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::Remove)
 }
 
 /// The display colour of an RGB triple (0..1 per channel) as an egui colour.
@@ -126,15 +127,18 @@ fn paint_sampling_ring(painter: &egui::Painter, p: Pos2, new: Color32, current: 
 }
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
-/// foreground colour, as with the Eyedropper itself (#417).
+/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906, the Color
+/// Replacement tool #11914).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::Fill)
+    mods.alt
+        && !mods.ctrl
+        && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::Fill | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
 /// standard cursor for it (and back), as in Photoshop (#4639).
-pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
+pub(crate) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
@@ -180,6 +184,80 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     crate::tool_cursor::icon(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0)
 }
 
+/// The Color Sampler's cursor over an existing sampler point: the arrow with the sampler target,
+/// or with Alt the arrow with scissors (#11744).
+pub(crate) fn sampler_hover_cursor(ctx: &egui::Context, p: Pos2, alt: bool) -> egui::CursorIcon {
+    if alt {
+        crate::icons::cursor_badge(ctx, "scissors", p);
+    } else {
+        crate::icons::cursor_badge(ctx, "sampler", p);
+    }
+    egui::CursorIcon::Default
+}
+
+/// The Color Sampler's cursor: an eyedropper with a small sampler target at its top-left,
+/// hotspot at the pipette tip (#11744).
+pub(crate) fn color_sampler_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    pipette_cursor(ctx, p);
+    let size = 11.0;
+    // The pipette tip is at (2, 22) in its 24-unit box of size 20.0. The top-left region is
+    // around (5, 5), which is offset by (3, -17) * (20/24) = (2.5, -14.17) from the tip.
+    let target_center = p + vec2(2.5, -14.0);
+    let rect = Rect::from_center_size(target_center, egui::Vec2::splat(size));
+    let area = egui::Area::new(egui::Id::unique("pc-sampler-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    area.show(ctx, |ui| {
+        let outline = crate::icons::image("sampler", size, Color32::from_black_alpha(200));
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+            outline.paint_at(ui, rect.translate(vec2(dx, dy)));
+        }
+        crate::icons::image("sampler", size, Color32::WHITE).paint_at(ui, rect);
+    });
+    egui::CursorIcon::None
+}
+
+/// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres
+/// the dialog's preview window on (#9648), white between dark edges so it reads on any image.
+/// Draws it at `p` and returns the OS cursor to set (hidden).
+pub(crate) fn preview_locator_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    const SIDE: f32 = 9.0;
+    let rect = Rect::from_center_size(p, vec2(SIDE, SIDE));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-preview-locator")));
+    let dark = Stroke::new(1.0, Color32::from_black_alpha(200));
+    painter.rect_stroke(rect.expand(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect.shrink(1.0), 0.0, dark, egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
+    egui::CursorIcon::None
+}
+
+/// The Mixer Brush's ⌥ cursor, the reference's sample target (#11957): a small circle with a
+/// crosshair through it, centred on the hotspot. Draws it at `p` and returns the OS cursor to set.
+pub(crate) fn sample_target_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    let across = vec![vec2(-8.0, 0.0), vec2(8.0, 0.0)];
+    let down = vec![vec2(0.0, -8.0), vec2(0.0, 8.0)];
+    super::tool_cursor::outline(painter, p, vec![ring(5.0), across, down], false)
+}
+
+/// A no-entry sign, a circle with a diagonal bar centred on the hotspot: the Mixer Brush over a
+/// layer it can't paint (Lock All, #11957). Draws it at `p` and returns the OS cursor to set.
+pub(crate) fn no_entry_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    let bar = vec![vec2(-4.5, -4.5), vec2(4.5, 4.5)];
+    super::tool_cursor::outline(painter, p, vec![ring(6.5), bar], false)
+}
+
+/// A closed circle of `radius` points around the hotspot.
+fn ring(radius: f32) -> Vec<egui::Vec2> {
+    (0..32).map(|i| i as f32 / 32.0 * std::f32::consts::TAU).map(|a| vec2(a.cos(), a.sin()) * radius).collect()
+}
+
+/// Whether the Mixer Brush's target layer has Lock All on, so it shows [`no_entry_cursor`].
+pub(crate) fn mixer_target_locked(app: &PhotocraftApp) -> bool {
+    app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|layer| layer.locks.all)
+}
+
+#[cfg(test)]
+#[path = "../mixer_cursor_tests.rs"]
+mod mixer_cursor_tests;
+
 /// The Paint Bucket's cursor: a bucket pouring to the left, as Photoshop's, whose drip is the
 /// filled pixel. Draws it at `p` and returns the OS cursor to set (hidden).
 pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
@@ -198,6 +276,24 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
         return false;
     }
     match ev {
+        // ⇧⌥-click adds a colour sampler at the clicked pixel instead, as the Color Sampler tool
+        // places one: no foreground change, nothing painted (#11890). A refused point (the
+        // document's limit) reports in the status bar as that tool's does; off the canvas, as that
+        // tool, it places none and says nothing. A press on an existing point wasn't measured, so
+        // it samples the foreground as before.
+        ToolEvent::Down { x, y, .. } if mods.shift && !on_sampler(app, x, y) => {
+            let size = app.session.active().map(|d| d.doc.size);
+            let inside = size.is_some_and(|s| (0.0..f64::from(s.width)).contains(&x) && (0.0..f64::from(s.height)).contains(&y));
+            if inside && let Err(e) = app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
+                // Only the limit is a plain report; any other refusal (a failed Pen draft left in
+                // another document) stays an error, also when the document is full.
+                let limit = e == photocraft_engine::sampler_cmds::limit_message();
+                app.ui.status = e;
+                app.ui.status_error = !limit;
+            }
+        }
+        // While ⇧⌥ stay held after that press, moves sample nothing.
+        ToolEvent::Move { .. } if mods.shift => {}
         // Without ⌥: the sample sets the foreground colour, whatever the Eyedropper would do.
         ToolEvent::Down { x, y, .. } => {
             keep_ring_before(app, false);
@@ -208,6 +304,17 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     }
     true
 }
+
+/// Is document point (x, y) on a colour sampler, within the Color Sampler tool's reach of one (7
+/// screen pixels)?
+fn on_sampler(app: &PhotocraftApp, x: f64, y: f64) -> bool {
+    let tol = 7.0 / f64::from(app.point_zoom().max(0.01));
+    app.session.active().is_some_and(|d| d.color_samplers.iter().any(|q| (q[0] - x).hypot(q[1] - y) <= tol))
+}
+
+#[cfg(test)]
+#[path = "../brush_shift_alt_sampler_tests.rs"]
+mod brush_shift_alt_sampler_tests;
 
 /// Is a held sampling drag at screen point `p` off the image, so the screen is read there
 /// ([`sample_eyedropper`])? Then the cursor is the system's crosshair: a pipette PhotoCraft paints
@@ -246,7 +353,12 @@ fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str, tar
         return None;
     }
     let size = app.ui.tool_options.eyedropper_size;
-    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer, "target": target})).ok()?;
+    let v = app
+        .run(
+            "document.sampleColor",
+            json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer, "target": target, "zoom": f64::from(app.current_zoom())}),
+        )
+        .ok()?;
     match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
         [r, g, b, a] if a > 0.0 => Some([r, g, b]),
         _ => None,
@@ -276,3 +388,15 @@ pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
 pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
     alt_samples(tool, mods) || alt_loads_mixer(tool, mods)
 }
+
+#[cfg(test)]
+#[path = "../color_replacement_alt_click_tests.rs"]
+mod color_replacement_alt_click_tests;
+
+#[cfg(test)]
+#[path = "../background_eraser_alt_click_tests.rs"]
+mod background_eraser_alt_click_tests;
+
+#[cfg(test)]
+#[path = "remove_cursor_tests.rs"]
+mod remove_cursor_tests;

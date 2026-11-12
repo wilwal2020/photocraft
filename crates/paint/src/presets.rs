@@ -10,7 +10,10 @@ use crate::brush::{
 };
 use photocraft_color::BlendMode;
 
-use crate::procedural::{bristle_tip, chalk_tip, charcoal_tip, dash_tip, dry_wash_edged_tip, dry_wash_square_tip, granulation_tile, fine_spatter_tip, gouache_rim_tip, bristle_clump_tip, grass_tip, leaf_tip, rake_tip, spatter_tip, sponge_tip, star_tip};
+use crate::procedural::{
+    bristle_clump_tip, bristle_tip, chalk_tip, charcoal_tip, dash_tip, dry_wash_edged_tip, dry_wash_square_tip, fine_spatter_tip, gouache_rim_tip,
+    granulation_tile, grass_tip, leaf_tip, rake_tip, spatter_tip, sponge_tip, star_tip,
+};
 
 /// Preset groups, in panel order.
 pub const GROUPS: [&str; 4] = ["General", "Dry Media", "Wet Media", "Special Effects"];
@@ -778,11 +781,14 @@ mod tests {
         assert_eq!(find(&builtin(), "Dry Wash Grain").map(|p| (p.group.as_str(), p.brush.mode)), Some(("Wet Media", BlendMode::Normal)));
         // Across the stroke, averaged over several columns: rows partway between paper and wash.
         let ramp = |s: &photocraft_raster::Surface| {
-            (100..160).step_by(6).map(|x| {
-                let col: Vec<f32> = (0..120).map(|y| 1.0 - s.rgba(x, y)[2] / 0.8).collect();
-                let full = col[50..70].iter().sum::<f32>() / 20.0;
-                col.iter().filter(|&&c| c > 0.1 * full && c < 0.7 * full).count()
-            }).sum::<usize>()
+            (100..160)
+                .step_by(6)
+                .map(|x| {
+                    let col: Vec<f32> = (0..120).map(|y| 1.0 - s.rgba(x, y)[2] / 0.8).collect();
+                    let full = col[50..70].iter().sum::<f32>() / 20.0;
+                    col.iter().filter(|&&c| c > 0.1 * full && c < 0.7 * full).count()
+                })
+                .sum::<usize>()
         };
         assert!(ramp(&grain) * 10 < ramp(&soft) * 9, "crisper sides: {} vs {} partial rows", ramp(&grain), ramp(&soft));
         // Along the middle of the stroke: the paint varies more from pixel to pixel.
@@ -802,9 +808,7 @@ mod tests {
         let b = find(&builtin(), name).map(|p| BrushSettings { color: [1.0, 0.8, 0.75, 1.0], seed, ..p.brush.clone() }).unwrap_or_default();
         let mut s = Surface::new(PixelFormat::RGBA32F);
         s.fill_rect(photocraft_geom::Rect::new(0, 0, 300, 120), &[1.0, 0.55, 0.05, 1.0]);
-        let pts: Vec<_> = (0..=100)
-            .map(|i| crate::StrokePoint::new(30.0 + f64::from(i) * 2.4, 60.0, pressure.unwrap_or(1.0 - i as f32 / 100.0)))
-            .collect();
+        let pts: Vec<_> = (0..=100).map(|i| crate::StrokePoint::new(30.0 + f64::from(i) * 2.4, 60.0, pressure.unwrap_or(1.0 - i as f32 / 100.0))).collect();
         crate::render::render_stroke(&mut s, &b, &pts, None, false, 1.0);
         s
     }

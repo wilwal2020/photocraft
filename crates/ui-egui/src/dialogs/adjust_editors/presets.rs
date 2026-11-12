@@ -50,7 +50,15 @@ fn same(a: &Value, b: &Value) -> bool {
 /// The Preset row: a menu of `builtin` (name, params JSON they set) and `saved` presets, Save…
 /// (names the current settings) and Delete (the saved preset shown). `defaults` is the kind's
 /// full default params.
-pub(super) fn preset_row(ui: &mut egui::Ui, v: &mut Value, mem: egui::Id, kind: &str, builtin: &[(&str, &str)], defaults: &Value, saved: &[(String, Value)]) -> Edit {
+pub(super) fn preset_row(
+    ui: &mut egui::Ui,
+    v: &mut Value,
+    mem: egui::Id,
+    kind: &str,
+    builtin: &[(&str, &str)],
+    defaults: &Value,
+    saved: &[(String, Value)],
+) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
     let shown_id = mem.with("preset-shown");
@@ -111,7 +119,8 @@ pub(super) fn preset_row(ui: &mut egui::Ui, v: &mut Value, mem: egui::Id, kind: 
         let mut cancel = false;
         ui.horizontal(|ui| {
             label(ui, tl!("Name:"));
-            let r = widgets::text_field_ex(ui, mem.with("preset-name-field"), name, tl!("Preset name"), 150.0, false, Some(NAME_MAX)).accessible_name(tl!("Name:"));
+            let r =
+                widgets::text_field_ex(ui, mem.with("preset-name-field"), name, tl!("Preset name"), 150.0, false, Some(NAME_MAX)).accessible_name(tl!("Name:"));
             if !r.has_focus() && !r.lost_focus() && name.is_empty() {
                 r.request_focus();
             }
@@ -144,8 +153,7 @@ pub(super) fn preset_row(ui: &mut egui::Ui, v: &mut Value, mem: egui::Id, kind: 
 
 /// The host's half: saves or deletes the preset the editor asked for this frame.
 pub fn apply_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(p) = ctx.data_mut(|d| d.get_temp::<Option<Pending>>(pending_id()).flatten().inspect(|_| d.remove::<Option<Pending>>(pending_id())))
-    else {
+    let Some(p) = ctx.data_mut(|d| d.get_temp::<Option<Pending>>(pending_id()).flatten().inspect(|_| d.remove::<Option<Pending>>(pending_id()))) else {
         return;
     };
     match p {

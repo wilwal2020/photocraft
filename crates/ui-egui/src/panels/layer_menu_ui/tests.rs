@@ -2,6 +2,10 @@ use super::*;
 
 #[test]
 fn mask_toggle_label_follows_history_and_selected_layer() {
+    // English in every build; French too when the craft-i18n catalogs are embedded.
+    let langs: Vec<_> = std::iter::once(crate::i18n::Lang::EN)
+        .chain(crate::i18n::needs_catalogs().then(|| crate::i18n::Lang::from_code("fr").expect("fr registered")))
+        .collect();
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -17,7 +21,7 @@ fn mask_toggle_label_follows_history_and_selected_layer() {
         let item = crate::menus::menu_items(app).into_iter().find(|i| i.id == toggle).unwrap();
         assert_eq!(item.enabled, label.is_some());
         assert_eq!(item.label, label.unwrap_or("Enable Layer Mask"));
-        for lang in [crate::i18n::Lang::EN, crate::i18n::Lang::from_pref("fr")] {
+        for &lang in &langs {
             let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(app), lang, lang.code());
             let native = layout.bar.find(toggle).unwrap();
             assert_eq!(native.label, crate::i18n::tr(lang, &item.label));
@@ -53,7 +57,11 @@ fn mask_toggle_context_menu_follows_the_clicked_layer_and_existing_translations(
     use egui_kittest::{Harness, kittest::Queryable};
 
     for language in ["en", "fr"] {
-        let lang = crate::i18n::Lang::from_pref(language);
+        // English runs in every build; French needs the craft-i18n catalogs.
+        if language != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
+        let lang = crate::i18n::Lang::from_code(language).expect("registered language");
         let _language = crate::i18n::language_scope(lang);
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
@@ -271,9 +279,35 @@ fn edit_contents_is_available_only_for_smart_objects() {
     let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
     let edit = ids.iter().position(|id| *id == "layer.smartObjects.editContents").expect("Edit Contents entry");
     assert_eq!(
-        ids[edit + 1..edit + 5],
-        ["layer.smartObjects.replaceContents", "layer.smartObjects.relinkToFile", "layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]
+        ids[edit + 1..edit + 6],
+        [
+            "layer.smartObjects.resetTransform",
+            "layer.smartObjects.replaceContents",
+            "layer.smartObjects.relinkToFile",
+            "layer.smartObjects.convertToLayers",
+            "layer.rasterize.smartObject"
+        ],
+        "Reset Transform follows Edit Contents, as in the reference flyout"
     );
+}
+
+/// A type layer's menu offers Photoshop's outline conversions after Rasterize Type, and Convert
+/// to Shape from it turns the text into a shape layer.
+#[test]
+fn type_layer_menu_converts_to_shape() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("type.create", json!({"text": "Hi", "size": 24, "x": 8, "y": 32})).unwrap();
+    let layer = |s: &photocraft_engine::Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+    };
+    let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
+    let r = ids.iter().position(|id| *id == "layer.rasterize.type").expect("Rasterize Type entry");
+    assert_eq!(ids[r + 1..r + 3], ["type.createWorkPath", "type.convertToShape"]);
+    assert!(!entries(&layer(&s), true, false).iter().flatten().any(|e| e.1 == "type.convertToShape"), "the selection menu keeps one Rasterize item");
+    s.execute("type.convertToShape", json!({})).unwrap();
+    assert!(matches!(layer(&s).content, LayerContent::Shape(_)));
 }
 
 /// Right-clicking inside a multi-layer selection offers one Rasterize item for the whole
@@ -289,12 +323,14 @@ fn multi_selection_menu_rasterizes_the_selection() {
     let smart = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
     let ids = |multi| entries(&smart, multi, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
     assert!(ids(false).contains(&"layer.smartObjects.editContents"), "a single smart object keeps its items");
+    assert!(ids(false).contains(&"layer.smartObjects.resetTransform"), "and its Reset Transform");
     let multi = ids(true);
     assert!(multi.contains(&"layer.rasterize.layer"));
     for single in [
         "layer.rasterize.smartObject",
         "layer.rasterize.shape",
         "layer.smartObjects.editContents",
+        "layer.smartObjects.resetTransform",
         "layer.smartObjects.replaceContents",
         "layer.smartObjects.relinkToFile",
         "layer.smartObjects.convertToLayers",
@@ -394,7 +430,7 @@ fn multi_selection_menu_greys_what_acts_on_one_layer() {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
     }
     for label in [
-        "Quick Export As PNG",
+        "Quick Export as PNG",
         "Export As…",
         "Add Layer Mask",
         "Duplicate Layers…",
@@ -623,4 +659,64 @@ fn the_second_mask_menu_inverts_it() {
     let second = l.second_mask.as_ref().unwrap();
     assert_eq!((second.value(80, 30), second.value(20, 30)), (0.0, 1.0), "the second mask is inverted");
     assert_eq!((l.mask.as_ref().unwrap().value(80, 30), l.mask.as_ref().unwrap().value(20, 30)), (1.0, 1.0), "the layer mask isn't");
+}
+
+/// #12324: right-clicking a pixel layer's thumbnail opens Photoshop's thumbnail menu; its Select Pixels
+/// loads the clicked layer's transparency, as a ⌘-click on the thumbnail does. The Background's
+/// thumbnail, with no transparency to load, keeps the layer menu.
+#[test]
+fn layer_thumbnail_context_menu_selects_the_clicked_layers_pixels() {
+    use crate::PhotocraftApp;
+    use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    }
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 60})).unwrap();
+    let background = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Painted"})).unwrap();
+    s.execute("select.rect", json!({"x": 60, "y": 0, "width": 40, "height": 60})).unwrap();
+    s.execute("edit.fill", json!({"color": "#b04020"})).unwrap();
+    let painted = s.active().unwrap().active_layer.unwrap();
+    // Another layer is active, and the current selection doesn't overlap the painted pixels.
+    s.execute("layer.new.layer", json!({"name": "Other active layer"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 60})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    let thumb = |h: &Harness<'_, PhotocraftApp>, layer: photocraft_doc::LayerId| {
+        crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer.0).and_then(|r| r.thumbnail).expect("thumbnail drawn").center()
+    };
+
+    let at = thumb(&h, painted);
+    click(&mut h, at, PointerButton::Secondary);
+    assert!(h.query_by_label("Blending Options…").is_none(), "the thumbnail menu, not the layer menu");
+    for item in ["Small Thumbnails", "Clip Thumbnails to Layer Bounds"] {
+        h.get_by_label(item);
+    }
+    let at = h.get_by_label("Select Pixels").rect().center();
+    click(&mut h, at, PointerButton::Primary);
+    let st = h.state().session.active().unwrap();
+    let sel = st.doc.selection.as_ref().expect("a selection");
+    assert!(sel.sample_channel(80, 30, 0) > 0.99, "the clicked layer's pixels are selected");
+    assert!(sel.sample_channel(10, 30, 0) < 0.01, "the old selection is replaced");
+
+    let at = thumb(&h, background);
+    click(&mut h, at, PointerButton::Secondary);
+    assert!(h.query_by_label("Select Pixels").is_none(), "the Background has no pixels to load");
+    h.get_by_label("Blending Options…");
 }

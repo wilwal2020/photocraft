@@ -76,6 +76,9 @@ impl PhotocraftApp {
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         view_cmds::leave_full_screen_without_document(self, ctx);
+        // A box drag that ended without a release reaching the Type tool keeps its box, before
+        // the commit below can end the edit.
+        crate::type_box_preview::settle(self);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
@@ -126,12 +129,14 @@ impl PhotocraftApp {
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
         // the tab strip can follow the pointer.
-        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+        let hovering = ctx.input(|i| i.raw.hovered_files.len());
+        if hovering > 0 {
             ctx.request_repaint();
         }
+        crate::file_open::log_drag_over(ctx, hovering);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped.is_empty() {
-            let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
+            let at = self.cursor_pos(ctx);
             self.open_dropped(ctx, dropped, at);
             // Files dragged in from another app's window: PhotoCraft comes to the front and takes
             // the keyboard, as Photoshop does, instead of staying behind the source (#5687).
@@ -179,6 +184,8 @@ impl PhotocraftApp {
         // A real UI pass consumes the one in-flight synthetic batch (see `inject_synthetic`).
         self.begin_synthetic_pass(&ctx);
         self.hover_layer = None;
+        // The contextual task bar reports itself again if this frame draws it (#10890).
+        self.ui.task_bar_shown = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
@@ -190,7 +197,7 @@ impl PhotocraftApp {
             // No editor was drawn this pass: end its IME context rather than keep a stale owner.
             type_tool::sync_ime(self, &ctx);
             // The frame's stage record was started with its input: close it here too.
-            self.finish_frame(0.0);
+            self.finish_frame(&ctx, 0.0);
             return;
         }
         let t0 = gpu_canvas::now_ms();
@@ -252,7 +259,7 @@ impl PhotocraftApp {
         // A Hand-tool (or Space) pan is traced like a stroke: its frames' pacing is what a fast
         // pan looks like.
         self.frame_panning = self.active_tool() == crate::state::Tool::Hand && ctx.input(|i| i.pointer.primary_down());
-        self.finish_frame(ui_ms);
+        self.finish_frame(&ctx, ui_ms);
         if !drawn {
             return;
         }
@@ -288,6 +295,8 @@ impl PhotocraftApp {
     /// wait modal took the frame (its input, IME and window check already handled).
     fn ui_body(&mut self, ui: &mut egui::Ui) -> bool {
         let ctx = ui.ctx().clone();
+        // Where a pen dragging the window is on the screen, before the title bar reads it.
+        titlebar::note_os_pointer(self, &ctx);
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).
@@ -343,6 +352,9 @@ impl PhotocraftApp {
             let t = gpu_canvas::now_ms();
             panels::options_bar(self, ui);
             self.perf.span("ui: options bar", gpu_canvas::now_ms() - t);
+        } else {
+            // Its Fill help modal is gone with the bar: do not let a stale flag hold the crop's keys.
+            panels::options_bar::close_fill_help(ui.ctx());
         }
         if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             let t = gpu_canvas::now_ms();

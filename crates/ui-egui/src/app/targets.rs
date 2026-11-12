@@ -22,6 +22,10 @@ impl PhotocraftApp {
             matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside" | "edit.copy");
         let target: String = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
             "filterMask".into()
+        } else if self.vector_mask_targeted() && photocraft_engine::channel_cmds::follows_vector_mask_target(id) {
+            // The Layers panel targets a vector mask: the Rotate/Flip presets turn its path
+            // alone, whether it is linked or not (#12283).
+            "vectorMask".into()
         } else if let Some(i) = self.fx_mask_targeted().filter(|_| !pastes_or_copies) {
             // An effect's own mask is painted, filled, filtered and moved like a layer mask; Copy
             // and Paste keep to the layer.
@@ -95,6 +99,17 @@ impl PhotocraftApp {
         }
         let has_second = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.second_mask.is_some());
         if self.ui.mask_target && self.ui.second_mask_target && has_second { "secondMask" } else { "mask" }
+    }
+
+    /// The active layer's vector mask is the Layers panel's target, and no alpha channel or Quick
+    /// Mask takes over (the engine routes those itself).
+    pub fn vector_mask_targeted(&self) -> bool {
+        if !self.ui.vector_mask_target {
+            return false;
+        }
+        let Some(st) = self.session.active() else { return false };
+        let alpha = matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) if i < st.doc.channels.len());
+        !alpha && st.doc.quick_mask.is_none()
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer

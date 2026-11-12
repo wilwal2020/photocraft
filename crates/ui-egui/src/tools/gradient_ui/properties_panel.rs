@@ -82,7 +82,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
             }
         });
-        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
+        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Center the gradient (offset 0, 0)")).clicked() {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
         }
         ui.add_space(theme::ROW_GAP);

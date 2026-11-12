@@ -381,7 +381,7 @@ pub(super) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirs: &CameraRaw
         let text = if d.presets.scanning() {
             tl!("Looking for presets…")
         } else if query.is_empty() {
-            tl!("No presets yet. Create one with +, or put Camera Raw presets (.xmp) in PhotoCraft's presets folder.")
+            tl!("No presets yet. Create one with +, or put RAW Develop presets (.xmp) in PhotoCraft's presets folder.")
         } else {
             tl!("No presets match.")
         };

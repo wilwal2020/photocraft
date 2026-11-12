@@ -36,8 +36,10 @@ mod descriptors;
 mod events;
 mod fields;
 mod files;
+mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -45,6 +47,7 @@ mod steps_content_aware;
 mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
+mod steps_droplet;
 mod steps_gallery;
 mod steps_gradient;
 mod steps_image;
@@ -52,6 +55,8 @@ mod steps_layer;
 mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
+mod steps_measurement;
+mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
 
@@ -80,6 +85,7 @@ use events::{EVENTS, event_and_descriptor, event_for};
 #[cfg(test)]
 use fields::Mapped;
 use files::{load, save};
+pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;
@@ -155,6 +161,16 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
         CommandSpec {
+            id: MENU_ITEM,
+            label: "Menu Item",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"id":menu command,"eventKind":"name"|"code"="name"} (a descriptor-free Image Size or unambiguous mapped filter menu event; desktop playback asks for settings when needed, headless playback only runs stateless menu items)"##,
+            enabled: always,
+            run: menu_item::run,
+            journal: true,
+        },
+        CommandSpec {
             id: PHOTOSHOP_STEP,
             label: "Photoshop Step",
             menu: &[],
@@ -174,10 +190,22 @@ mod tests;
 mod layer_props_tests;
 
 #[cfg(test)]
+mod layer_list_tests;
+
+#[cfg(test)]
 mod stylize_tests;
+
+#[cfg(test)]
+mod measurement_tests;
 
 #[cfg(test)]
 mod selection_tests;
 
 #[cfg(test)]
 mod render_tests;
+
+#[cfg(test)]
+mod recorded_tools_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;

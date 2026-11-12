@@ -50,7 +50,7 @@ pub mod libraries_ui;
 pub(super) mod mask_props_ui;
 pub mod mask_thumbs_ui;
 mod navigator;
-mod options_bar;
+pub(crate) mod options_bar;
 pub(super) mod panel_docking;
 mod panel_state;
 pub mod preset_panels;
@@ -119,6 +119,8 @@ use history::history;
 pub(crate) use history::select_snapshot;
 pub(crate) use history::selected_snapshot;
 #[cfg(test)]
+pub(crate) use history::step_icon as history_step_icon;
+#[cfg(test)]
 use info::info_panel;
 pub(crate) use info::{SamplerReadouts, sampler_readouts};
 pub(crate) use layer_drag::show_properties;
@@ -150,6 +152,7 @@ use options_bar::scrub_pct;
 pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
 pub use properties::properties_window;
+pub(crate) use properties::selection_mode_buttons;
 #[cfg(test)]
 use properties::{adjustments_grid, properties_body};
 pub use status_bar::{status_bar, status_bar_heights};
@@ -160,7 +163,8 @@ pub use title_bar::{sync_window_title, system_title_bar, title_bar, window_title
 use toolbar::toolbar_drop_place;
 #[cfg(test)]
 use toolbar::{
-    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections,
+    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size,
+    visible_sections,
 };
 pub use toolbar::{paint_toolbar_flyout_indicator, toolbar, toolbar_end};
 pub(crate) use toolbar::{toolbar_docked, toolbar_width};

@@ -591,7 +591,8 @@ pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) -
     // Hide, left of the view switch.
     let hide_text = tl!("Hide");
     let hide_galley = ui.painter().layout_no_wrap(hide_text.to_string(), crate::theme::medium(12.0), t.text_dim);
-    let hide_rect = Rect::from_min_size(pos2(box_rect.left() - 10.0 - hide_galley.size().x - 16.0, box_rect.top() + 2.0), vec2(hide_galley.size().x + 16.0, 24.0));
+    let hide_rect =
+        Rect::from_min_size(pos2(box_rect.left() - 10.0 - hide_galley.size().x - 16.0, box_rect.top() + 2.0), vec2(hide_galley.size().x + 16.0, 24.0));
     let hide_resp = ui.interact(hide_rect, ui.scope_id().with("recent_hide"), Sense::click());
     hide_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Hide recent files")));
     let hide_resp = hide_resp
@@ -784,6 +785,19 @@ pub(crate) fn render_list_row(
     (resp, action)
 }
 
+/// Judge a click that opens the recent file `path` as File › Open Recent's item for it, as the
+/// menu does: synthetic input from a client confined to its automation roots can't plant a recent
+/// file outside them and click its Home card open. A user's own click is always allowed.
+fn open_recent_gate(app: &PhotocraftApp, path: &str) -> Result<(), String> {
+    let Some(authorize) = app.services.automation_command.as_ref() else { return Ok(()) };
+    if !app.automation_input {
+        return Ok(());
+    }
+    // The Home list is File › Open Recent's first entries, so the card's index there is its id.
+    let i = app.ui.recent_files.iter().position(|p| p == path).ok_or_else(|| "no such recent file".to_string())?;
+    authorize(&format!("file.openRecent.{i}"), &serde_json::json!({}))
+}
+
 /// The main entry point to render the Home Recent Files visual grid or list.
 pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[String], avail_width: f32) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -902,7 +916,7 @@ pub(crate) fn show_home_recent(app: &mut PhotocraftApp, ui: &mut Ui, recent: &[S
     if let Some(action) = action_to_take {
         match action {
             RecentAction::Open(path) => {
-                if let Err(e) = app.open_path(&path) {
+                if let Err(e) = open_recent_gate(app, &path).and_then(|()| app.open_path(&path)) {
                     app.open_failed(&crate::file_open::display_name(&path), &e);
                 }
             }

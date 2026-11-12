@@ -285,6 +285,7 @@ fn color_picker_samples_the_image_under_its_pipette() {
     h.hover_at(r.center());
     h.run_steps(1);
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets must release the pipette");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);
@@ -665,7 +666,8 @@ fn a_notch_pans_the_canvas_at_once_without_a_glide() {
         let p = h.state().last_canvas_rect.center();
         h.hover_at(p);
         h.run_steps(2);
-        let notch = h.ctx.options(|o| o.input_options.line_scroll_speed);
+        // The canvas' own notch (#12028), not egui's.
+        let notch = crate::wheel_nav::CANVAS_PAN_PER_LINE;
         let (z, c0) = (zoom(&h), h.state().ui.views[0].center);
         wheel(&h, -1.0, m);
         h.run_steps(1);
@@ -1256,6 +1258,20 @@ fn escape_with_the_palette_open_does_not_deselect() {
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
+}
+
+/// The toolbar's "…" flyout owns Esc (it closes there, `toolbar_more_slot_flyout_tests`), so the
+/// selection stays.
+#[test]
+fn escape_with_the_toolbar_more_flyout_open_does_not_deselect() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("toolbar-more-flyout-open"), true));
+    h.run_steps(1);
+    assert!(crate::panels::toolbar::more_flyout_open(&h.ctx));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the flyout");
 }
 
 /// Targa Options owns Esc (it cancels the save), so the selection stays.

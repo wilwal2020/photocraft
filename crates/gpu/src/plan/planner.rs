@@ -100,6 +100,9 @@ pub const F_ADD_DIFF: u32 = 16384;
 /// and A ("Underlying Layer"). The ranges are packed in `p0..p3` (`blend_if_params`); `p4.x` marks
 /// a one-channel document.
 pub const F_BLEND_IF: u32 = 524288;
+/// Effect paint: a Normal inside or center stroke replaces the layer beneath it by its coverage
+/// (`effects.rs`): `A × (1 − coverage) + paint × opacity × coverage`, in any colour mode.
+pub const F_REPLACE: u32 = 8_388_608;
 
 /// Blend / Atop / FxMerge of a type layer: coverage mixed at `psblend::TEXT_GAMMA`.
 pub const F_TEXT_GAMMA: u32 = 8192;
@@ -854,7 +857,15 @@ impl<'a> Planner<'a> {
 
     /// The `fs_adjmix` pass of [`Self::amount_mix`] with its blend, amount factor, fill and mask
     /// given (consumes `backdrop`).
-    fn amount_pass(&mut self, program: super::lower::AmountProgram, backdrop: Slot, mode: BlendMode, opacity: f32, fill: f32, mask: Option<MaskUse<'a>>) -> Slot {
+    fn amount_pass(
+        &mut self,
+        program: super::lower::AmountProgram,
+        backdrop: Slot,
+        mode: BlendMode,
+        opacity: f32,
+        fill: f32,
+        mask: Option<MaskUse<'a>>,
+    ) -> Slot {
         let (kind, color, params, rows) = program;
         let mut p = Pass::new(Kernel::AdjMix, 0);
         // The kernel reads only the backdrop; `b` is bound to it too.
@@ -922,6 +933,10 @@ impl<'a> Planner<'a> {
         }
         for c in clipped {
             content = self.atop(c, content)?;
+        }
+        // Stroke Emboss shades the stroke's band, which only the CPU compositor builds (#8639).
+        if layer.effects.items.iter().any(|e| matches!(e, Effect::BevelEmboss(b) if e.enabled() && b.style == photocraft_doc::BevelStyle::StrokeEmboss)) {
+            return Err(Unsupported(format!("Stroke Emboss on `{}` (composited on the CPU)", layer.name)));
         }
         let fx = self.fx.len();
         self.fx.push(FxLayer { layer, region, bounds: sb });
@@ -1206,7 +1221,17 @@ impl<'a> Planner<'a> {
                     let paint = self.fx_paint(&st.paint, anchor);
                     let frame = photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb);
                     l = self.masked(layer, e, l, clip, |me, l| {
-                        me.paint(l, content, Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)), &paint, st.common.blend, st.common.opacity, F_GATE, clip, frame)
+                        me.paint(
+                            l,
+                            content,
+                            Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
+                            &paint,
+                            st.common.blend,
+                            st.common.opacity,
+                            if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
+                            clip,
+                            frame,
+                        )
                     });
                 }
             }

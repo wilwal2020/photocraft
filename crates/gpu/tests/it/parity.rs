@@ -808,7 +808,15 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Shading(Default::default()),
         Adjustment::Shading(Shading { steps: 3, hue_shift: 45.0, saturation: 0.9, saturation_curve: 0.7, ..Default::default() }),
         Adjustment::Shading(Shading { saturation_curve: -0.8, steps: 4, ..Default::default() }),
-        Adjustment::Shading(Shading { ambient_amount: 0.8, mood_amount: 0.5, split_hue: 30.0, depth: 0.7, protect_darks: 0.0, protect_neutrals: 0.0, ..Default::default() }),
+        Adjustment::Shading(Shading {
+            ambient_amount: 0.8,
+            mood_amount: 0.5,
+            split_hue: 30.0,
+            depth: 0.7,
+            protect_darks: 0.0,
+            protect_neutrals: 0.0,
+            ..Default::default()
+        }),
         // Lighting, its mirror.
         Adjustment::Lighting(Default::default()),
         Adjustment::Lighting(Lighting { steps: 3, hue_shift: 45.0, saturation: 0.9, saturation_curve: -0.6, ..Default::default() }),
@@ -817,11 +825,26 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Lighting(Lighting { gloss: 0.9, gloss_size: 0.3, ..Default::default() }),
         Adjustment::Lighting(Lighting { gloss: 0.7, metallic: true, saturation_curve: 0.4, ..Default::default() }),
         Adjustment::Shading(Shading { physical: true, self_bounce: 0.8, terminator_amount: 0.9, ..Default::default() }),
-        Adjustment::Shading(Shading { chroma_retention: 0.0, self_bounce: 1.0, terminator_amount: 1.0, terminator_position: 0.7, terminator_width: 0.6, ..Default::default() }),
+        Adjustment::Shading(Shading {
+            chroma_retention: 0.0,
+            self_bounce: 1.0,
+            terminator_amount: 1.0,
+            terminator_position: 0.7,
+            terminator_width: 0.6,
+            ..Default::default()
+        }),
         Adjustment::Shading(Shading { chroma_retention: 1.0, physical: true, ambient: [0.9, 0.6, 0.3], ..Default::default() }),
         Adjustment::Shading(Shading { saturation_shift: -0.7, saturation_curve: 0.5, ..Shading::picker() }),
         Adjustment::Shading(Shading { saturation_shift: 0.9, steps: 3, ..Shading::picker() }),
-        Adjustment::Lighting(Lighting { light_amount: 0.9, glow_amount: 0.5, light_hue: 200.0, lift: 0.8, protect_darks: 0.0, protect_neutrals: 0.0, ..Default::default() }),
+        Adjustment::Lighting(Lighting {
+            light_amount: 0.9,
+            glow_amount: 0.5,
+            light_hue: 200.0,
+            lift: 0.8,
+            protect_darks: 0.0,
+            protect_neutrals: 0.0,
+            ..Default::default()
+        }),
         // The advanced Saturation Curve (drawn: saturation held near the base, then dropping).
         Adjustment::Shading(Shading { saturation_points: held(), ..Default::default() }),
         Adjustment::Shading(Shading { saturation_points: early(), saturation_shift: -0.6, steps: 4, ..Shading::picker() }),
@@ -873,7 +896,10 @@ fn shading_matches_cpu_plain_masked_and_clipped() {
         d.layers.push(noise_layer("mid", fmt, Rect::new(8, 8, 40, 32), 3, 0.5));
         // Saturation Curve's swing scales Protect Neutrals' steep ramp, so GPU rounding in the OKLab
         // chroma of near-greys grows with the curve (0.8 reached 1.3/255 at one 16-bit pixel).
-        let mut clipped = Layer::new("clip", LayerContent::Adjustment(Adjustment::Shading(Shading { steps: 2, hue_shift: 40.0, saturation_curve: 0.5, ..Default::default() })));
+        let mut clipped = Layer::new(
+            "clip",
+            LayerContent::Adjustment(Adjustment::Shading(Shading { steps: 2, hue_shift: 40.0, saturation_curve: 0.5, ..Default::default() })),
+        );
         clipped.clipped = true;
         clipped.mask = Some(mask(Rect::new(4, 4, 44, 36), 7, 0.0));
         d.layers.push(clipped);
@@ -885,7 +911,8 @@ fn shading_matches_cpu_plain_masked_and_clipped() {
         d.layers.push(lit);
         check(&mut g, &d, &format!("lighting {depth:?}"));
         d.layers.push(noise_layer("top", fmt, Rect::new(2, 2, 30, 30), 9, 0.4));
-        let mut lit_clip = Layer::new("light clip", LayerContent::Adjustment(Adjustment::Lighting(Lighting { steps: 2, glow_amount: 0.4, ..Default::default() })));
+        let mut lit_clip =
+            Layer::new("light clip", LayerContent::Adjustment(Adjustment::Lighting(Lighting { steps: 2, glow_amount: 0.4, ..Default::default() })));
         lit_clip.clipped = true;
         lit_clip.mask = Some(mask(Rect::new(0, 0, 30, 30), 11, 0.0));
         d.layers.push(lit_clip);
@@ -1943,7 +1970,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
             vec![Effect::BevelEmboss(Bevel { technique: BevelTechnique::ChiselHard, ..bevel(BevelStyle::PillowEmboss, false, 7.0, 0.0) })],
         ),
         ("bevel emboss smooth wide", vec![Effect::BevelEmboss(bevel(BevelStyle::Emboss, true, 21.0, 0.0))]),
-        ("bevel stroke emboss", vec![Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 6.0, 0.0))]),
+        // Stroke Emboss is composited on the CPU (`plan::tests::stroke_emboss_defers_to_the_cpu`, #8639).
         (
             "bevel texture",
             vec![Effect::BevelEmboss(Bevel {
@@ -2139,6 +2166,55 @@ fn layer_effects_every_kind_through_their_own_masks() {
 "
         )
     );
+}
+
+/// A Normal inside or center stroke replaces the layer beneath it instead of blending with it
+/// (#6513): opaque red under a 50 % green stroke ends as green at 50 % alpha, on the GPU as on
+/// the CPU (`effects.rs`: `layer * (1 - coverage) + stroke * opacity * coverage`).
+#[test]
+fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
+    let Some(mut g) = gpu() else { return };
+    let mut failures = Vec::new();
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        for (opacity, paint) in
+            [(0.5, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0))), (0.5, FxPaint::Gradient(gradient())), (1.0, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)))]
+        {
+            let mut d = Document::new("fx", Size::new(48, 48), ColorMode::Rgb, SampleType::U8);
+            let mut l = Layer::raster("red", d.pixel_format());
+            l.surface_mut().unwrap().fill_rect(Rect::new(12, 12, 36, 36), &[1.0, 0.0, 0.0, 1.0]);
+            let mut st = stroke(4.0, position, paint);
+            st.common.opacity = opacity;
+            l.effects.items = vec![Effect::Stroke(st)];
+            d.layers.push(l);
+            let what = format!("{position:?} stroke at {opacity}");
+            // The CPU reference itself: the edge pixel is the stroke colour at the stroke's alpha.
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            if matches!(d.layers[0].effects.items.first(), Some(Effect::Stroke(StrokeFx { paint: FxPaint::Color(_), .. }))) && opacity < 1.0 {
+                let px = cpu.px[24 * 48 + 12];
+                if (px[1] - 1.0).abs() > 0.01 || px[0] > 0.01 || (px[3] - 0.5).abs() > 0.01 {
+                    failures.push(format!("{what}: CPU edge pixel {px:?}, want [0, 1, 0, 0.5]"));
+                }
+            }
+            if let Err(e) = fx_diff(&mut g, &d, &what) {
+                failures.push(e);
+            }
+        }
+    }
+    // Lab documents replace the layer the same way (no CIELAB mix).
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        let mut d = Document::new("lab", Size::new(48, 40), ColorMode::Lab, SampleType::U16);
+        let fmt = d.pixel_format();
+        d.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 48, 40), 81, 0.7));
+        let mut fx = blob("fx", fmt, 24.0, 20.0, 12.0, [0.7, 0.3, 0.2]);
+        let mut st = stroke(4.0, position, FxPaint::Color(Color::rgb(0.1, 0.8, 0.3)));
+        st.common.opacity = 0.5;
+        fx.effects.items = vec![Effect::Stroke(st)];
+        d.layers.push(fx);
+        if let Err(e) = fx_diff(&mut g, &d, &format!("lab {position:?} stroke at 0.5")) {
+            failures.push(e);
+        }
+    }
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
 
 #[test]

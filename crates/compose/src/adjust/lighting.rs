@@ -388,7 +388,14 @@ mod tests {
 
     #[test]
     fn hostile_input_stays_finite() {
-        let s = Lighting { lift: f32::NAN, saturation: f32::INFINITY, saturation_curve: f32::NEG_INFINITY, hue_shift: -5.0, light_hue: f32::NAN, ..Lighting::default() };
+        let s = Lighting {
+            lift: f32::NAN,
+            saturation: f32::INFINITY,
+            saturation_curve: f32::NEG_INFINITY,
+            hue_shift: -5.0,
+            light_hue: f32::NAN,
+            ..Lighting::default()
+        };
         for c in [[f32::NAN, 0.5, 0.5], [2.0, -1.0, 0.5], [0.5; 3]] {
             for a in [f32::NAN, -1.0, 0.5, 9.0] {
                 let mut b = Buffer::filled(Rect::new(-3, -3, -2, -2), [c[0], c[1], c[2], 1.0]);

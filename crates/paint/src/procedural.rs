@@ -474,7 +474,8 @@ pub fn gouache_tip(n: u32, seed: u32) -> GrayTile {
         // Bristles: bundles (broad and fine noise across the brush) and single hairs.
         let v = (py / c + 1.0) / 2.0;
         let row = (v * 48.0) as i32;
-        let bundles = 0.5 * value_noise(v * 7.0, 0.5, 1 << 12, salt ^ 0x31) + 0.3 * value_noise(v * 19.0, 0.5, 1 << 12, salt ^ 0x47) + 0.2 * hash2(row, 1, salt);
+        let bundles =
+            0.5 * value_noise(v * 7.0, 0.5, 1 << 12, salt ^ 0x31) + 0.3 * value_noise(v * 19.0, 0.5, 1 << 12, salt ^ 0x47) + 0.2 * hash2(row, 1, salt);
         let mut held = 0.25 + 0.75 * smooth(((bundles - 0.2) / 0.6).clamp(0.0, 1.0));
         // A few hairs carry next to nothing: the gaps a real brush leaves.
         if hash2(row, 9, salt) < 0.14 {
@@ -546,7 +547,9 @@ mod tests {
         // The outer rows (3..9 of 96): the soft tip is still fading there, the crisp one is at
         // full paint; the very edge row is near bare on both.
         let (soft, crisp) = (dry_wash_square_tip(96, 5), dry_wash_edged_tip(96, 5, 0.06));
-        let sum = |t: &GrayTile, ys: std::ops::Range<u32>| (20..76).flat_map(|x| ys.clone().map(move |y| (x, y))).map(|(x, y)| t.get(x, y) + t.get(x, 95 - y)).sum::<f32>();
+        let sum = |t: &GrayTile, ys: std::ops::Range<u32>| {
+            (20..76).flat_map(|x| ys.clone().map(move |y| (x, y))).map(|(x, y)| t.get(x, y) + t.get(x, 95 - y)).sum::<f32>()
+        };
         assert!(sum(&crisp, 3..9) > 1.3 * sum(&soft, 3..9), "crisp {} vs soft {}", sum(&crisp, 3..9), sum(&soft, 3..9));
         assert!(sum(&crisp, 0..1) < 0.2 * sum(&crisp, 20..21), "the crisp tip still ends at its sides");
         assert!(dry_wash_edged_tip(96, 5, 0.06).is_valid());
@@ -564,7 +567,9 @@ mod tests {
         assert!((0.45..0.8).contains(&mean), "mean {mean}");
         assert!((0.05..0.45).contains(&dark), "dark share {dark}");
         let near: f32 = (0..255).flat_map(|y| (0..255).map(move |x| (x, y))).map(|(x, y)| (t.get(x, y) - t.get(x + 1, y)).abs()).sum::<f32>() / (255.0 * 255.0);
-        let far: f32 = (0..255).flat_map(|y| (0..255).map(move |x| (x, y))).map(|(x, y)| (t.get(x, y) - t.get((x + 128) % 256, (y + 97) % 256)).abs()).sum::<f32>() / (255.0 * 255.0);
+        let far: f32 =
+            (0..255).flat_map(|y| (0..255).map(move |x| (x, y))).map(|(x, y)| (t.get(x, y) - t.get((x + 128) % 256, (y + 97) % 256)).abs()).sum::<f32>()
+                / (255.0 * 255.0);
         assert!(near < 0.6 * far, "blotchy: neighbours differ by {near}, far pixels by {far}");
         // Seamless: the wrap-around step is no bigger than a step inside the tile.
         let wrap: f32 = (0..256).map(|y| (t.get(255, y) - t.get(0, y)).abs()).sum::<f32>() / 256.0;

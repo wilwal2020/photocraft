@@ -477,9 +477,10 @@ fn write_gradient_map_with(stops: &[(f32, [f32; 3])], mids: &[f32], blend: &phot
     put16(&mut v, stops.len().min(usize::from(u16::MAX)) as u16);
     for (k, (t, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
         v.extend_from_slice(&((t.clamp(0.0, 1.0) * 4096.0).round() as u32).to_be_bytes());
-        // Stop k's midpoint is for the segment after it.
-        let mid = mids.get(k).copied().filter(|m| m.is_finite()).unwrap_or(0.5).clamp(0.05, 0.95);
-        v.extend_from_slice(&((mid * 100.0).round() as u32).to_be_bytes());
+        // Segment k's midpoint (after stop k, in location order) is stored on stop k + 1, as the
+        // reader takes it (upstream #8351; this branch had it on stop k).
+        let mid = k.checked_sub(1).and_then(|s| mids.get(s)).copied().filter(|m| m.is_finite()).map_or(50, |m| (m.clamp(0.05, 0.95) * 100.0).round() as u32);
+        v.extend_from_slice(&mid.to_be_bytes());
         put16(&mut v, 0);
         for x in c {
             put16(&mut v, (x.clamp(0.0, 1.0) * 65535.0).round() as u16);

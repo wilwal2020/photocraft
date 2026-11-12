@@ -335,7 +335,11 @@ pub(super) fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect,
 pub(crate) fn mask_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &mut Vec<(String, Value)>) {
     let Some((from, kind)) = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key())) else { return };
     let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
-    if from == l.id.0 || !rect.contains(p) {
+    // Only the part of the row the list shows takes it (a row scrolled out of view still lies
+    // under the panel's header or footer), and a row that has that kind of mask already doesn't
+    // (Photoshop asks whether to replace it), as upstream's #10485.
+    let has = if kind == MaskKind::Vector { l.vector_mask.is_some() } else { l.mask.is_some() };
+    if from == l.id.0 || has || !rect.intersect(ui.clip_rect()).contains(p) {
         return;
     }
     let t = Tokens::get(ctx);

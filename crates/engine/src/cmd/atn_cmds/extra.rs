@@ -18,7 +18,7 @@ use super::descriptors::{
 };
 use super::events::Event;
 use super::fields::{Mapped, none, step, steps};
-use super::tables::{CHANNELS, blend_label, lookup, lookup_back};
+use super::tables::{blend_label, lookup, lookup_back};
 use super::{D, Descriptor, Map, ReferenceItem, Value, json};
 
 // ------------------------------------------------------------------ set
@@ -202,25 +202,6 @@ pub(super) fn preset_file_in(recorded: &str, folder: &str, roots: &[std::path::P
     // "Adobe Photoshop 2026" sorts after 2024 and "(Beta)": newest first.
     candidates.sort();
     candidates.iter().rev().find_map(|p| read(p))
-}
-
-/// Blending Options › Blend If from a layer's `Blnd` list: per channel, this layer's and the
-/// underlying layer's black and white points, each split in two (`[blackLo, blackHi, whiteLo,
-/// whiteHi]`, 0..255), as `layer.layerStyle.blendingOptions` takes them.
-pub(super) fn blend_if(list: &[D]) -> Option<Value> {
-    let mut out = Vec::with_capacity(list.len());
-    for v in list {
-        let D::Descriptor(e) = v else { return None };
-        let channel = match get_ref(e, "Chnl").map(target)? {
-            Target::Ordinal(o) => lookup(CHANNELS, &o)?,
-            _ => return None,
-        };
-        let n = |k: &str| get_num(e, k).map(|v| v.round().clamp(0.0, 255.0));
-        let this = [n("SrcB")?, n("Srcl")?, n("SrcW")?, n("Srcm")?];
-        let under = [n("DstB")?, n("Dstl")?, n("DstW")?, n("Dstt")?];
-        out.push(json!({"channel": channel, "thisLayer": this, "underlying": under}));
-    }
-    Some(Value::Array(out))
 }
 
 // ------------------------------------------------------------------ make

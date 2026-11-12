@@ -615,7 +615,17 @@ fn the_dx12_vendors_are_remembered_between_launches() {
     // Next launch: the remembered list, no listing now, a refresh for the one after.
     let listed = std::cell::Cell::new(false);
     let refresh = |f: PathBuf| refreshed.borrow_mut().push(f);
-    assert_eq!(remembered_vendors(Some(&file), || { listed.set(true); vec![] }, refresh), vec![NVIDIA, INTEL]);
+    assert_eq!(
+        remembered_vendors(
+            Some(&file),
+            || {
+                listed.set(true);
+                vec![]
+            },
+            refresh
+        ),
+        vec![NVIDIA, INTEL]
+    );
     assert!(!listed.get() && refreshed.borrow().as_slice() == [file.clone()]);
     // An unreadable file is listed again; no settings directory lists every time.
     std::fs::write(&file, "garbage").unwrap();

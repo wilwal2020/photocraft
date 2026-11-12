@@ -526,7 +526,8 @@ mod tests {
     #[test]
     fn a_big_egui_memory_checks_quickly() {
         // 3000 closed popups' areas, as a user's ui.ron had grown to (842 KB; 4 s to parse untyped).
-        let areas: Vec<String> = (0..3000u64).map(|i| format!("({}):(pivot_pos:Some((x:{}.5,y:721.0)),pivot:((Min,Min)),interactable:false)", i * 7919, i)).collect();
+        let areas: Vec<String> =
+            (0..3000u64).map(|i| format!("({}):(pivot_pos:Some((x:{}.5,y:721.0)),pivot:((Min,Min)),interactable:false)", i * 7919, i)).collect();
         let egui = format!("(options:(zoom_factor:1.0),areas:{{((18446744073709551615)):(areas:{{{}}})}})", areas.join(","));
         let text = format!("{{\"egui\":{egui:?}}}");
         let t = std::time::Instant::now();

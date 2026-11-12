@@ -727,19 +727,29 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
     }
 }
 
-/// The visibility icon has its own color menu, and the layer-mask thumbnail its mask menu (#4575).
+/// The visibility icon has its own color menu, the layer-mask thumbnail its mask menu (#4575)
+/// and a pixel layer's thumbnail Select Pixels and the thumbnail settings (#12324).
 fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>, eye_resp: &egui::Response, actions: &mut Vec<(String, Value)>) {
     let (l, resp, masks, row) = (rc.l, rc.resp, rc.masks, rc.row);
     let (ctx, selected) = (&ui.ctx().clone(), row.selected);
-    // The visibility icon has its own color menu, and the layer-mask thumbnail its mask menu
-    // (#4575); elsewhere use the full layer menu.
+    // The visibility icon has its own color menu, the layer-mask thumbnail its mask menu
+    // (#4575) and a pixel layer's thumbnail its thumbnail menu; elsewhere the full layer menu.
     let on_mask_id = ui.scope_id().with(("mask-menu", l.id.0));
     let on_second_id = ui.scope_id().with(("second-mask-menu", l.id.0));
+    let on_thumb_id = ui.scope_id().with(("thumb-menu", l.id.0));
     if resp.secondary_clicked() {
-        let hit = resp.interact_pointer_pos().and_then(|p| masks.hit(p));
+        let pos = resp.interact_pointer_pos();
+        let hit = pos.and_then(|p| masks.hit(p));
+        let on_mask = hit == Some(crate::mask_thumbs_ui::MaskKind::Pixel);
+        // A pixel layer's thumbnail; not the Background's, which has no transparency to load.
+        // Type, shape, smart object, fill, adjustment and group thumbnails keep the layer menu
+        // with their own items (Rasterize, Edit Contents…).
+        let pixels = matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none() && !rc.doc.is_background(l.id);
+        let on_thumb = !on_mask && pixels && rc.ts > 0.0 && pos.is_some_and(|p| hit.is_none() && rc.thumb.expand(2.0).contains(p));
         ctx.data_mut(|d| {
-            d.insert_temp(on_mask_id, hit == Some(crate::mask_thumbs_ui::MaskKind::Pixel));
+            d.insert_temp(on_mask_id, on_mask);
             d.insert_temp(on_second_id, hit == Some(crate::mask_thumbs_ui::MaskKind::Second));
+            d.insert_temp(on_thumb_id, on_thumb);
         });
     }
     if !eye_resp.secondary_clicked() && !eye_resp.context_menu_opened() {
@@ -751,6 +761,10 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
             }
             if ui.ctx().data(|d| d.get_temp::<bool>(on_second_id)).unwrap_or(false) {
                 crate::layer_menu_ui::show_second_mask(ui, l, actions);
+                return;
+            }
+            if ui.ctx().data(|d| d.get_temp::<bool>(on_thumb_id)).unwrap_or(false) {
+                super::layers_empty_menu::show_thumbnail(app, ui, l.id.0, actions);
                 return;
             }
             // Right-clicking inside a multi-selection keeps it and acts on every selected layer.

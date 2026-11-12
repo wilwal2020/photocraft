@@ -51,6 +51,10 @@ use photocraft_raster::Interrupt;
 
 const CMD: &str = "paint.remove";
 
+/// The History step of an applied removal, as Photoshop names it (#12541). The job and its
+/// progress keep the command's label.
+const HISTORY: &str = "Remove Tool";
+
 /// Largest stroke, in pixels of its bounding box (as the Patch Tool's and Content-Aware Move's).
 /// Checked before the stroke's coverage is rendered, which allocates its whole bounding box, also
 /// where it leaves the canvas.
@@ -681,7 +685,7 @@ fn fill_to_new_layer(doc: &mut Document, id: Option<LayerId>, out: &Region, hole
             *a = if out.ch == n { src.last().copied().unwrap_or(1.0) } else { 1.0 };
         }
     }
-    let mut l = Layer::raster(doc.next_layer_name("Layer"), fmt);
+    let mut l = Layer::raster(result_layer_name(doc), fmt);
     crate::pixels_mut(&mut l)?.write_region(out.rect, &data);
     // Above the sampled layer and in its clipping mask, like Layer via Copy.
     let nid = crate::layer_place::insert_new(doc, id, l, crate::layer_place::Place::Above);
@@ -766,6 +770,13 @@ pub(super) fn generated_layer(
     Ok((damage.unwrap_or(win), nid))
 }
 
+/// The new layer's name, as Photoshop names it (#12542): "Remove tool edits" while it is free,
+/// then the first free "Remove tool edits N" from 1.
+fn result_layer_name(doc: &Document) -> String {
+    const BASE: &str = "Remove tool edits";
+    if doc.walk().into_iter().any(|(_, _, l)| l.name == BASE) { doc.next_layer_name(BASE) } else { BASE.to_string() }
+}
+
 pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let plan = plan(s, p)?;
     let label = "Remove";
@@ -805,7 +816,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                 return Ok(v);
             }
             if new_layer {
-                let (damage, nid) = s.edit(label, |doc, active| {
+                let (damage, nid) = s.edit(HISTORY, |doc, active| {
                     let r = fill_to_new_layer(doc, id, &out, &hole)?;
                     *active = Some(r.1);
                     Ok(r)
@@ -815,7 +826,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                 filled_json(&mut v, &used);
                 return Ok(v);
             }
-            let damage = s.edit(label, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
+            let damage = s.edit(HISTORY, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             s.hint_damage(damage);
             let mut v = json!({ "damage": damage_json(damage) });
             filled_json(&mut v, &used);
@@ -823,3 +834,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
         },
     )
 }
+
+#[cfg(test)]
+#[path = "remove_new_layer_name_tests.rs"]
+mod remove_new_layer_name_tests;

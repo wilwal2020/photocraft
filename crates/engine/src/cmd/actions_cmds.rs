@@ -79,12 +79,59 @@ pub struct Action {
     /// over). Playback reports the step as `stopped`.
     #[serde(default, rename = "stopSteps", skip_serializing_if = "BTreeSet::is_empty")]
     pub stop_steps: BTreeSet<usize>,
+    /// Written by automation: loaded, recorded, or had its steps edited while
+    /// [`Session::authorize`] was installed (a control, MCP or synthetic-input request).
+    /// Playback keeps automation's gate ([`Session::automation_gate`]) for it even when the user
+    /// starts it (a key, the Actions panel), so a client confined to its automation roots
+    /// can't plant steps that later run with the user's file access. Batch and droplets copy
+    /// steps instead of the action, so they do not keep the gate yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
+}
+
+/// Mark action `idx` as written by automation when an automation gate is installed.
+pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
+    if s.authorize.is_some()
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps while an automation gate is installed: a step a control client, MCP or synthetic input
+/// runs during the user's recording keeps automation's gate when the action plays.
+pub fn note_automation_step(s: &mut Session, id: &str, params: &Value) {
+    note_step_origin(s, s.authorize.is_some(), id, params);
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps on behalf of a request that ran under an automation gate (`automation`). A background
+/// job's step is journaled when the job is applied, after its request returned and its gate was
+/// removed, so the job passes the origin it captured when it was admitted rather than whatever
+/// gate the caller polling it has.
+pub(crate) fn note_step_origin(s: &mut Session, automation: bool, id: &str, params: &Value) {
+    if automation
+        && recorded(id, params)
+        && let Some((_, idx)) = s.actions.recording
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// The gate to install while `action` plays: automation's, for an action automation wrote that
+/// plays with none installed. `None` when the session's own gate (or none) applies.
+pub fn kept_gate(s: &Session, action: &Action) -> Option<fn(&str, &Value) -> Result<()>> {
+    if action.automation && s.authorize.is_none() { s.automation_gate } else { None }
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
 pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
 
 impl Action {
+    /// A new action named `name` with `steps`: every step on, no dialogs, no set or colour,
+    /// and not written by automation (see [`Action::automation`]).
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
         Self {
             name: name.into(),
@@ -97,6 +144,7 @@ impl Action {
             continue_on_error: false,
             continue_steps: BTreeSet::new(),
             stop_steps: BTreeSet::new(),
+            automation: false,
         }
     }
 
@@ -351,7 +399,7 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
             }
         }
     }
-    if id.starts_with("filter.gallery.")
+    if (id.starts_with("filter.gallery.") || id == crate::atn_cmds::MENU_ITEM)
         && let Some(object) = p.as_object_mut()
     {
         object.remove(crate::atn_cmds::RECORDED_EVENT);
@@ -474,7 +522,7 @@ pub fn tool_step(id: &str) -> bool {
 
 /// Whether recording keeps the journal entry `id`: a [`replayable`] command Photoshop records.
 pub fn recordable(s: &Session, id: &str) -> bool {
-    replayable(id) && !never_recorded(id) && (!tool_step(id) || s.actions.prefs.allow_tool_recording)
+    replayable(id) && !never_recorded(id) && (!tool_stroke(id) || s.actions.prefs.allow_tool_recording)
 }
 
 /// File › Save, Save As and Save a Copy, and File › Export › Export As, recorded by the desktop
@@ -535,6 +583,43 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     Ok((action, from))
 }
 
+/// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
+fn visit_calls(steps: &mut [(String, Value)], f: &mut impl FnMut(&str, &mut Value, bool)) {
+    let mut pending: Vec<_> = steps.iter_mut().rev().map(|(id, params)| (id.clone(), params)).collect();
+    while let Some((id, params)) = pending.pop() {
+        let scoped = id == "file.automate.batch" && params.get("calledActions").is_some_and(|v| !v.is_null());
+        if id == "file.automate.batch" {
+            let inline = if params.get("steps").is_some() { Some("steps") } else { params.get("action").is_some_and(Value::is_array).then_some("action") };
+            if let Some(key) = inline {
+                if scoped {
+                    continue;
+                }
+                // A present invalid `steps` still wins over `action`, just as at runtime.
+                let Some(steps) = params.get_mut(key).and_then(Value::as_array_mut) else { continue };
+                for step in steps.iter_mut().rev() {
+                    let call = match step {
+                        Value::Array(a) => {
+                            let Some(id) = a.first().and_then(Value::as_str).map(str::to_owned) else { continue };
+                            a.get_mut(1).map(|params| (id, params))
+                        }
+                        Value::Object(o) => {
+                            let Some(id) = o.get("command").or_else(|| o.get("id")).and_then(Value::as_str).map(str::to_owned) else { continue };
+                            o.get_mut("params").map(|params| (id, params))
+                        }
+                        // String steps and omitted params use `{}`, with no action target.
+                        _ => None,
+                    };
+                    if let Some(call) = call {
+                        pending.push(call);
+                    }
+                }
+                continue;
+            }
+        }
+        f(&id, params, scoped);
+    }
+}
+
 /// Capture transitive Play Action, Conditional and Batch dependencies for a standalone droplet
 /// (#2794, #6804). Ordinary references become names; normalized copies keep source-list order.
 /// A named Batch with its own action list selects an untouched source copy at an exported index,
@@ -544,42 +629,6 @@ pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Act
     /// Resolve in the current namespace before capture rewrites the reference.
     fn target(list: &[Action], params: &Value, id: &str) -> Result<usize> {
         if id == "file.automate.batch" { crate::file_cmds::batch_action(list, params) } else { resolve(list, params, id) }
-    }
-    /// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
-    fn visit_calls(steps: &mut [(String, Value)], f: &mut impl FnMut(&str, &mut Value, bool)) {
-        let mut pending: Vec<_> = steps.iter_mut().rev().map(|(id, params)| (id.clone(), params)).collect();
-        while let Some((id, params)) = pending.pop() {
-            let scoped = id == "file.automate.batch" && params.get("calledActions").is_some_and(|v| !v.is_null());
-            if id == "file.automate.batch" {
-                let inline = if params.get("steps").is_some() { Some("steps") } else { params.get("action").is_some_and(Value::is_array).then_some("action") };
-                if let Some(key) = inline {
-                    if scoped {
-                        continue;
-                    }
-                    // A present invalid `steps` still wins over `action`, just as at runtime.
-                    let Some(steps) = params.get_mut(key).and_then(Value::as_array_mut) else { continue };
-                    for step in steps.iter_mut().rev() {
-                        let call = match step {
-                            Value::Array(a) => {
-                                let Some(id) = a.first().and_then(Value::as_str).map(str::to_owned) else { continue };
-                                a.get_mut(1).map(|params| (id, params))
-                            }
-                            Value::Object(o) => {
-                                let Some(id) = o.get("command").or_else(|| o.get("id")).and_then(Value::as_str).map(str::to_owned) else { continue };
-                                o.get_mut("params").map(|params| (id, params))
-                            }
-                            // String steps and omitted params use `{}`, with no action target.
-                            _ => None,
-                        };
-                        if let Some(call) = call {
-                            pending.push(call);
-                        }
-                    }
-                    continue;
-                }
-            }
-            f(&id, params, scoped);
-        }
     }
     /// Capture ordinary calls transitively, but retain an untouched source for scoped named Batch.
     fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut VecDeque<(usize, usize)>, scoped: &mut BTreeSet<usize>) {
@@ -750,7 +799,9 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
     let recording = s.actions.recording.and_then(|(_, i)| s.actions.list.get(i).map(|a| a.name.clone()));
-    Ok(json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording}))
+    Ok(
+        json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording, "toolRecording": s.actions.prefs.allow_tool_recording}),
+    )
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
@@ -762,6 +813,8 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
+/// `actions.record`: start recording into an existing `action` or a new one named `name`, and mark
+/// it as automation's when an automation gate is installed.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.record")?;
     if s.actions.recording.is_some() {
@@ -815,6 +868,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.actions.recording = Some((s.journal.len(), idx));
     s.actions.record_at = at;
+    note_automation_edit(s, idx);
     s.actions.take = s.actions.take.wrapping_add(1);
     let name = s.actions.list.get(idx).map(|a| a.name.clone()).unwrap_or_default();
     Ok(json!({"action": name, "index": idx}))
@@ -840,6 +894,33 @@ pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(Strin
 pub fn pending_at(s: &Session, action: usize) -> usize {
     let len = s.actions.list.get(action).map_or(0, |a| a.steps.len());
     s.actions.record_at.filter(|_| s.actions.recording.is_some_and(|(_, i)| i == action)).map_or(len, |at| at.min(len))
+}
+
+/// The point-based painting tools committed by the canvas (upstream's list with this branch's
+/// [`tool_step`]); fills and gradients remain commands.
+pub(crate) fn tool_stroke(id: &str) -> bool {
+    tool_step(id)
+        || matches!(
+            id,
+            "paint.stroke"
+                | "paint.pencil"
+                | "paint.mixerBrush"
+                | "paint.colorReplacement"
+                | "paint.blur"
+                | "paint.sharpen"
+                | "paint.smudge"
+                | "paint.dodge"
+                | "paint.burn"
+                | "paint.sponge"
+                | "paint.cloneStamp"
+                | "paint.healingBrush"
+                | "paint.historyBrush"
+                | "paint.artHistoryBrush"
+                | "paint.patternStamp"
+                | "paint.backgroundEraser"
+                | "paint.spotHealing"
+                | "paint.remove"
+        )
 }
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
@@ -876,10 +957,11 @@ fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec
     let mut out: Vec<(String, Value)> = Vec::new();
     let mut last_run: Option<String> = None;
     for (id, mut params) in steps {
+        let wrap_of = |p: &Value| p.get("wrap").and_then(Value::as_bool).unwrap_or(false);
         let run = (id == "layer.translate")
             .then(|| params.as_object())
             .flatten()
-            .filter(|p| p.keys().all(|key| matches!(key.as_str(), "dx" | "dy" | "coalesce")))
+            .filter(|p| p.keys().all(|key| matches!(key.as_str(), "dx" | "dy" | "coalesce" | "wrap")) && p.get("wrap").is_none_or(|v| v.is_boolean()))
             .and_then(|p| p.get("coalesce").and_then(Value::as_str).filter(|run| run.starts_with("nudge:")))
             .map(str::to_string);
         if let Some(run) = &run {
@@ -893,6 +975,7 @@ fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec
                 if last_run.as_ref() == Some(run)
                     && let Some((last_id, previous)) = out.last_mut()
                     && last_id == &id
+                    && wrap_of(previous) == wrap_of(&params)
                 {
                     let sum_x = previous.get("dx").and_then(Value::as_f64).unwrap_or(0.0) + dx;
                     let sum_y = previous.get("dy").and_then(Value::as_f64).unwrap_or(0.0) + dy;
@@ -1153,6 +1236,9 @@ impl LayerSelection {
     }
 }
 
+/// `actions.play`: run an action's enabled steps from `from`, under automation's kept gate
+/// ([`kept_gate`]) when automation wrote it and no gate is installed. A call journaled into a
+/// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, _) = playback_plan(s, p)?;
     let Some(layers) = each_layer_targets(s, &action, p)? else { return play_once(s, p) };
@@ -1183,8 +1269,19 @@ fn play_once(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let limit = step_limit(p)?;
     let recording = begin_playback(s, &action)?;
+    // Nested calls and commands the steps run on their own behalf see the kept gate too.
+    let kept = kept_gate(s, &action);
+    if kept.is_some() {
+        s.authorize = kept;
+    }
     let played = run_recorded(s, &action, from, limit);
+    if kept.is_some() {
+        s.authorize = None;
+    }
     finish_playback(s, recording, &action, from, limit);
+    // The call journaled into a recording is automation's step when its caller runs under a gate
+    // (the kept gate is already removed, so the user's own play of a marked action is not).
+    note_automation_step(s, "actions.play", p);
     let mut out = played_result(&action.name, played.ran, played.failed, played.skipped);
     if let Some(step) = played.stopped {
         out["stopped"] = json!(step);
@@ -1223,6 +1320,7 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         action.steps.insert(to, moved);
         action.remap_steps(|i| Some(moved_index(i, step, to)));
         let result = json!({"action": action.name, "step": to});
+        note_automation_edit(s, idx);
         s.actions.touch();
         Ok(result)
     } else {
@@ -1253,6 +1351,8 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// `actions.delete`: delete an action, or with `step` one of its steps (which marks the action
+/// as automation's when an automation gate is installed).
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
     let idx = resolve(&s.actions.list, p, "actions.delete")?;
@@ -1284,6 +1384,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
+        note_automation_edit(s, idx);
         s.actions.touch();
         return Ok(result);
     }
@@ -1337,6 +1438,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         None => action.disabled = (0..action.steps.len()).collect(),
     }
     let result = json!({"action": action.name, "disabled": action.disabled});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }
@@ -1541,7 +1643,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null}",
+            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null, toolRecording:bool}",
             enabled: always,
             run: list,
             journal: false,

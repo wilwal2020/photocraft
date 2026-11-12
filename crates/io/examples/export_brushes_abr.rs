@@ -11,9 +11,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use photocraft_color::BlendMode;
+use photocraft_paint::BrushSettings;
 use photocraft_paint::brush::{Control, Dynamic, MaskMode, Pattern, TipShape};
 use photocraft_paint::tile::GrayTile;
-use photocraft_paint::BrushSettings;
 use photocraft_psd::abr::{AbrSample, write_v6};
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
 use photocraft_psd::patterns::PsdPattern;
@@ -138,7 +138,11 @@ fn descriptor(name: &str, b: &BrushSettings, samples: &mut Vec<AbrSample>, patte
         let tile = match &t.pattern {
             Pattern::Procedural { style, size, seed } => {
                 let img = photocraft_paint::procedural::pattern(*style, *size, *seed);
-                GrayTile { width: img.width as u32, height: img.height as u32, data: img.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect() }
+                GrayTile {
+                    width: img.width as u32,
+                    height: img.height as u32,
+                    data: img.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect(),
+                }
             }
             Pattern::Tile(g) => g.clone(),
             Pattern::Stored(_) => panic!("stored patterns are not exported"),
@@ -181,7 +185,12 @@ fn descriptor(name: &str, b: &BrushSettings, samples: &mut Vec<AbrSample>, patte
             TipShape::Round => Descriptor::new("computedBrush"),
             other => panic!("dual tip {other:?} is not exported"),
         };
-        t = t.with("Dmtr", px(db.size)).with("Hrdn", prc(db.hardness)).with("Angl", ang(db.angle)).with("Rndn", prc(db.roundness)).with("Spcn", prc(db.spacing));
+        t = t
+            .with("Dmtr", px(db.size))
+            .with("Hrdn", prc(db.hardness))
+            .with("Angl", ang(db.angle))
+            .with("Rndn", prc(db.roundness))
+            .with("Spcn", prc(db.spacing));
         d = d.with(
             "dualBrush",
             Value::Descriptor(
@@ -209,7 +218,12 @@ fn descriptor(name: &str, b: &BrushSettings, samples: &mut Vec<AbrSample>, patte
     }
     let tr = &b.transfer;
     if tr.enabled {
-        d = d.with("usePaintDynamics", boolean(true)).with("opVr", var(&tr.opacity)).with("prVr", var(&tr.flow)).with("wtVr", var(&tr.wetness)).with("mxVr", var(&tr.mix));
+        d = d
+            .with("usePaintDynamics", boolean(true))
+            .with("opVr", var(&tr.opacity))
+            .with("prVr", var(&tr.flow))
+            .with("wtVr", var(&tr.wetness))
+            .with("mxVr", var(&tr.mix));
     }
     d = d.with("Nose", boolean(b.noise)).with("Wtdg", boolean(b.wet_edges)).with("Rpt ", boolean(b.build_up));
     let s = &b.smoothing;
@@ -238,7 +252,11 @@ fn comparable(b: &BrushSettings) -> serde_json::Value {
     let mut b = b.clone();
     if let Pattern::Procedural { style, size, seed } = b.texture.pattern {
         let img = photocraft_paint::procedural::pattern(style, size, seed);
-        b.texture.pattern = Pattern::Tile(GrayTile { width: img.width as u32, height: img.height as u32, data: img.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect() });
+        b.texture.pattern = Pattern::Tile(GrayTile {
+            width: img.width as u32,
+            height: img.height as u32,
+            data: img.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect(),
+        });
     }
     b.seed = 0;
     fn round(v: &mut serde_json::Value) {

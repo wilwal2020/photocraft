@@ -52,7 +52,7 @@ fn doc() -> Document {
 }
 
 fn bytes(d: &Document) -> Vec<u8> {
-    crate::psd_export::document_to_psd(d).to_bytes().unwrap()
+    crate::psd_export::document_to_psd(d).unwrap().to_bytes().unwrap()
 }
 
 /// What a save in Photoshop does to PhotoCraft's own data: private blocks go, and (when

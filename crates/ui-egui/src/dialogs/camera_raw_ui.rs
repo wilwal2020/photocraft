@@ -278,7 +278,7 @@ impl CameraRawDialog {
         }
         self.gpu_shown = frame.gpu;
         if let Some(e) = &frame.gpu_error {
-            log::warn!("Camera Raw preview: the GPU failed, developing on the CPU from now on: {e}");
+            log::warn!("RAW Develop preview: the GPU failed, developing on the CPU from now on: {e}");
             self.gpu = None;
         }
         if self.before_display_key != Some(frame.display.key) {
@@ -322,7 +322,7 @@ impl CameraRawDialog {
             let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
             let repaint = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
-                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "Camera Raw preview failed".to_string());
+                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string());
                 // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
                 if tx.send(frame).is_ok() {
                     repaint.request_repaint();
@@ -351,7 +351,7 @@ impl CameraRawDialog {
         let frame = match rx.try_recv() {
             Ok(frame) => frame,
             Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Camera Raw preview worker stopped".to_string()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("RAW Develop preview worker stopped".to_string()),
         };
         self.pending = None;
         self.publish(ctx, frame?);
@@ -854,7 +854,7 @@ enum Coverage {
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
-        return Err("Camera Raw requires the composite or one colour channel".into());
+        return Err("RAW Develop requires the composite or one colour channel".into());
     }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
@@ -872,7 +872,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     };
     let filter = sm.smart_filters.get(index).ok_or("no such smart filter")?;
     if filter.command != RAW {
-        return Err("the smart filter is not a Camera Raw filter".into());
+        return Err("the smart filter is not a RAW Develop filter".into());
     }
     let params = raw_params(RAW, &filter.params).map_err(|e| e.to_string())?;
     let surf = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
@@ -904,11 +904,11 @@ fn open_pixels(
     let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
     let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
     let (Some(w), Some(h)) = (width, height) else {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     };
     let (w, h) = (w as usize, h as usize);
     if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("Camera Raw preview bounds are too large".into());
+        return Err("RAW Develop preview bounds are too large".into());
     }
     let (pw, ph) = proxy_size(w, h, proxy_side(ctx));
     let proxy = proxy_pixels(&surf, area, pw, ph);
@@ -1100,7 +1100,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return None;
     }
     let Some(fields) = params.as_object() else {
-        return Some(Err("Camera Raw params must be an object".into()));
+        return Some(Err("RAW Develop params must be an object".into()));
     };
     if fields.is_empty() {
         return Some(
@@ -1121,25 +1121,25 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     }
     let ui = params.get("ui")?;
     let Some(fields) = ui.as_object() else {
-        return Some(Err("Camera Raw ui must be an object".into()));
+        return Some(Err("RAW Develop ui must be an object".into()));
     };
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" | "auto" | "whiteBalanceAt" | "tab" | "applyPreset" | "presetAmount" | "savePreset" | "deletePreset" => {}
             "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" | "draft" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "showAdobePresets" | "draft" => {
-                return Some(Err(format!("Camera Raw {key} must be a boolean")));
+                return Some(Err(format!("RAW Develop {key} must be a boolean")));
             }
-            _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
+            _ => return Some(Err(format!("unknown RAW Develop ui property {key}"))),
         }
     }
     if ui.get("commit").and_then(Value::as_bool) == Some(true) && ui.get("cancel").and_then(Value::as_bool) == Some(true) {
-        return Some(Err("Camera Raw cannot commit and cancel together".into()));
+        return Some(Err("RAW Develop cannot commit and cancel together".into()));
     }
     for (key, run) in [("saveSettings", save_settings as fn(&mut PhotocraftApp) -> Result<Value, String>), ("loadSettings", load_settings)] {
         if ui.get(key).and_then(Value::as_bool) == Some(true) {
             if fields.len() > 1 {
-                return Some(Err(format!("Camera Raw {key} must be sent on its own")));
+                return Some(Err(format!("RAW Develop {key} must be sent on its own")));
             }
             return Some(run(app));
         }
@@ -1166,23 +1166,23 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     let mut next_params = d.params.clone();
     if let Some(set) = ui.get("set") {
         if !set.is_object() {
-            return Some(Err("bad Camera Raw settings: expected an object".into()));
+            return Some(Err("bad RAW Develop settings: expected an object".into()));
         }
         let mut cur = serde_json::to_value(&d.params).unwrap_or(json!({}));
         if let (Value::Object(c), Value::Object(s)) = (&mut cur, set) {
             for (k, v) in s {
                 if !c.contains_key(k) {
-                    return Some(Err(format!("unknown Camera Raw setting {k}")));
+                    return Some(Err(format!("unknown RAW Develop setting {k}")));
                 }
                 c.insert(k.clone(), v.clone());
             }
         }
         next_params = match serde_json::from_value::<CameraRaw>(cur) {
             Ok(p) => p,
-            Err(e) => return Some(Err(format!("bad Camera Raw settings: {e}"))),
+            Err(e) => return Some(Err(format!("bad RAW Develop settings: {e}"))),
         };
         if let Err(e) = next_params.validate_changes(&d.original) {
-            return Some(Err(format!("bad Camera Raw settings: {e}")));
+            return Some(Err(format!("bad RAW Develop settings: {e}")));
         }
     }
     let scope_update = match ui.get("scope") {
@@ -1235,7 +1235,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         redo_edit(d);
     }
     let dirs = app.services.camera_raw_presets.clone();
-    let Some(d) = app.camera_raw.as_mut() else { return Some(Err(tl!("Camera Raw isn't open").into())) };
+    let Some(d) = app.camera_raw.as_mut() else { return Some(Err(tl!("RAW Develop isn't open").into())) };
     let mut extra = serde_json::Map::new();
     // `draft`: develop as a slider drag does (colour tables; the next exact render replaces it).
     let draft = ui.get("draft").and_then(Value::as_bool) == Some(true);
@@ -1282,7 +1282,7 @@ fn control_requests(d: &mut CameraRawDialog, ui: &Value, dirs: &crate::CameraRaw
             remember_edit(d);
             auto_white_balance(d)?;
         }
-        Some(_) => return Err("Camera Raw auto must be \"tone\" or \"whiteBalance\"".into()),
+        Some(_) => return Err("RAW Develop auto must be \"tone\" or \"whiteBalance\"".into()),
     }
     if let Some(v) = ui.get("whiteBalanceAt") {
         let uv: [f32; 2] = serde_json::from_value(v.clone()).map_err(|_| "whiteBalanceAt must be [u, v]".to_string())?;
@@ -1293,7 +1293,7 @@ fn control_requests(d: &mut CameraRawDialog, ui: &Value, dirs: &crate::CameraRaw
         None => {}
         Some(Some("edit")) => d.tab = 0,
         Some(Some("presets")) => d.tab = 1,
-        Some(_) => return Err("Camera Raw tab must be \"edit\" or \"presets\"".into()),
+        Some(_) => return Err("RAW Develop tab must be \"edit\" or \"presets\"".into()),
     }
     if let Some(v) = ui.get("showAdobePresets").and_then(Value::as_bool) {
         d.presets.show_adobe = v;
@@ -1304,7 +1304,7 @@ fn control_requests(d: &mut CameraRawDialog, ui: &Value, dirs: &crate::CameraRaw
     }
     if let Some(key) = ui.get("applyPreset") {
         let key = key.as_str().ok_or("applyPreset must be a preset's path or name")?;
-        let preset = d.presets.find(key).ok_or_else(|| format!("no Camera Raw preset {key}"))?;
+        let preset = d.presets.find(key).ok_or_else(|| format!("no RAW Develop preset {key}"))?;
         extra.insert("preset".into(), presets::apply(d, &preset)?);
     }
     if let Some(v) = ui.get("presetAmount") {
@@ -1337,9 +1337,9 @@ fn control_requests(d: &mut CameraRawDialog, ui: &Value, dirs: &crate::CameraRaw
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
 fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
-    app.pick_save("Camera Raw Settings.xmp", move |app, path| {
+    app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         Ok(json!({"path": path}))
@@ -1349,10 +1349,10 @@ fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Load Settings…: applies a Camera Raw `.xmp` settings file's supported settings over the
 /// dialog's; the status bar names how many were not supported.
 fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
         let file = crate::file_open::display_name(&name);
-        let d = app.camera_raw.as_mut().ok_or(tl!("Camera Raw isn't open"))?;
+        let d = app.camera_raw.as_mut().ok_or(tl!("RAW Develop isn't open"))?;
         let mut next = d.params.clone();
         let report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
         next.validate_changes(&d.original).map_err(|e| format!("{file}: {e}"))?;
@@ -1366,9 +1366,9 @@ fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         app.ui.status_error = false;
         app.ui.status = if report.ignored.is_empty() {
-            crate::i18n::fmt(tl!("Loaded Camera Raw settings from {file}"), &[("file", &file)])
+            crate::i18n::fmt(tl!("Loaded RAW Develop settings from {file}"), &[("file", &file)])
         } else {
-            let template = "Loaded Camera Raw settings from {file} ({n} not supported)";
+            let template = "Loaded RAW Develop settings from {file} ({n} not supported)";
             crate::i18n::fmt(tl!(template), &[("file", &file), ("n", &report.ignored.len().to_string())])
         };
         Ok(json!({"applied": report.applied, "ignored": report.ignored}))
@@ -1428,7 +1428,7 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
 }
 
 fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
             let mut p = d.command_params();
@@ -1602,9 +1602,9 @@ impl CameraRawDialog {
     /// "Camera Raw (name)" for the open-time dialog, "Camera Raw Filter (layer)" otherwise.
     fn window_title(&self) -> String {
         if self.target == Target::OpenRaw {
-            crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", &self.layer_name)])
+            crate::i18n::fmt(tl!("RAW Develop ({name})"), &[("name", &self.layer_name)])
         } else {
-            crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &self.layer_name)])
+            crate::i18n::fmt(tl!("RAW Develop Filter ({layer})"), &[("layer", &self.layer_name)])
         }
     }
 }
@@ -1991,7 +1991,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        panic!("the Camera Raw preview worker never finished");
+        panic!("the RAW Develop preview worker never finished");
     }
 
     /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
@@ -2080,7 +2080,7 @@ mod tests {
         };
         let fail = |app: &mut PhotocraftApp| {
             let (tx, rx) = std::sync::mpsc::channel();
-            tx.send(Err("Camera Raw preview failed".to_string())).unwrap();
+            tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
             let d = app.camera_raw.as_mut().unwrap();
             d.pending = Some(rx);
             d.dirty = false;
@@ -2093,7 +2093,7 @@ mod tests {
         frame(&mut app);
         fail(&mut app);
         frame(&mut app);
-        assert!(app.ui.status_error && app.ui.status == "Camera Raw preview failed", "{}", app.ui.status);
+        assert!(app.ui.status_error && app.ui.status == "RAW Develop preview failed", "{}", app.ui.status);
         // No new frame yet: the error stays.
         frame(&mut app);
         assert!(app.ui.status_error);
@@ -2336,7 +2336,7 @@ mod tests {
         menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
         let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
         assert_eq!(r["redeveloped"], true, "{r}");
-        assert!(r.get("filter").is_some(), "contrast is applied as a Camera Raw step: {r}");
+        assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
         assert!(app.camera_raw.is_none());
         assert_eq!(app.session.documents().len(), 1);
         let st = app.session.active().unwrap();

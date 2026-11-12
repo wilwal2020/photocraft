@@ -11,6 +11,7 @@ const WAIT_CURSOR_MS: f64 = 100.0;
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -49,6 +50,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }
@@ -105,6 +113,18 @@ impl PhotocraftApp {
         }
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
+        }
+        // Document exports read committed pixels, not the pending Free Transform preview.
+        // Check on execution (also dialog OK and automation), leaving Folder processing usable.
+        if id == "file.scripts.imageProcessor"
+            && self.ui.transform.is_some()
+            && match params.get("source").and_then(Value::as_str) {
+                Some("open") => true,
+                Some("current") => self.transform_preview.as_ref().is_none_or(|preview| self.session.active().is_some_and(|st| st.doc.id == preview.doc.id)),
+                _ => false,
+            }
+        {
+            return Err("Commit or cancel the transform first".into());
         }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
@@ -296,6 +316,23 @@ impl PhotocraftApp {
         }
     }
 
+    /// Selects the newly attached type path on composite channel target so the path becomes immediately editable.
+    fn select_attached_type_path(&mut self, command: &str, result: &Result<Value, String>) {
+        if command != "type.attachToPath" {
+            return;
+        }
+        let attached = result.as_ref().ok().and_then(|value| value.get("layer")).and_then(Value::as_u64);
+        let active = self.session.active().and_then(|state| state.active_layer).map(|layer| layer.0);
+        if attached.is_some() && attached == active {
+            // New path text becomes the editable target; its source work path stays intact.
+            let _ = self.session.execute("channel.target.composite", json!({}));
+            self.ui.selected_path = Some("layer".into());
+            self.ui.vector_mask_target = false;
+            self.ui.mask_target = false;
+        }
+    }
+
+    /// Updates secondary UI state following command execution.
     fn sync_command_side_effects(
         &mut self,
         id: &str,
@@ -351,11 +388,13 @@ impl PhotocraftApp {
                     | "path.toSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
+                    | "path.intersectWithSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
             self.ui.view.extras = true;
         }
+        self.select_attached_type_path(id, result);
         if result.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
@@ -386,11 +425,23 @@ impl PhotocraftApp {
         }
     }
 
+    /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
+        crate::type_path_placement::cancel_stale(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        // Crop's Fill goes back to its default entry when another document that was already open
+        // becomes active (a tab switch, or closing the active one), as in the reference
+        // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
+        // as do tool switches, commits and cancels, which leave the active document alone (#10894).
+        if let (Some((id, ..)), Some((old_id, ..))) = (&document, &self.path_document)
+            && id != old_id
+            && self.view_docs.contains(id)
+        {
+            self.ui.tool_options.crop_content_aware = false;
+        }
         let same_document = match (&self.path_document, &document) {
             (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
             (None, None) => true,
@@ -408,6 +459,7 @@ impl PhotocraftApp {
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::retouch_ui::cancel_stale(self);
         // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
         if self.ui.tool != Tool::PolygonLasso {
             self.ui.polygon.clear();
@@ -455,6 +507,10 @@ impl PhotocraftApp {
             let docs = self.session.documents();
             self.channel_views.retain(|id, _| docs.iter().any(|d| d.doc.id.0 == *id));
         }
+        // With no document left, no canvas paints the Levels clipping display to drop its cache.
+        if self.session.documents().is_empty() {
+            self.levels_clipping = None;
+        }
         // Commands may close and reopen a preserved-ID document before the next repaint.
         canvas::retain_gpu_documents(self);
     }
@@ -469,7 +525,12 @@ type ChannelImages = Vec<(String, egui::ColorImage)>;
 /// The Channels panel's thumbnail images of `doc`, named for their textures: the composite, each
 /// colour channel (when there is more than one), each alpha channel, then the Quick Mask.
 pub(super) fn channel_images(doc: &Document, show_color: bool) -> ChannelImages {
-    let comp = photocraft_compose::thumbnail(doc, 56);
+    // `thumbnail(doc, 56)` with its proxy kept, so the ink thumbnails below sample the same proxy
+    // instead of building another one.
+    let proxy = photocraft_compose::thumbnail_proxy(doc, 56);
+    let src = proxy.as_ref().unwrap_or(doc);
+    let (tw, th) = photocraft_compose::thumbnail_size(doc, 56);
+    let comp = photocraft_compose::render_reduced(src, tw, th).to_rgba8();
     let (w, h) = (comp.width as usize, comp.height as usize);
     let side = w.max(h);
     let (ox, oy) = ((side - w) / 2, (side - h) / 2);
@@ -488,21 +549,38 @@ pub(super) fn channel_images(doc: &Document, show_color: bool) -> ChannelImages 
     let fmt = doc.pixel_format();
     let colors = fmt.mode.color_channels();
     let mut texs = vec![make(&|p| egui::Color32::from_rgb(p[0], p[1], p[2]), "composite")];
+    // CMYK channels show the document's own inks (#8359), not the composite converted back.
+    let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| match &proxy {
+        Some(proxy) => super::thumbs::ink_thumbnail(proxy, w, h),
+        None => match super::thumbs::ink_proxy(doc, 56) {
+            Some(proxy) => super::thumbs::ink_thumbnail(&proxy, w, h),
+            None => super::thumbs::ink_thumbnail(doc, w, h),
+        },
+    });
     if colors > 1 {
-        let cmyk = fmt.mode == photocraft_doc::ColorMode::Cmyk;
         for k in 0..colors {
-            texs.push(make(
-                &|p| {
-                    let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
-                    let mut native = [0.0f32; 8];
-                    photocraft_raster::from_rgba_into(&fmt, rgba, &mut native);
-                    let x = native.get(k).copied().unwrap_or(0.0);
-                    let g = if cmyk { 1.0 - x } else { x };
+            let mut px = vec![egui::Color32::TRANSPARENT; side * side];
+            for y in 0..h {
+                for x in 0..w {
+                    let i = y * w + x;
+                    let g = match &inks {
+                        // Ink channels read dark where there is ink.
+                        Some(inks) => 1.0 - inks.get(i).map_or(0.0, |v| v[k]),
+                        None => {
+                            let Some(p) = comp.pixels.get(i * 4..i * 4 + 4) else { continue };
+                            let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
+                            let mut native = [0.0f32; 8];
+                            photocraft_raster::from_rgba_into(&fmt, rgba, &mut native);
+                            native.get(k).copied().unwrap_or(0.0)
+                        }
+                    };
                     let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                    channel_tint(fmt.mode, k, byte, show_color)
-                },
-                &format!("c{k}"),
-            ));
+                    if let Some(d) = px.get_mut((y + oy) * side + x + ox) {
+                        *d = channel_tint(fmt.mode, k, byte, show_color);
+                    }
+                }
+            }
+            texs.push((format!("chan-c{k}"), egui::ColorImage::new([side, side], px)));
         }
     }
     // Alpha channels and the Quick Mask, sampled at thumbnail resolution.

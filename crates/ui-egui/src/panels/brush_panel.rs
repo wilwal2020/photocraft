@@ -114,6 +114,8 @@ pub struct BrushesPanelState {
     /// The group pinned at the top of the Brushes panel, under the search field: it stays there
     /// while the rest of the list scrolls (user request). A group's name; one that no longer
     /// exists pins nothing.
+    /// The Brush Preset picker's search field (its gear menu's Show Search Bar).
+    pub show_search: bool,
     pub pinned: Option<String>,
     /// The Brush Preset picker's cards: their size scale, from the picker's footer slider
     /// (`crate::brush_picker::body`). 1 is the standard size; the cards' width, height and
@@ -138,6 +140,7 @@ impl Default for BrushesPanelState {
             tile: crate::brushes_tab::TILE_DEFAULT,
             followed: None,
             pinned: None,
+            show_search: true,
             scale: 1.0,
         }
     }

@@ -43,8 +43,12 @@ pub(crate) fn sample(kind: &str) -> Value {
         "selectiveColor" => json!({"method": "absolute", "reds": [10, 0, -20, 5]}),
         "grain" => json!({"amount": 60, "size": 10, "roughness": 80}),
         "shading2" => json!({"depth": 45, "saturationShift": -40, "saturationCurve": 25, "selfBounce": 10, "hueShift": 30, "steps": 2}),
-        "shading" => json!({"depth": 50, "saturationCurve": -35, "chromaRetention": 70, "selfBounce": 55, "terminator": "#ff8040", "terminatorAmount": 45, "terminatorPosition": 30, "terminatorWidth": 25, "physical": true, "hueShift": 40, "splitHue": 90, "ambient": "#336699", "moodAmount": 15, "steps": 3, "saturationPoints": [[0, 255], [90, 220], [255, 0]], "huePoints": [[0, 255], [80, 40], [255, 0]], "literalCurve": true}),
-        "lighting" => json!({"lift": 50, "saturationCurve": 60, "highlightFade": 70, "gloss": 40, "glossSize": 20, "metallic": true, "hueShift": 30, "lightHue": 60, "light": "#ffcc66", "glowAmount": 15, "steps": 2, "saturationPoints": [[0, 255], [128, 60], [-40, 300], [255, 0]], "huePoints": [[0, 255], [128, -60], [255, 0]]}),
+        "shading" => {
+            json!({"depth": 50, "saturationCurve": -35, "chromaRetention": 70, "selfBounce": 55, "terminator": "#ff8040", "terminatorAmount": 45, "terminatorPosition": 30, "terminatorWidth": 25, "physical": true, "hueShift": 40, "splitHue": 90, "ambient": "#336699", "moodAmount": 15, "steps": 3, "saturationPoints": [[0, 255], [90, 220], [255, 0]], "huePoints": [[0, 255], [80, 40], [255, 0]], "literalCurve": true})
+        }
+        "lighting" => {
+            json!({"lift": 50, "saturationCurve": 60, "highlightFade": 70, "gloss": 40, "glossSize": 20, "metallic": true, "hueShift": 30, "lightHue": 60, "light": "#ffcc66", "glowAmount": 15, "steps": 2, "saturationPoints": [[0, 255], [128, 60], [-40, 300], [255, 0]], "huePoints": [[0, 255], [128, -60], [255, 0]]})
+        }
         _ => json!({}),
     }
 }

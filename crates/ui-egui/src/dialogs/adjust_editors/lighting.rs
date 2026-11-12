@@ -28,10 +28,7 @@ pub(crate) fn lighting(ui: &mut egui::Ui, v: &mut Value, mem: egui::Id, saved: &
     e.add(sliders(
         ui,
         v,
-        &[
-            ("lift", tl!("Brightness"), 0.0, 100.0, d.lift * 100.0, "%", None),
-            ("saturation", tl!("Saturation"), 0.0, 100.0, d.saturation * 100.0, "%", None),
-        ],
+        &[("lift", tl!("Brightness"), 0.0, 100.0, d.lift * 100.0, "%", None), ("saturation", tl!("Saturation"), 0.0, 100.0, d.saturation * 100.0, "%", None)],
     ));
     e.add(super::sat_curve::saturation_curve_editor(ui, v, mem, true));
     e.add(sliders(

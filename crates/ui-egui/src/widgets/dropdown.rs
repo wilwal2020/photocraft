@@ -81,6 +81,69 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true, None)
 }
 
+/// [`dropdown`] that refuses the options `enabled` turns down (upstream #12906, the Pen's Pixels
+/// mode): this branch's lists don't grey them, so picking one puts the value back.
+pub fn dropdown_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    enabled: impl Fn(&T) -> bool,
+) -> bool {
+    let before = current.clone();
+    let chosen = dropdown(ui, id, name, current, options, width);
+    if !enabled(current) {
+        *current = before;
+        ui.ctx().request_repaint();
+        return false;
+    }
+    chosen
+}
+
+/// [`dropdown_wheel_grouped`] that refuses the options `enabled` turns down (upstream #12879, the
+/// Pattern Stamp's Behind on the Background): a refused pick or wheel notch puts the value back.
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_wheel_grouped_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+    enabled: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    let before = current.clone();
+    let (mut chosen, hovered) = dropdown_wheel_grouped(ui, id, name, current, options, width, starts_group);
+    chosen.retain(|v| enabled(v));
+    if !enabled(current) {
+        *current = before;
+        ui.ctx().request_repaint();
+    }
+    (chosen, hovered.filter(|v| enabled(v)))
+}
+
+/// A combo box list with this branch's chevron, for callers that draw their own rows (upstream's
+/// `combo_list`, which also places the list above the button when it fits better there).
+pub fn combo_list<R>(
+    ui: &mut Ui,
+    id_salt: impl egui::AsIdSalt,
+    selected_text: impl Into<egui::WidgetText>,
+    width: f32,
+    close: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    craft_ui::ComboBox::from_id_salt(id_salt)
+        .selected_text(selected_text)
+        .width(width)
+        .height(420.0)
+        .icon(chevron_icon)
+        .close_behavior(close)
+        .show_ui(ui, add_contents)
+}
+
 /// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
 /// `starts_group` (upstream's blend mode groups, #5532). This branch's blend lists draw
 /// Photoshop's group breaks themselves ([`blend_breaks`]), so the grouping is left to them.

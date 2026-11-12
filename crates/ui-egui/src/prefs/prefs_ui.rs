@@ -61,6 +61,9 @@ pub struct Runtime {
     /// The custom theme on screen (Preferences › Interface › Custom Theme), `None` for a
     /// built-in one.
     pub(crate) custom_theme: Option<Tokens>,
+    pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
+    pub(crate) tool_cmyk_picks: crate::tool_memory::CmykPicks,
+    pub(crate) group_tools: Option<Vec<crate::state::Tool>>,
 }
 
 // ------------------------------------------------------------------ shortcuts
@@ -100,6 +103,7 @@ use save::{SAVE_RETRY_MAX_S, SAVE_RETRY_S, merge_changes, persist};
 pub use save::{autosave_now, tick};
 #[cfg(test)]
 pub(crate) use shortcuts::capture_key_press;
+pub(crate) use shortcuts::capturing_shortcut;
 pub use shortcuts::{is_modifier_key, reserved_shortcut, shortcut_items, shortcut_text};
 pub use startup::load;
 pub(crate) use startup::{on_recovery_event, remember_rulers};

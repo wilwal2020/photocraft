@@ -134,7 +134,9 @@ pub fn adjust_presets(app: &PhotocraftApp, kind: &str) -> Vec<(String, Value)> {
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter_map(|e| Some((e.get("name")?.as_str().filter(|n| !n.trim().is_empty())?.to_string(), e.get("params").filter(|p| p.is_object())?.clone())))
+                .filter_map(|e| {
+                    Some((e.get("name")?.as_str().filter(|n| !n.trim().is_empty())?.to_string(), e.get("params").filter(|p| p.is_object())?.clone()))
+                })
                 .collect()
         })
         .unwrap_or_default()

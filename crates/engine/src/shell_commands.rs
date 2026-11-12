@@ -77,6 +77,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     // The icon rail beside the dock (no Window menu item: Photoshop has none; its right-click
     // menu closes it and Reset Workspace restores it).
     ("window.toggle.rail", "Panel Icons", &[], None),
+    ("window.toggle.contextualTaskBar", "Contextual Task Bar", &["Window"], None),
     // Photoshop's Ctrl+Tab and Ctrl+Shift+Tab, on macOS too (⌘Tab belongs to the system, #2340).
     ("window.nextDocument", "Next Document", &[], Some("Ctrl+Tab")),
     ("window.previousDocument", "Previous Document", &[], Some("Ctrl+Shift+Tab")),
@@ -174,6 +175,7 @@ pub const TOOLS: &[(&str, &str, Option<&str>)] = &[
     ("tools.select.ellipseShape", "Ellipse Tool", Some("U")),
     ("tools.select.triangle", "Triangle Tool", Some("U")),
     ("tools.select.polygon", "Polygon Tool", Some("U")),
+    ("tools.select.star", "Star Tool", Some("U")),
     ("tools.select.line", "Line Tool", Some("U")),
     ("tools.select.customShape", "Custom Shape Tool", Some("U")),
     ("tools.select.slice", "Slice Tool", Some("C")),

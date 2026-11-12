@@ -21,7 +21,7 @@ fn doc(depth: SampleType) -> Document {
 }
 
 fn bytes(d: &Document) -> Vec<u8> {
-    crate::psd_export::document_to_psd(d).to_bytes().unwrap()
+    crate::psd_export::document_to_psd(d).unwrap().to_bytes().unwrap()
 }
 
 /// Both masks come back from a PhotoCraft PSD exactly, and the file's own layer mask (what

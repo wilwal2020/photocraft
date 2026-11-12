@@ -97,7 +97,7 @@ impl DetailPreview {
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("Camera Raw detail preview worker stopped".into()),
+            Err(TryRecvError::Disconnected) => Err("RAW Develop detail preview worker stopped".into()),
         };
         self.pending = None;
         match result {
@@ -147,7 +147,7 @@ impl DetailPreview {
                 return;
             }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
-                .unwrap_or_else(|_| Err("Camera Raw detail preview failed; the proxy remains available".into()));
+                .unwrap_or_else(|_| Err("RAW Develop detail preview failed; the proxy remains available".into()));
             if !cancel.load(Ordering::Relaxed) {
                 let _ = tx.send(result);
                 ctx.request_repaint();
@@ -158,7 +158,7 @@ impl DetailPreview {
             match std::thread::Builder::new().name("camera-raw-region".into()).spawn(work) {
                 Ok(_) => self.pending = Some((revision, crop, rx)),
                 Err(e) => {
-                    self.error = Some(format!("Cannot start Camera Raw preview: {e}"));
+                    self.error = Some(format!("Cannot start RAW Develop preview: {e}"));
                     self.failed = Some((revision, crop));
                 }
             }
@@ -169,7 +169,7 @@ impl DetailPreview {
             // instead of blocking its UI with full-resolution develops.
             drop(work);
             drop(rx);
-            self.error = Some("Full-resolution filtered preview requires a native Camera Raw worker; the web preview keeps the proxy".into());
+            self.error = Some("Full-resolution filtered preview requires a native RAW Develop worker; the web preview keeps the proxy".into());
             self.failed = Some((revision, crop));
         }
     }
@@ -364,7 +364,7 @@ impl RegionJob {
         let crop = self.crop.intersect(&self.area);
         let region = PixelRect::new(crop.x0 - m, crop.y0 - m, crop.x1 + m, crop.y1 + m).intersect(&self.area);
         if crop.is_empty() || region.width() as u64 * region.height() as u64 > MAX_REGION_PIXELS {
-            return Err("the Camera Raw region is too large to develop".into());
+            return Err("the RAW Develop region is too large to develop".into());
         }
         let input = read_input(&self.source, self.area, region, &p)?;
         let (bw, bh) = (region.width() as usize, region.height() as usize);
@@ -440,7 +440,7 @@ fn read_input(source: &Surface, area: PixelRect, region: PixelRect, p: &CameraRa
             .union(&region)
             .intersect(&area);
     if from.width() as u64 * from.height() as u64 > MAX_REGION_PIXELS {
-        return Err("the Camera Raw region is too large to develop".into());
+        return Err("the RAW Develop region is too large to develop".into());
     }
     let (sw, sh) = (from.width() as usize, from.height() as usize);
     let mut src = vec![[0.0f32; 4]; sw * sh];

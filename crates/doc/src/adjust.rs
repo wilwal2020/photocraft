@@ -608,6 +608,7 @@ pub enum Adjustment {
         level: f32,
     },
     GradientMap {
+        /// The gradient as rendered: linear sRGB stops.
         stops: Vec<(f32, [f32; 3])>,
         reverse: bool,
         /// Ordered dither of ±½ an 8-bit step to hide banding.
@@ -741,7 +742,15 @@ mod tests {
     fn shading_reads_missing_fields_as_defaults_and_sanitizes() {
         let a: Adjustment = serde_json::from_str(r#"{"Shading":{"depth":0.5}}"#).unwrap();
         assert_eq!(a, Adjustment::Shading(Shading { depth: 0.5, self_bounce: 0.0, terminator_amount: 0.0, ..Shading::default() }));
-        let wild = Shading { depth: f32::NAN, hue_shift: 1e9, split_hue: -90.0, steps: 99, saturation_curve: -7.0, ambient: [2.0, -1.0, f32::INFINITY], ..Shading::default() };
+        let wild = Shading {
+            depth: f32::NAN,
+            hue_shift: 1e9,
+            split_hue: -90.0,
+            steps: 99,
+            saturation_curve: -7.0,
+            ambient: [2.0, -1.0, f32::INFINITY],
+            ..Shading::default()
+        };
         let s = wild.sanitized();
         assert_eq!((s.depth, s.hue_shift, s.split_hue, s.steps, s.saturation_curve), (0.35, 90.0, 270.0, 8, -1.0));
         assert_eq!(s.ambient, [1.0, 0.0, 0.8]);
@@ -753,7 +762,16 @@ mod tests {
         let a: Adjustment = serde_json::from_str(r#"{"Lighting":{"lift":0.5}}"#).unwrap();
         // Highlight Fade came later: files without it keep their look (no fade).
         assert_eq!(a, Adjustment::Lighting(Lighting { lift: 0.5, highlight_fade: 0.0, ..Lighting::default() }));
-        let wild = Lighting { lift: f32::NAN, hue_shift: 1e9, light_hue: -90.0, steps: 99, saturation_curve: f32::NAN, highlight_fade: 3.0, light: [2.0, -1.0, f32::INFINITY], ..Lighting::default() };
+        let wild = Lighting {
+            lift: f32::NAN,
+            hue_shift: 1e9,
+            light_hue: -90.0,
+            steps: 99,
+            saturation_curve: f32::NAN,
+            highlight_fade: 3.0,
+            light: [2.0, -1.0, f32::INFINITY],
+            ..Lighting::default()
+        };
         let s = wild.sanitized();
         assert_eq!((s.lift, s.hue_shift, s.light_hue, s.steps, s.saturation_curve, s.highlight_fade), (0.35, 90.0, 270.0, 8, 0.0, 1.0));
         assert_eq!(s.light, [1.0, 0.0, 0.6]);

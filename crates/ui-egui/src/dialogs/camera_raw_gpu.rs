@@ -44,12 +44,12 @@ fn engine(rs: &RenderState) -> Arc<Engine> {
     let build = move || {
         let gpu = CameraRawGpu::new(&device, &queue);
         if let Err(err) = &gpu {
-            log::warn!("Camera Raw stays on the CPU: {err}");
+            log::warn!("RAW Develop stays on the CPU: {err}");
         }
         *built.gpu.lock().unwrap_or_else(PoisonError::into_inner) = Some(gpu);
     };
     if std::thread::Builder::new().name("camera-raw-gpu".into()).spawn(build).is_err() {
-        log::warn!("Camera Raw stays on the CPU: no thread to build its GPU pipelines on");
+        log::warn!("RAW Develop stays on the CPU: no thread to build its GPU pipelines on");
     }
     *slot = Some(e.clone());
     e
@@ -177,7 +177,7 @@ impl Shared {
             None => None,
         };
         gpu.present(&self.texture, Display { encode, lut })?;
-        let histogram = gpu.histogram(true).ok_or("Camera Raw GPU: the histogram wasn't counted")?;
+        let histogram = gpu.histogram(true).ok_or("RAW Develop GPU: the histogram wasn't counted")?;
         let px = if job.draft {
             None
         } else {
