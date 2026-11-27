@@ -2235,3 +2235,78 @@ fn translate_wrap_still_moves_a_frame() {
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "a framed layer still records a whole-canvas move");
     assert_eq!(tx(&s), before + 8.0, "the frame kept the raw delta");
 }
+
+/// Merge Layers gives what the selected layers look like on screen: a layer clipped to a hidden
+/// base or inside a hidden group adds nothing, and one clipped to a base left out of the merge
+/// keeps that base's shape.
+#[test]
+fn merge_layers_matches_what_the_selected_layers_show() {
+    let fill = |s: &mut Session, id: LayerId, r: Rect, clipped: bool| {
+        s.edit("paint", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            l.surface_mut().unwrap().fill_rect(r, &[0.0, 0.0, 1.0, 1.0]);
+            l.clipped = clipped;
+            Ok(())
+        })
+        .unwrap();
+    };
+    let hide = |s: &mut Session, id: LayerId| {
+        s.edit("hide", |doc, _| {
+            doc.layer_mut(id).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+    };
+    for depth in [8, 16, 32] {
+        // Base B (0..10), C clipped to it (blue over 0..30), unclipped U (40..50).
+        let mut s = session(depth);
+        let b = rect_layer(&mut s, Rect::new(0, 0, 10, 10));
+        let c = rect_layer(&mut s, Rect::new(0, 0, 0, 0));
+        fill(&mut s, c, Rect::new(0, 0, 30, 10), true);
+        let u = rect_layer(&mut s, Rect::new(40, 0, 50, 10));
+
+        // The base hidden: C shows nothing, and adds nothing to the merge.
+        hide(&mut s, b);
+        select_all(&mut s, &[b, c, u]);
+        let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        let px = doc(&s).layer(m).unwrap().surface().unwrap().clone();
+        assert_eq!(px.pixel(5, 5)[3], 0.0, "C clipped to a hidden base was merged ({depth}-bit)");
+        assert_eq!(px.pixel(45, 5)[..4], [1.0, 0.0, 0.0, 1.0]);
+        assert!(!doc(&s).layer(m).unwrap().clipped);
+        s.undo();
+        s.undo();
+
+        // The base visible but not merged: C keeps B's shape and the canvas looks the same.
+        assert!(doc(&s).layer(b).unwrap().visible);
+        let shown = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        select_all(&mut s, &[c, u]);
+        let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        let ml = doc(&s).layer(m).unwrap();
+        assert!(!ml.clipped);
+        assert_eq!(ml.surface().unwrap().pixel(5, 5)[..4], [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(ml.surface().unwrap().pixel(20, 5)[3], 0.0, "C merged outside its base's shape ({depth}-bit)");
+        let merged = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        assert_eq!(merged, shown, "the canvas changed ({depth}-bit)");
+        s.undo();
+
+        // Two layers clipped to B merge into one still clipped to B, its shape applied once.
+        let c2 = rect_layer(&mut s, Rect::new(0, 0, 0, 0));
+        s.execute("layer.arrange.sendBackward", json!({"layer": c2.0})).unwrap();
+        fill(&mut s, c2, Rect::new(0, 0, 5, 10), true);
+        assert_eq!(crate::clip_group::base_of(doc(&s), c2), Some(b));
+        select_all(&mut s, &[c, c2]);
+        let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        let ml = doc(&s).layer(m).unwrap();
+        assert!(ml.clipped);
+        assert_eq!(ml.surface().unwrap().pixel(20, 5)[..4], [0.0, 0.0, 1.0, 1.0], "drawn unclipped, clipped by the layer");
+        s.undo();
+
+        // A layer in a hidden group adds nothing.
+        select_all(&mut s, &[u]);
+        let g = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        hide(&mut s, g);
+        select_all(&mut s, &[c, u]);
+        let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        assert_eq!(doc(&s).layer(m).unwrap().surface().unwrap().pixel(45, 5)[3], 0.0, "a layer in a hidden group was merged");
+    }
+}

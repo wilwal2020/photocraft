@@ -15,6 +15,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("adj-grain", include_bytes!("../../../assets/icons/adj-grain.svg")),
     ("adj-shading", include_bytes!("../../../assets/icons/adj-shading.svg")),
     ("adj-lighting", include_bytes!("../../../assets/icons/adj-lighting.svg")),
+    ("adj-chromatic-aberration", include_bytes!("../../../assets/icons/adj-chromatic-aberration.svg")),
     ("adj-hue-saturation", include_bytes!("../../../assets/icons/adj-hue-saturation.svg")),
     ("adj-invert", include_bytes!("../../../assets/icons/adj-invert.svg")),
     ("adj-levels", include_bytes!("../../../assets/icons/adj-levels.svg")),

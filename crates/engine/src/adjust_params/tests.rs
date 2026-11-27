@@ -1,7 +1,8 @@
 use super::*;
 
-const KINDS: [&str; 19] = [
+const KINDS: [&str; 20] = [
     "grain",
+    "chromaticAberration",
     "shading",
     "shading2",
     "lighting",
@@ -48,6 +49,9 @@ pub(crate) fn sample(kind: &str) -> Value {
         }
         "lighting" => {
             json!({"lift": 50, "saturationCurve": 60, "highlightFade": 70, "gloss": 40, "glossSize": 20, "metallic": true, "hueShift": 30, "lightHue": 60, "light": "#ffcc66", "glowAmount": 15, "steps": 2, "saturationPoints": [[0, 255], [128, 60], [-40, 300], [255, 0]], "huePoints": [[0, 255], [128, -60], [255, 0]]})
+        }
+        "chromaticAberration" => {
+            json!({"redShift": 6.5, "blueShift": -2, "offsetX": 1.5, "offsetY": -3, "centerX": 40, "centerY": 65, "falloff": 30, "softness": 2})
         }
         _ => json!({}),
     }
@@ -578,6 +582,47 @@ fn lighting_is_an_adjustment_layer_only() {
     assert_eq!(crate::commands::adjustment_kind(&Adjustment::Lighting(l)), "lighting");
 }
 
+/// Chromatic Aberration (user request, 2026-11-21) is a layer-only adjustment whose shifts are in
+/// pixels and whose centre and falloff are percentages; values clamp, a wrong type is refused,
+/// `layer.setAdjustment` edits it in one undoable step and the composite shows it.
+#[test]
+fn chromatic_aberration_is_an_adjustment_layer_only() {
+    let mut s = colourful("rgb", 8);
+    let ca = |s: &crate::Session| {
+        let d = s.active().unwrap();
+        match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Adjustment(Adjustment::ChromaticAberration(c)) => c.clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let before = s.active().unwrap().doc.clone();
+    s.execute("layer.newAdjustmentLayer.chromaticAberration", json!({})).unwrap();
+    assert_eq!(ca(&s), ChromaticAberration::default());
+    let d = s.active().unwrap();
+    assert_eq!(d.doc.layer(d.active_layer.unwrap()).unwrap().name, "Chromatic Aberration 1");
+    assert_ne!(photocraft_compose::flatten(&d.doc).px, photocraft_compose::flatten(&before).px, "the composite shows it");
+    s.execute(
+        "layer.newAdjustmentLayer.chromaticAberration",
+        json!({"redShift": 999, "offsetY": -80, "centerX": 25, "falloff": 140, "softness": -1, "clipToPrevious": true}),
+    )
+    .unwrap();
+    let c = ca(&s);
+    assert_eq!((c.red_shift, c.blue_shift, c.offset_y, c.center, c.falloff, c.softness), (50.0, -3.0, -50.0, [0.25, 0.5], 1.0, 0.0));
+    for bad in [json!({"redShift": "far"}), json!({"centerX": [1, 2]}), json!({"softness": true}), json!("not an object")] {
+        assert!(s.execute("layer.newAdjustmentLayer.chromaticAberration", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(crate::commands::find("image.adjustments.chromaticAberration").is_none(), "no Image › Adjustments entry");
+    assert_eq!(crate::commands::adjustment_kind(&Adjustment::ChromaticAberration(c.clone())), "chromaticAberration");
+    // Editing names only what changes, in one history step that undoes.
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.setAdjustment", json!({"blueShift": 7.25, "softness": 3})).unwrap();
+    assert_eq!(ca(&s), ChromaticAberration { blue_shift: 7.25, softness: 3.0, ..c.clone() });
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    assert!(s.execute("layer.setAdjustment", json!({"offsetX": "left"})).is_err());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(ca(&s), c);
+}
+
 fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
     let d = s.active().unwrap();
     let bg = d.doc.layers[0].surface().unwrap();
@@ -587,7 +632,7 @@ fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
 #[test]
 fn destructive_commands_apply_their_params_at_every_depth() {
     for depth in [8, 16, 32] {
-        for kind in KINDS.iter().filter(|k| !matches!(**k, "invert" | "grain" | "shading" | "shading2" | "lighting")) {
+        for kind in KINDS.iter().filter(|k| !matches!(**k, "invert" | "grain" | "shading" | "shading2" | "lighting" | "chromaticAberration")) {
             let mut s = colourful("rgb", depth);
             let before = pixels(&s);
             let steps = s.active().unwrap().history.past_len();

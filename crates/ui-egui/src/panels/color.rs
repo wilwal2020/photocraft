@@ -27,6 +27,58 @@ pub(crate) fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rec
     if fg_resp.double_clicked() || bg_resp.double_clicked() {
         crate::color_picker_ui::open(app, if picked { "background" } else { "foreground" });
     }
+    if app.ui.color_panel.show_other_colors {
+        other_chips(app, ui, chips);
+    }
+}
+
+/// The side of an other-colour chip.
+const OTHER_CHIP: f32 = 14.0;
+
+/// How tall the chips column must be to hold the pair in use, `alert_rows` warning rows (18 pt
+/// apart, from 40 pt down) and the other pair under them.
+pub(crate) fn other_chips_height(alert_rows: usize) -> f32 {
+    40.0 + 18.0 * alert_rows as f32 + OTHER_CHIP + 7.0 + 2.0
+}
+
+/// The warning rows the Color panel's `mode` may put under its chips: the gamut warning, and in
+/// Web Color Sliders the web-colour one; the Color Wheel has none.
+pub(crate) fn alert_rows(mode: crate::state::ColorPanelMode) -> usize {
+    use crate::state::ColorPanelMode as M;
+    match mode {
+        M::WebColorSliders => 2,
+        M::ColorWheel => 0,
+        _ => 1,
+    }
+}
+
+/// Where Show Other Colors puts the pair not in use: smaller chips at the foot of the chips
+/// column, or None when the column is too short to hold them under the colours in use and the
+/// `alert_rows` warning rows under those.
+pub(crate) fn other_chips_rects(chips: Rect, alert_rows: usize) -> Option<[Rect; 2]> {
+    if chips.height() < other_chips_height(alert_rows) - 0.5 {
+        return None;
+    }
+    let top = chips.bottom() - OTHER_CHIP - 7.0;
+    let fg = Rect::from_min_size(pos2(chips.left() + 3.0, top), vec2(OTHER_CHIP, OTHER_CHIP));
+    let bg = fg.translate(vec2(7.0, 7.0));
+    Some([fg, bg])
+}
+
+/// Show Other Colors (user request, 2026-11-25): the colour pair not in use, under the one in
+/// use: the masks' pair while the layer is targeted, the layer's while a mask is. Its tooltip
+/// names it; it is only shown (a click on it does nothing).
+fn other_chips(app: &PhotocraftApp, ui: &mut egui::Ui, chips: Rect) {
+    let Some([fgr, bgr]) = other_chips_rects(chips, alert_rows(app.ui.color_panel.mode)) else { return };
+    let t = Tokens::get(ui.ctx());
+    let [fg, bg] = app.session.tools.other_colors;
+    let p = ui.painter();
+    p.rect_filled(bgr, 1.5, c32(bg));
+    p.rect_stroke(bgr, 1.5, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    p.rect_filled(fgr, 1.5, c32(fg));
+    p.rect_stroke(fgr, 1.5, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Outside);
+    let tip = if app.session.tools.mask_targeted { tl!("Layer colors") } else { tl!("Mask colors") };
+    ui.interact(fgr.union(bgr), ui.scope_id().with("field-other"), Sense::hover()).on_hover_text(tip);
 }
 
 /// Where the dock tells the Color field how tall its group body is.

@@ -287,6 +287,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // before its contents).
             let mut hidden_groups: Vec<bool> = Vec::new();
             let inherited = inherited_labels(&rows);
+            let clipped_hidden = super::layer_row::clipped_to_hidden(&doc.layers);
             for (i, &(depth, l)) in rows.iter().enumerate() {
                 hidden_groups.truncate(depth);
                 let parent_hidden = hidden_groups.iter().any(|h| *h);
@@ -300,8 +301,14 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !filter.shows(l) {
                     continue;
                 }
-                let row =
-                    RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1, parent_hidden, inherited_label };
+                let row = RowSel {
+                    selected: selection.contains(&l.id),
+                    primary: active == Some(l.id),
+                    multi: selection.len() > 1,
+                    parent_hidden,
+                    base_hidden: clipped_hidden.contains(&l.id),
+                    inherited_label,
+                };
                 let top = ui.cursor().top();
                 drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
                 if reveal == Some(l.id) {

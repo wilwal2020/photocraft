@@ -24,6 +24,7 @@ pub(super) mod numeric_expression;
 mod panel;
 pub mod point_curve;
 pub mod press_menu;
+pub mod prompt_field;
 mod scrub;
 mod slider;
 pub mod swap_arrow;

@@ -124,7 +124,7 @@ pub(super) fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) 
         }
         ui.label(RichText::new(tl!("Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.")).color(t.text_dim));
         ui.label(RichText::new(tl!("Applies immediately when saved. Memory is not reserved in advance.")).color(t.text_dim));
-        ui.label(RichText::new(tl!("With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.")).color(t.text_dim));
+        ui.label(RichText::new(tl!("With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three quarters of the graphics card's memory less what the canvas takes, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.")).color(t.text_dim));
     });
     ui.add_space(8.0);
 }

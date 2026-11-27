@@ -90,17 +90,23 @@ pub fn preview_page(doc: &Document, source: Rect, factor: u32, interrupt: Interr
                     *s = shrink(s, r, k, last, i)?;
                 }
             }
+            // Its shifts are in document pixels: they shrink with the page.
+            LayerContent::Adjustment(photocraft_doc::Adjustment::ChromaticAberration(c)) => *c = c.scaled(k as f32),
             _ => {}
         }
         Ok(())
     }
     let mut p = doc.clone();
     p.size = photocraft_doc::Size::new(doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
+    // Chromatic Aberration reads around the page: the pixels within its (scaled) reach are
+    // reduced too, so neighbouring pages agree at their edges.
+    let apron = crate::adjust::chromatic::stack_reach(&doc.layers).div_euclid(k).saturating_add(2);
+    let reduce = if apron > 2 { rect.inflate(apron) } else { rect };
     for l in &mut p.layers {
-        layer(l, rect, k, interrupt, 0, last)?;
+        layer(l, reduce, k, interrupt, 0, last)?;
     }
     for c in &mut p.channels {
-        c.surface = shrink(&c.surface, rect, k, last, interrupt)?;
+        c.surface = shrink(&c.surface, reduce, k, last, interrupt)?;
     }
     interrupt.check().map_err(|e| e.to_string())?;
     Ok(render(&p, rect))

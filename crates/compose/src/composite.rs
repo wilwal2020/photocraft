@@ -748,8 +748,12 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
             }
             continue;
         }
-        // Blend as if the base were opaque, then keep the base's alpha.
-        let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
+        // Blend as if the base were opaque, then keep the base's alpha. Fill below 100% in one
+        // of the special eight goes inside the blend, as for a layer that isn't clipped, and
+        // Opacity alone is coverage (user report: a clipped Hard Mix Color Fill at 15% Fill
+        // looked like 15% Opacity; Photoshop's own composites of their files differed on up to a
+        // sixth of the page).
+        let r = psblend::composite_fill(layer.blend, [p[0], p[1], p[2], 1.0], s, layer.opacity, layer.fill_opacity, gamma);
         *p = [r[0], r[1], r[2], alpha];
     }
 }

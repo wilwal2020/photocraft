@@ -11,6 +11,7 @@ use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, ToneSpace, lut
 use crate::Buffer;
 
 mod channels;
+pub mod chromatic;
 mod color;
 pub mod lighting;
 pub mod shading;
@@ -315,6 +316,11 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         }
         Adjustment::Shading(s) => shading::apply_shading(s, buf, None, transfer),
         Adjustment::Lighting(s) => lighting::apply_lighting(s, buf, None, transfer),
+        // Without a document the buffer is the canvas (the compositor passes the document's: `Ctx::apply_adjustment`).
+        Adjustment::ChromaticAberration(c) => {
+            let canvas = buf.rect;
+            chromatic::apply_chromatic(c, buf, canvas);
+        }
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
     }

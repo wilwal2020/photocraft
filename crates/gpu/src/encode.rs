@@ -6,6 +6,19 @@ use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_r
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
 use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
 
+/// The fewest pixels a side of a chunk keeps once its apron is taken off ([`Compositor::chunk_step`]).
+const MIN_CHUNK_STEP: u32 = 32;
+
+/// How far each chunk is drawn past its edges for `doc`: the reach of its visible Chromatic
+/// Aberration layers that shift anything (0 without, and in documents without colour channels,
+/// where the layer changes nothing).
+pub(crate) fn chunk_apron(doc: &Document) -> i32 {
+    if matches!(doc.mode, photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Duotone) {
+        return 0;
+    }
+    photocraft_compose::adjust::chromatic::stack_reach(&doc.layers)
+}
+
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
     /// still open; the chunk texture is reused afterwards, so the sink must record any copies
@@ -142,11 +155,16 @@ impl Compositor {
         }
         let page = self.page;
         let mut cells = grid_rects(region, page);
+        // Chromatic Aberration reads the composite around each pixel: every chunk is drawn over
+        // itself grown by this apron (its pages and effect windows grown alike) and its middle
+        // handed on, as the CPU compositor renders its tiles (`photocraft_compose::adjust::chromatic`).
+        let apron = chunk_apron(doc);
+        let step = self.chunk_step(apron)?;
         // Check every actual page cell before uploads, submissions or sink output. A later
         // cell can need more chunk records than the first; a failure must leave the device healthy.
         let buffer_limit = device.limits().max_buffer_size;
         for part in &cells {
-            uniform_buffer_len(grid_rect_count(*part, self.chunk)?, plan.passes.len(), buffer_limit)?;
+            uniform_buffer_len(grid_rect_count(*part, step)?, plan.passes.len(), buffer_limit)?;
         }
         if self.frame == 0 {
             // The first submission after device creation is dropped on some drivers (RADV),
@@ -166,7 +184,8 @@ impl Compositor {
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
         let runs = batch_runs(&plan);
-        let checkpoint = if flush {
+        // Checkpoints hold chunk-sized backdrops of unpadded chunks: none while chunks are padded.
+        let checkpoint = if flush && apron == 0 {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
             self.prefix.prepare(doc, &resumable)
@@ -206,18 +225,18 @@ impl Compositor {
             let cell = (part.x0.div_euclid(page as i32), part.y0.div_euclid(page as i32));
             let cr = cell_rect(cell, page);
             for (i, f) in plan.fx.iter().enumerate() {
-                let pf = cr.intersect(&f.region);
+                let pf = cr.inflate(apron).intersect(&f.region);
                 if !paged.get(i).copied().unwrap_or(false) || pf.is_empty() {
                     continue;
                 }
                 let window = pf.inflate(aprons.get(i).copied().unwrap_or(0)).intersect(&f.region);
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats)?;
             }
-            let chunks = grid_rects(part, self.chunk);
+            let chunks: Vec<Rect> = grid_rects(part, step).into_iter().map(|c| c.inflate(apron)).collect();
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
             let mut batch = flush.then_some(&mut last_submit);
-            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, apron, checkpoint, &mut stats, sink, &mut batch);
             // The device was lost in a submit inside the cell: issue no more work.
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
@@ -251,7 +270,7 @@ impl Compositor {
                     return Err(Unsupported(f.to_string()));
                 }
                 let mut batch = Some(&mut last_submit);
-                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, apron, checkpoint, &mut stats, sink, &mut batch);
                 if let Some(f) = self.fault() {
                     return Err(Unsupported(f.to_string()));
                 }
@@ -288,6 +307,21 @@ impl Compositor {
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
         self.evict_patterns();
         Ok(stats)
+    }
+
+    /// The side of the chunks a refresh cuts its cells into when each is drawn grown by `apron`:
+    /// the grown chunk must fit the chunk textures, and a page grown by it the device.
+    fn chunk_step(&self, apron: i32) -> Result<u32, Unsupported> {
+        if apron <= 0 {
+            return Ok(self.chunk);
+        }
+        let grown = 2 * u32::try_from(apron).unwrap_or(u32::MAX / 4);
+        let step = self.chunk.saturating_sub(grown);
+        let pages = 2 * u32::try_from(super::cells::page_apron(apron)).unwrap_or(u32::MAX / 4);
+        if step < MIN_CHUNK_STEP || self.page.saturating_add(pages) > self.device_max {
+            return Err(Unsupported(format!("Chromatic Aberration reaches {apron} px, too far for {}-px GPU chunks (composited on the CPU)", self.chunk)));
+        }
+        Ok(step)
     }
 
     /// Drop the pattern textures no frame has painted with for [`PATTERN_IDLE_FRAMES`] frames,

@@ -17,12 +17,77 @@ fn retained_storage_is_summed_but_workspace_is_reused() {
 #[test]
 fn tiny_negative_offset_rectangles_pay_for_every_touched_tile() {
     let mut aligned = ImportBudget::default();
-    aligned.surface(Rect::from_xywh(0, 0, 2, 2), 4, 2).unwrap();
+    aligned.surface(Rect::from_xywh(0, 0, 2, 2), 4, 2, Shrink::NONE).unwrap();
     let mut offset = ImportBudget::default();
-    offset.surface(Rect::from_xywh(-1, -1, 2, 2), 4, 2).unwrap();
+    offset.surface(Rect::from_xywh(-1, -1, 2, 2), 4, 2, Shrink::NONE).unwrap();
     assert_eq!(offset.required().unwrap(), aligned.required().unwrap() * 4);
-    offset.surface(Rect::default(), 4, 2).unwrap();
+    offset.surface(Rect::default(), 4, 2, Shrink::NONE).unwrap();
     assert_eq!(offset.required().unwrap(), aligned.required().unwrap() * 4);
+}
+
+/// A canvas of `layers` full-canvas RGBA layers whose PackBits channels take `percent` % of their
+/// decoded size: what the estimate reads (it never decodes), not real pixel data.
+fn colouring_file(layers: usize, percent: u64) -> PsdFile {
+    let mut file = testgen::small(Version::Psd, Compression::Rle);
+    let (w, h) = (2048u32, 1536u32);
+    file.header.width = w;
+    file.header.height = h;
+    let mut record = file.layers()[0].clone();
+    record.rect = Rect::from_xywh(0, 0, w, h);
+    let plane = u64::from(w) * u64::from(h);
+    for ch in &mut record.channels {
+        ch.compression = Some(Compression::Rle);
+        ch.data = vec![0; (plane * percent / 100) as usize];
+        ch.stored = None;
+    }
+    // Only colour and transparency: the user mask has its own small rect.
+    record.channels.retain(|c| c.id >= -1);
+    record.mask = photocraft_psd::layer::MaskData::None;
+    file.layer_info.as_mut().unwrap().layers = vec![record; layers];
+    file
+}
+
+#[test]
+fn compressed_tiles_are_estimated_from_the_files_own_encoding() {
+    // 60 flat layers (PackBits at 2 %): counted at about 3 % plus the layers decoding at once.
+    let file = colouring_file(60, 2);
+    let raw = with_test_compression(false, || crate::psd_budget::estimate(&file)).unwrap();
+    let packed = with_test_compression(true, || crate::psd_budget::estimate(&file)).unwrap();
+    assert_eq!(raw.tile_bytes, raw.raw_tile_bytes, "without compression nothing is credited");
+    assert_eq!(packed.raw_tile_bytes, raw.raw_tile_bytes);
+    assert_eq!(packed.workspace_bytes, raw.workspace_bytes, "decode workspace is never credited");
+    let workers = std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) as u64;
+    let layer = raw.raw_tile_bytes / 60;
+    let expected = (raw.raw_tile_bytes * 3 / 100 + layer * workers.min(60)).min(raw.raw_tile_bytes);
+    assert!(packed.tile_bytes >= expected - expected / 1000, "{} < {expected}", packed.tile_bytes);
+    assert!(packed.tile_bytes <= expected + expected / 50 + (1 << 20), "{} vs {expected}", packed.tile_bytes);
+    assert_eq!(raw.total_bytes - packed.total_bytes, raw.tile_bytes - packed.tile_bytes, "only tile pixels shrink");
+    if workers < 30 {
+        assert!(packed.total_bytes < raw.total_bytes / 2, "{} vs {}", packed.total_bytes, raw.total_bytes);
+    }
+
+    // Pixels that PackBits could barely shrink won't be kept compressed: no credit.
+    let noisy = colouring_file(60, 60);
+    let raw = with_test_compression(false, || crate::psd_budget::estimate(&noisy)).unwrap();
+    let packed = with_test_compression(true, || crate::psd_budget::estimate(&noisy)).unwrap();
+    assert_eq!(packed, raw);
+}
+
+#[test]
+fn shrink_follows_the_channel_encoding() {
+    use photocraft_psd::layer::ChannelData;
+    let ch = |compression, len: usize| ChannelData { id: 0, compression: Some(compression), data: vec![0; len], stored: None };
+    let plane = 1000;
+    // PackBits: 1.5x its size; zlib: 4x; raw: no evidence it shrinks.
+    assert_eq!(Shrink::of([ch(Compression::Rle, 100)].iter(), plane).apply(8000), 1200);
+    assert_eq!(Shrink::of([ch(Compression::Zip, 50)].iter(), plane).apply(8000), 1600);
+    assert_eq!(Shrink::of([ch(Compression::Raw, 10)].iter(), plane).apply(8000), 8000);
+    // Channels are weighed together; past 3/4 the tiles stay uncompressed.
+    assert_eq!(Shrink::of([ch(Compression::Rle, 10), ch(Compression::Raw, 1000)].iter(), plane).apply(8000), 4060);
+    assert_eq!(Shrink::of([ch(Compression::Rle, 600)].iter(), plane).apply(8000), 8000);
+    // Never more than the pixels, even for a channel longer than its plane.
+    assert_eq!(Shrink::of([ch(Compression::Zip, 5000)].iter(), plane).apply(8000), 8000);
+    assert_eq!(Shrink::of(std::iter::empty(), plane).apply(8000), 8000);
 }
 
 fn estimate(file: &PsdFile) -> u64 {

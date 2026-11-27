@@ -103,7 +103,8 @@ impl<'a> UniformAreas<'a> {
     }
 }
 
-/// Whether adjustment `a` maps each pixel on its own (dithered ones vary with the position).
+/// Whether adjustment `a` maps each pixel on its own (dithered ones vary with the position;
+/// Chromatic Aberration reads its neighbours, which may differ outside the area).
 fn per_pixel(a: &Adjustment) -> bool {
-    !matches!(a, Adjustment::GradientMap { dither: true, .. } | Adjustment::ColorLookup { dither: true, .. })
+    !matches!(a, Adjustment::GradientMap { dither: true, .. } | Adjustment::ColorLookup { dither: true, .. } | Adjustment::ChromaticAberration(_))
 }

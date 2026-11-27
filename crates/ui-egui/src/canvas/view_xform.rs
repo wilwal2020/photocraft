@@ -129,6 +129,11 @@ impl ViewXform {
         let center = self.to_screen(size[0] as f32 / 2.0, size[1] as f32 / 2.0);
         Rect::from_center_size(center, vec2(c.abs() * w + s.abs() * h, s.abs() * w + c.abs() * h))
     }
+    /// Document rect `r`'s corners on screen, clockwise from its top-left: a parallelogram in a
+    /// turned view, mirrored in a flipped one.
+    pub fn doc_quad(&self, r: DRect) -> [Pos2; 4] {
+        [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| self.to_screen(x as f32, y as f32))
+    }
     pub fn doc_rect(&self, r: DRect) -> Rect {
         let pts = [
             self.to_screen(r.x0 as f32, r.y0 as f32),

@@ -30,6 +30,7 @@ pub fn for_kind(kind: &str) -> &'static str {
         "grain" => "adj-grain",
         "shading" | "shading2" => "adj-shading",
         "lighting" => "adj-lighting",
+        "chromaticAberration" => "adj-chromatic-aberration",
         "clarityAndDehaze" => "adj-clarity-dehaze",
         "colorAndVibrance" => "adj-color-vibrance",
         "light" => "adj-light",
@@ -56,7 +57,7 @@ pub fn paint(ui: &egui::Ui, cell: Rect, adj: &Adjustment, tint: Color32) {
 mod tests {
     use super::*;
 
-    const KINDS: [&str; 22] = [
+    const KINDS: [&str; 23] = [
         "brightnessContrast",
         "levels",
         "curves",
@@ -79,6 +80,7 @@ mod tests {
         "clarityAndDehaze",
         "colorAndVibrance",
         "light",
+        "chromaticAberration",
     ];
 
     /// Every type has its own embedded glyph: no two share one, none falls back.
@@ -97,7 +99,7 @@ mod tests {
     #[test]
     fn adjustment_layers_map_to_their_kind_icon() {
         let mode = photocraft_color::ColorMode::Rgb;
-        for kind in KINDS.iter().take(17) {
+        for kind in KINDS.iter().take(17).chain(["shading", "lighting", "chromaticAberration"].iter()) {
             let adj = photocraft_engine::adjust_params::default_for(kind, mode).unwrap();
             assert_eq!(for_adjustment(&adj), for_kind(kind), "{kind}");
         }

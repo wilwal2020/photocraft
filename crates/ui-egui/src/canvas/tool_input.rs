@@ -18,6 +18,9 @@ pub enum ToolEvent {
 /// The body of a `Move` for every tool: tracked position, ⇧ constraint, the moving layer, and so
 /// on. It does not feed the live stroke, so the canvas can push a whole frame's recovered samples
 /// and update the live stroke once (see `canvas_view`).
+/// How far back (screen points of path) a zoomed-out stroke's points are averaged over.
+const DEQUANTIZE_POINTS: f32 = 3.0;
+
 fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui::Modifiers) {
     let tool = app.active_tool();
     if tool.is_type() && app.drag.is_none() {
@@ -43,6 +46,12 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         // ⇧: a selection-tool drag of the selection locks to multiples of 45° (#6231). The Move
         // tool's own drags were already locked by `move_mods::filter_event`.
         let [x, y] = crate::move_mods::selection_drag_to(d, [x, y], mods.shift && tool != Tool::Move);
+        // Zoomed out, a stroke's points lose the screen pixel grid's steps (`Drag::dequantize`).
+        let [x, y] = if zoom < 1.0 && d.constrain.is_none() && !d.line && super::strokes_on_press(d.tool) {
+            d.dequantize([x, y], f64::from(DEQUANTIZE_POINTS / zoom.max(1e-3)))
+        } else {
+            [x, y]
+        };
         let moved = d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
         // A held pen repeats its point now and then, so the stroke's time keeps advancing.
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
@@ -873,7 +882,7 @@ fn refuse_group(app: &mut PhotocraftApp, tool: Tool) -> bool {
         && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group);
     if group {
         let message = crate::i18n::fmt(tl!("Could not use the {tool} because the target layer is a group."), &[("tool", tl!(tool.label()))]);
-        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+        crate::brush_refusal::prompt(app, &message);
     }
     group
 }

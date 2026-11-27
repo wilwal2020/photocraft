@@ -52,9 +52,47 @@ pub struct Drag {
     pub selection_at_press: bool,
     /// The document a press on the canvas started the drag on (`retouch_ui::cancel_stale`).
     pub document: Option<DragDocument>,
+    /// The pointer's recent positions as they came (document pixels), for [`Drag::dequantize`].
+    pub raw: Vec<[f64; 2]>,
 }
 
+/// Most recent pointer positions [`Drag::dequantize`] keeps.
+const RAW_KEPT: usize = 32;
+
 impl Drag {
+    /// The pointer position `p` with the steps of the screen's pixel grid taken out: the mean of
+    /// the positions over the last `window` document pixels of the path. Zoomed out, the pointer
+    /// moves in whole screen pixels, several document pixels each, so a slow slanted stroke was
+    /// a staircase a hard brush drew edge for edge (user report: "if you use a brush when zoomed
+    /// out, even like a hard round brush, it will brush down very jagged"); averaging over about
+    /// three screen pixels lays it straight. The release adds the exact last point.
+    pub fn dequantize(&mut self, p: [f64; 2], window: f64) -> [f64; 2] {
+        if self.raw.is_empty() {
+            self.raw.push(self.start);
+        }
+        if self.raw.len() >= RAW_KEPT {
+            self.raw.remove(0);
+        }
+        self.raw.push(p);
+        if !(window.is_finite() && window > 0.0) {
+            return p;
+        }
+        let (mut sum, mut n, mut length) = ([0.0f64; 2], 0.0f64, 0.0f64);
+        let mut next: Option<[f64; 2]> = None;
+        for q in self.raw.iter().rev() {
+            if let Some(a) = next {
+                length += (a[0] - q[0]).hypot(a[1] - q[1]);
+                if length > window {
+                    break;
+                }
+            }
+            sum = [sum[0] + q[0], sum[1] + q[1]];
+            n += 1.0;
+            next = Some(*q);
+        }
+        if n > 0.0 { [sum[0] / n, sum[1] / n] } else { p }
+    }
+
     pub fn new(tool: Tool, start: [f64; 2], points: Vec<[f64; 3]>, modifiers: egui::Modifiers, erase: bool) -> Self {
         Self {
             tool,
@@ -78,6 +116,7 @@ impl Drag {
             pen_owner: None,
             selection_at_press: true,
             document: None,
+            raw: Vec::new(),
         }
     }
 
@@ -486,3 +525,33 @@ impl VectorGestureOwner {
 }
 
 use photocraft_doc::Document;
+
+#[cfg(test)]
+mod dequantize_tests {
+    use super::*;
+
+    /// User report: zoomed out, a hard round brush drew jagged. At 25 % the pointer moves in steps
+    /// of 4 document pixels: a slow line at 1 in 3 arrives as a staircase. Averaged, its points
+    /// lie within a pixel or so of the straight line, where the staircase strays up to 3.
+    #[test]
+    fn a_screen_pixel_staircase_comes_out_straight() {
+        let zoom = 0.25f64;
+        let mut d = Drag::new(Tool::Brush, [0.0, 0.0], Vec::new(), egui::Modifiers::NONE, false);
+        let (mut worst_raw, mut worst) = (0.0f64, 0.0f64);
+        for i in 1..=60 {
+            // The screen pixel the pointer is in, in document pixels.
+            let (sx, sy) = (f64::from(i), (f64::from(i) / 3.0).floor());
+            let raw = [sx / zoom, sy / zoom];
+            let p = d.dequantize(raw, 3.0 / zoom);
+            // Distance from the line y = x / 3 (document pixels).
+            let off = |q: [f64; 2]| (q[1] - q[0] / 3.0).abs() / (1.0f64 + 1.0 / 9.0).sqrt();
+            if i > 6 {
+                worst_raw = worst_raw.max(off(raw));
+                worst = worst.max(off(p));
+            }
+        }
+        assert!(worst_raw > 2.5, "the staircase: {worst_raw}");
+        // The average trails the pointer by a pixel and a half along the line; across it, close.
+        assert!(worst < 1.6, "averaged: {worst} px from the line");
+    }
+}

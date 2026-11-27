@@ -803,6 +803,16 @@ fn lighting_px(c: vec3<f32>, amount: f32) -> vec3<f32> {
     return vec3(1.0) - (vec3(1.0) - lit) * (vec3(1.0) - gk * op.color.rgb);
 }
 
+// compose::adjust::lighting::lifted: lightness `l` lifted toward white by `t` (lighter colours
+// take it as if applied √(0.5 / (1 − L)) times over).
+fn lighting_lifted(l: f32, t0: f32) -> f32 {
+    let room = 1.0 - l;
+    if (!(room > 0.0) || !(t0 > 0.0)) { return l; }
+    if (t0 >= 1.0) { return 1.0; }
+    let k = sqrt(max(0.5 / room, 1.0));
+    return l + room * (1.0 - pow(1.0 - t0, k));
+}
+
 // compose::adjust::lighting::Prepared::light_lin_weighted: linear `lin` (clamped) on the path at
 // amount `a` (stepped), document-encoded, with how much of the curves the colour takes in w.
 fn lighting_path(lin: vec3<f32>, a: f32) -> vec4<f32> {
@@ -819,7 +829,7 @@ fn lighting_path(lin: vec3<f32>, a: f32) -> vec4<f32> {
     let c0 = 0.05 * op.p1.x;
     var w = 1.0;
     if (c0 > 0.0) { w = shading_ss(0.3 * c0, 1.3 * c0, chroma); }
-    let l2 = l + max(1.0 - l, 0.0) * op.p0.x * ae;
+    let l2 = lighting_lifted(l, op.p0.x * ae);
     let away0 = op.p0.w + 180.0;
     let away = away0 - floor(away0 / 360.0) * 360.0;
     let dd0 = hue - away + 180.0;
@@ -1337,16 +1347,138 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     if (base.a <= 0.0) { return base; }
     let s = textureLoad(tex_b, p, 0);
     if (op.mode == M_DISSOLVE) {
-        return select(base, vec4(s.rgb, base.a), dissolve_noise(doc_px(p)) < s.a * op.opacity);
+        return select(base, vec4(s.rgb, base.a), dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
     }
-    let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
+    // Fill inside the blend of the special eight, Opacity as coverage (composite_fill).
+    let r = composite_fill(op.mode, vec4(base.rgb, 1.0), s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
     return vec4(r.rgb, base.a);
 }
 
 // Adjustment applied to A (transparent pixels untouched).
+// ---- Chromatic Aberration (compose::adjust::chromatic) ------------------------------------
+//
+// It reads neighbouring pixels: the executor draws every chunk grown by the layers' reach, so
+// the samples it needs lie inside the chunk. Samples are clamped to the canvas and the chunk.
+
+const CA_BLUR_KIND: i32 = 21;
+const CA_KIND: i32 = 22;
+
+// The canvas (p2: x0, y0, x1, y1) within this chunk: the pixels samples are clamped to.
+fn ca_lo() -> vec2<i32> { return max(vec2<i32>(op.p2.xy), chunk.origin); }
+fn ca_hi() -> vec2<i32> { return min(vec2<i32>(op.p2.zw), chunk.origin + chunk.size) - vec2<i32>(1, 1); }
+
+// One direction of the softness blur (p0: sigma, radius, 0 across / 1 down, 1 when A is the
+// straight backdrop). Out: premultiplied red, premultiplied blue, alpha (compose `Planes`).
+fn ca_blur(p: vec2<i32>) -> vec4<f32> {
+    let sigma = op.p0.x;
+    let radius = i32(op.p0.y);
+    let dir = select(vec2<i32>(1, 0), vec2<i32>(0, 1), op.p0.z > 0.5);
+    let first = op.p0.w > 0.5;
+    let lo = ca_lo();
+    let hi = ca_hi();
+    let d = doc_px(p);
+    var total = 0.0;
+    for (var t = -radius; t <= radius; t++) {
+        total += exp(-f32(t * t) / (2.0 * sigma * sigma));
+    }
+    var acc = vec3<f32>(0.0);
+    for (var t = -radius; t <= radius; t++) {
+        let k = exp(-f32(t * t) / (2.0 * sigma * sigma)) / total;
+        let q = clamp(d + dir * t, lo, hi) - chunk.origin;
+        let s = textureLoad(tex_a, q, 0);
+        if (first) {
+            acc += k * vec3(s.r * s.a, s.b * s.a, s.a);
+        } else {
+            acc += k * s.rgb;
+        }
+    }
+    return vec4(acc, 0.0);
+}
+
+fn ca_smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    if (e1 <= e0) { return select(0.0, 1.0, x >= e1); }
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Channel `c` (0 red, 1 blue) at document position `s`, bilinear and premultiplied, from the
+// backdrop (tex_a, straight) or the blurred planes (tex_b). x: the value, y: 1 when any tap had alpha.
+fn ca_sample(s: vec2<f32>, c: i32, blurred: bool) -> vec2<f32> {
+    let lo = vec2<f32>(ca_lo());
+    let hi = vec2<f32>(ca_hi());
+    let q = clamp(s, lo, hi);
+    let q0 = floor(q);
+    let t = q - q0;
+    let q1 = min(q0 + vec2(1.0, 1.0), hi);
+    var num = 0.0;
+    var den = 0.0;
+    for (var i = 0; i < 4; i++) {
+        let x = select(q0.x, q1.x, (i & 1) == 1);
+        let y = select(q0.y, q1.y, i >= 2);
+        let k = select(1.0 - t.x, t.x, (i & 1) == 1) * select(1.0 - t.y, t.y, i >= 2);
+        if (k <= 0.0) { continue; }
+        let l = vec2<i32>(i32(x), i32(y)) - chunk.origin;
+        if (blurred) {
+            let v = textureLoad(tex_b, l, 0);
+            num += k * select(v.r, v.g, c == 1);
+            den += k * v.b;
+        } else {
+            let v = textureLoad(tex_a, l, 0);
+            num += k * select(v.r, v.b, c == 1) * v.a;
+            den += k * v.a;
+        }
+    }
+    if (den > 1e-6) { return vec2(num / den, 1.0); }
+    return vec2(0.0, 0.0);
+}
+
+// p0: centre x, y, centre-to-corner distance, falloff; p1: red shift, blue shift, offset x, y;
+// p2: canvas; p3.x: 1 with softness (blurred planes in tex_b).
+fn ca_px(p: vec2<i32>) -> vec4<f32> {
+    let c = textureLoad(tex_a, p, 0);
+    let d = doc_px(p);
+    if (c.a <= 0.0 || d.x < i32(op.p2.x) || d.y < i32(op.p2.y) || d.x >= i32(op.p2.z) || d.y >= i32(op.p2.w)) { return c; }
+    let fx = f32(d.x) - op.p0.x;
+    let fy = f32(d.y) - op.p0.y;
+    let dist = sqrt(fx * fx + fy * fy);
+    let rho = dist / op.p0.z;
+    let f = op.p0.w;
+    var m = 1.0;
+    if (f > 0.0) { m = ca_smoothstep(f * 0.5, f, rho); }
+    if (m <= 0.0) { return c; }
+    var u = vec2(0.0, 0.0);
+    if (dist > 0.0) { u = vec2(fx, fy) / dist; }
+    let soft = op.p3.x > 0.5;
+    var out = c;
+    for (var ch = 0; ch < 2; ch++) {
+        let radial = select(op.p1.x, op.p1.y, ch == 1);
+        let sign = select(1.0, -1.0, ch == 1);
+        let r = radial * rho * m;
+        let dv = u * r + sign * op.p1.zw * m;
+        let s = vec2<f32>(d) - dv;
+        let sharp = ca_sample(s, ch, false);
+        var v = sharp;
+        if (soft) {
+            let k = min(sqrt(dv.x * dv.x + dv.y * dv.y), 1.0);
+            let blur = ca_sample(s, ch, true);
+            if (sharp.y > 0.5 && blur.y > 0.5) {
+                v = vec2(sharp.x + (blur.x - sharp.x) * k, 1.0);
+            } else if (blur.y > 0.5) {
+                v = blur;
+            }
+        }
+        if (v.y > 0.5) {
+            if (ch == 0) { out.r = v.x; } else { out.b = v.x; }
+        }
+    }
+    return out;
+}
+
 @fragment
 fn fs_adjust(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
+    if (op.kind == CA_BLUR_KIND) { return ca_blur(p); }
+    if (op.kind == CA_KIND) { return ca_px(p); }
     let c = textureLoad(tex_a, p, 0);
     if (c.a <= 0.0) { return c; }
     adj_px = doc_px(p);

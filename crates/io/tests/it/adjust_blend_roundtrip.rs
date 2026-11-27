@@ -161,6 +161,19 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             }),
             true,
         ),
+        // PhotoCraft's Chromatic Aberration (reads neighbouring pixels).
+        (
+            Adjustment::ChromaticAberration(photocraft_doc::adjust::ChromaticAberration {
+                red_shift: 4.5,
+                blue_shift: -2.0,
+                offset_x: 1.25,
+                offset_y: -0.5,
+                center: [0.4, 0.6],
+                falloff: 0.3,
+                softness: 1.5,
+            }),
+            true,
+        ),
     ];
     // Compile-time guard: a new Adjustment kind must be added to the list above.
     for (a, _) in &all {
@@ -184,6 +197,7 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             | Adjustment::Grain { .. }
             | Adjustment::Shading(_)
             | Adjustment::Lighting(_)
+            | Adjustment::ChromaticAberration(_)
             | Adjustment::Unsupported { .. } => {}
         }
     }

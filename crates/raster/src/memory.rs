@@ -108,11 +108,18 @@ pub fn measure() -> Snapshot {
 pub fn refresh() -> Budgets {
     let policy = *POLICY.lock().unwrap_or_else(PoisonError::into_inner);
     let sample = measure();
-    let b = budgets(policy, sample, crate::spill::stats().resident_bytes as u64);
+    // Compressed tiles are tile memory too: counting them as "other" would charge them twice.
+    let st = crate::spill::stats();
+    let b = budgets(policy, sample, st.resident_bytes.saturating_add(st.packed_bytes) as u64);
     *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) = (sample, b);
     // The test override remains fixed even when process pressure changes.
     let tiles = std::env::var("PHOTOCRAFT_TILE_BUDGET_MB").ok().and_then(|s| s.parse::<u64>().ok()).map_or(b.tile_bytes, |mb| mb.saturating_mul(MIB));
     crate::spill::set_budget(usize::try_from(tiles).unwrap_or(usize::MAX));
+    crate::spill::update_compression_budget(usize::try_from(tiles).unwrap_or(usize::MAX));
+    // Freed buffers kept for reuse are working memory too: on a machine short of RAM, 2 GiB of
+    // them would push tiles into compression (or the scratch disk) for nothing. Unchanged when
+    // memory is plentiful (the transient allowance reaches its 2 GiB cap at 16 GiB of room).
+    crate::scratch::set_budget(usize::try_from(b.transient_bytes).unwrap_or(usize::MAX).min(crate::scratch::DEFAULT_BUDGET));
     b
 }
 

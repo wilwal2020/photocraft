@@ -262,6 +262,21 @@ pub struct PathWalker {
     grid: Option<f64>,
     /// The grid cell of the last pixel-grid step, so the next segment joins it (#8040).
     cell: Option<(f64, f64)>,
+    /// How far the stroke must get from its start before its initial direction is taken
+    /// ([`PathWalker::settle_initial`]); `None` once taken, or when it is taken at once.
+    settle: Option<f64>,
+    /// The points held back meanwhile, each with its step length.
+    held: Vec<(StrokePoint, f64)>,
+}
+
+/// Most points held back while the initial direction settles: past this many it is taken from
+/// what there is.
+const MAX_HELD: usize = 4096;
+
+/// How far a stroke goes before a tip turned by Initial Direction takes its angle, in pixels, for
+/// a brush `size` px across: half the size, from 4 to 24 px.
+pub fn initial_direction_reach(size: f32) -> f64 {
+    if size.is_finite() { (f64::from(size) * 0.5).clamp(4.0, 24.0) } else { 4.0 }
 }
 
 impl PathWalker {
@@ -280,7 +295,19 @@ impl PathWalker {
             speed_acc: 0.0,
             grid: None,
             cell: None,
+            settle: None,
+            held: Vec::new(),
         }
+    }
+
+    /// Take the initial direction from the start of the stroke to where it first gets `distance`
+    /// px from it, and lay no dab before then (user report: "even just a very slight movement
+    /// will change the direction"). The first pointer movement alone set it before: a pen's
+    /// first samples wobble a pixel or less in any direction, so a tip turned by Initial
+    /// Direction pointed wherever the pen happened to twitch as it touched down.
+    pub fn settle_initial(mut self, distance: f64) -> Self {
+        self.settle = (distance.is_finite() && distance > 0.0).then_some(distance);
+        self
     }
 
     /// Step pixel by pixel instead of by distance: one step per pixel along the segment's major
@@ -373,6 +400,36 @@ impl PathWalker {
     }
 
     pub fn push(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput)) {
+        let Some(reach) = self.settle else {
+            self.walk_point(p, step_len, out);
+            return;
+        };
+        self.held.push((p, step_len(&p)));
+        let start = self.held.first().map_or(p, |h| h.0);
+        if (p.x - start.x).hypot(p.y - start.y) < reach && self.held.len() < MAX_HELD {
+            return;
+        }
+        self.release_held(out);
+    }
+
+    /// The stroke has gone far enough (or ended): its initial direction is the way from its start
+    /// to its last held point, and the held points are walked.
+    fn release_held(&mut self, out: &mut impl FnMut(StepInput)) {
+        self.settle = None;
+        let held = std::mem::take(&mut self.held);
+        if let (Some((a, _)), Some((b, _))) = (held.first(), held.last()) {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let d = dx.hypot(dy);
+            if d > 1e-9 && d.is_finite() {
+                self.initial_dir = Some((-dy).atan2(dx) as f32);
+            }
+        }
+        for (q, len) in held {
+            self.walk_point(q, &|_| len, out);
+        }
+    }
+
+    fn walk_point(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput)) {
         let Some(a) = self.last else {
             self.last = Some(p);
             self.pending_first = Some(p);
@@ -463,6 +520,9 @@ impl PathWalker {
     }
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput)) {
+        if self.settle.is_some() {
+            self.release_held(out);
+        }
         if let Some(f) = self.pending_first.take() {
             self.emit_first(f, out);
         }
@@ -864,6 +924,10 @@ impl DabGenerator {
         if brush.aliased && brush.size * brush.tip.short_side(brush.roundness) * brush.spacing.max(0.01) <= 1.0 {
             walker = walker.pixel_grid(f64::from(crate::render::grid_center(0.0, 0.0, brush.size).0));
         }
+        // A tip turned by Initial Direction waits until the stroke has gone some way to take it.
+        if brush.shape_dynamics.enabled && brush.shape_dynamics.angle.control == crate::brush::Control::InitialDirection {
+            walker = walker.settle_initial(initial_direction_reach(brush.size));
+        }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
             walker,
@@ -1126,5 +1190,55 @@ mod streaming_tests {
         let brush = BrushSettings { size: 1.0, aliased: true, spacing: 1.0, ..BrushSettings::default() };
         let (dabs, _) = streamed(&brush, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(2.0e6, 3.0, 1.0)], 1000);
         assert_eq!(dabs.len(), 2_000_001);
+    }
+}
+
+#[cfg(test)]
+mod initial_direction_tests {
+    use super::*;
+    use crate::brush::ShapeDynamics;
+
+    fn angles(brush: &BrushSettings, pts: &[StrokePoint]) -> Vec<f32> {
+        let mut g = DabGenerator::new(brush, 1.0);
+        let (mut dabs, mut dual) = (Vec::new(), Vec::new());
+        for p in pts {
+            g.push(&[*p], &mut dabs, &mut dual);
+        }
+        g.finish(&mut dabs, &mut dual);
+        dabs.iter().map(|d| d.angle).collect()
+    }
+
+    fn brush() -> BrushSettings {
+        BrushSettings {
+            size: 30.0,
+            smoothing: Smoothing { enabled: false, ..Default::default() },
+            shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::InitialDirection), ..Default::default() },
+            ..BrushSettings::default()
+        }
+    }
+
+    /// User report: "initial direction seems too sensitive, where even just a very slight
+    /// movement will change the direction". A pen that twitches a pixel down as it lands, then
+    /// draws to the right: every dab turns the way the stroke went, not the way of the twitch.
+    #[test]
+    fn a_twitch_as_the_pen_lands_does_not_set_the_initial_direction() {
+        let mut pts = vec![StrokePoint::new(50.0, 50.0, 1.0), StrokePoint::new(50.2, 51.0, 1.0), StrokePoint::new(50.0, 51.4, 1.0)];
+        pts.extend((1..=60).map(|i| StrokePoint::new(50.0 + f64::from(i) * 2.0, 51.4, 1.0)));
+        let a = angles(&brush(), &pts);
+        assert!(a.len() > 10, "{} dabs", a.len());
+        for (i, angle) in a.iter().enumerate() {
+            let deg = angle.to_degrees().rem_euclid(360.0);
+            let off = deg.min(360.0 - deg);
+            assert!(off < 10.0, "dab {i} turned {deg}°, not along the stroke (0°)");
+        }
+    }
+
+    /// A click, and a stroke shorter than the reach, still lay their dabs.
+    #[test]
+    fn short_strokes_still_paint() {
+        assert_eq!(angles(&brush(), &[StrokePoint::new(10.0, 10.0, 1.0)]).len(), 1, "a click");
+        let short = angles(&brush(), &[StrokePoint::new(10.0, 10.0, 1.0), StrokePoint::new(12.0, 10.0, 1.0), StrokePoint::new(14.0, 10.0, 1.0)]);
+        assert!(short.len() >= 2, "{} dabs", short.len());
+        assert!(short.iter().all(|a| a.to_degrees().abs() < 1.0), "{short:?}");
     }
 }

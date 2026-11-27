@@ -310,6 +310,17 @@ impl eframe::App for PhotocraftApp {
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
+        // A pen pressed on a panel drags nothing until it has gone a little way (the canvas, the
+        // documents' central area, takes every move); lists glide on after a drag only if asked.
+        let tools = &self.session.prefs().tools;
+        let (distance, glide) = (tools.pen_drag_distance.min(photocraft_engine::prefs::MAX_PEN_DRAG_DISTANCE) as f32, tools.glide_after_drag);
+        let canvas = self.last_canvas_rect;
+        let over_canvas = |p: egui::Pos2| canvas.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background);
+        self.stylus.pen_slop.filter(&mut raw_input.events, pen_down, distance, over_canvas);
+        let decay = if glide { egui::style::KineticScrollStyle::default().decay_time } else { 0.0 };
+        if ctx.global_style().spacing.scroll.kinetic.decay_time != decay {
+            ctx.all_styles_mut(|s| s.spacing.scroll.kinetic.decay_time = decay);
+        }
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);
         }

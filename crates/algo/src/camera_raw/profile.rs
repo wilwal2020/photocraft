@@ -3,7 +3,8 @@
 //!
 //! - a **look table**: a hue shift and saturation and value scales over a hue × saturation ×
 //!   value grid of linear ProPhoto colours, interpolated as the DNG specification describes for
-//!   its `ProfileLookTable` (the value sRGB-encoded for the lookup when the table says so);
+//!   its `ProfileLookTable` (the value sRGB-encoded for the lookup when the table says so), its
+//!   value axis reaching one stop over white (see [`LOOK_VALUE_RANGE`]);
 //! - an **RGB table**: a 3-D colour lookup table in its own primaries and transfer curve.
 //!
 //! The tables come in Camera Raw's text encoding: a `crs:Table_…` value holds the table's binary
@@ -270,6 +271,14 @@ fn from_hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
+/// The linear value at the top of a look table's value axis: one stop over white. Adobe's creative
+/// profiles share a look table whose value scale falls to about 0.78 at the top of the axis; read
+/// as spanning 0..1, it dims and dulls every bright colour ("Modern 10" turned an orange 249 into
+/// 204), where Camera Raw keeps them. Measured against Photoshop's results for two of the user's
+/// presets (2026-11-14): average error per pixel 16.3 → 7.8 levels on a bright image with
+/// "Modern 10", unchanged (2.8) on a dark one with "Artistic 04", and best near this range.
+const LOOK_VALUE_RANGE: f32 = 2.0;
+
 /// A profile's look table (see the module notes).
 struct LookTable {
     hues: usize,
@@ -325,20 +334,21 @@ impl LookTable {
         if self.vals < 2 { plane(0) } else { mix(plane(v0), plane(v1), vf) }
     }
 
-    /// The linear ProPhoto colour `c` through the table. Brighter than 1 keeps its ratio to the
-    /// table's result at 1.
+    /// The linear ProPhoto colour `c` through the table. The value axis spans [`LOOK_VALUE_RANGE`];
+    /// brighter keeps its ratio to the table's result at the top.
     fn map(&self, c: [f32; 3]) -> [f32; 3] {
         let c = c.map(|v| v.max(0.0));
         let (h, s, v) = hsv(c);
         if v.is_nan() || v <= 0.0 {
             return c;
         }
-        let over = v.max(1.0);
-        let v = v / over;
-        let ve = if self.srgb { linear_to_srgb(v) } else { v };
-        let [shift, sat, val] = self.at(h, s, ve);
-        let ve = (ve * val).clamp(0.0, 1.0);
-        let v = if self.srgb { srgb_to_linear(ve) } else { ve };
+        let over = (v / LOOK_VALUE_RANGE).max(1.0);
+        // Position on the value axis, 0..1.
+        let x = v / over / LOOK_VALUE_RANGE;
+        let xe = if self.srgb { linear_to_srgb(x) } else { x };
+        let [shift, sat, val] = self.at(h, s, xe);
+        let xe = (xe * val).clamp(0.0, 1.0);
+        let v = (if self.srgb { srgb_to_linear(xe) } else { xe }) * LOOK_VALUE_RANGE;
         from_hsv(h + shift / 60.0, (s * sat).min(1.0), v).map(|x| x * over)
     }
 }
@@ -628,6 +638,23 @@ mod tests {
         assert!((run(1.0) - 0.25).abs() < 1e-3, "{}", run(1.0));
         assert!((run(0.5) - 0.375).abs() < 1e-3, "{}", run(0.5));
         assert!((run(0.0) - 0.5).abs() < 1e-4);
+    }
+
+    /// The value axis reaches one stop over white: a table dimming only its top end (1.0 at
+    /// black, 0.5 at the top) dims white by a quarter, not by half as an axis ending at white
+    /// would (Adobe's creative profiles darkened bright colours by ~20 % that way, 2026-11-14).
+    #[test]
+    fn look_table_value_axis_reaches_one_stop_over_white() {
+        let mut samples = Vec::new();
+        for val in [1.0, 0.5] {
+            samples.extend(std::iter::repeat_n([0.0, 1.0, val], 6 * 2));
+        }
+        let t = LookTable { hues: 6, sats: 2, vals: 2, samples, srgb: false };
+        let white = t.map([1.0, 1.0, 1.0]);
+        assert!(white.iter().all(|&c| (c - 0.75).abs() < 1e-4), "{white:?}");
+        // Above the axis, the colour keeps its ratio to the result at the top.
+        let bright = t.map([4.0, 4.0, 4.0]);
+        assert!(bright.iter().all(|&c| (c - 2.0).abs() < 1e-3), "{bright:?}");
     }
 
     #[test]

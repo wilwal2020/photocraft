@@ -55,7 +55,7 @@ use budget::detect_video_memory;
 use budget::nvidia_video_memory;
 pub use budget::{
     COMPOSITOR_BUILDING, DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes,
-    memory_budget, physical_memory, video_memory, vram_share,
+    layer_share, memory_budget, memory_budget_beside, physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
@@ -367,6 +367,27 @@ impl GpuCanvas {
             .map(|t| (0..t.levels.len() as u32).map(|l| ((t.rect[2] >> l).max(1) as u64) * ((t.rect[3] >> l).max(1) as u64) * bpp).sum::<u64>())
             .sum();
         Some((d.format, bytes))
+    }
+
+    /// The GPU bytes the display textures of every document hold now, with `doc`'s counted at
+    /// what it will take ([`GpuCanvas::canvas_bytes`]) when it has none yet: what the layer pages
+    /// leave beside them ([`layer_share`]).
+    pub fn display_bytes(&self, doc: &photocraft_doc::Document) -> u64 {
+        let r = self.rs.renderer.read();
+        let Some(res) = r.callback_resources.get::<Resources>() else { return self.canvas_bytes(doc) };
+        let held: u64 = res
+            .docs
+            .values()
+            .map(|d| {
+                let bpp = texel_bytes(d.format);
+                d.tiles
+                    .iter()
+                    .map(|t| (0..t.levels.len() as u32).map(|l| ((t.rect[2] >> l).max(1) as u64) * ((t.rect[3] >> l).max(1) as u64) * bpp).sum::<u64>())
+                    .sum::<u64>()
+            })
+            .sum();
+        let own = if res.docs.contains_key(&doc.id.0) { 0 } else { self.canvas_bytes(doc) };
+        held.saturating_add(own)
     }
 
     /// Set the GPU memory the wgpu compositor may hold for layer pages and caches (see

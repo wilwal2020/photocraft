@@ -64,9 +64,12 @@ pub(super) fn preset_row(
     let shown_id = mem.with("preset-shown");
     let naming_id = mem.with("preset-naming");
     // The preset last picked or saved, while the settings are still its own.
-    let shown: Option<(String, bool, Value)> = ui.data(|d| d.get_temp(shown_id));
+    // egui's memory is keyed by type: these are stored and read as the bare tuple and string (an
+    // `Option` around them on insert was a different type, so every read came back empty: the
+    // name field closed the frame after Save… opened it, and no preset was ever saved).
+    let shown: Option<(String, bool, Value)> = ui.data(|d| d.get_temp::<(String, bool, Value)>(shown_id));
     let current = shown.filter(|(_, _, p)| same(p, &params_only(v)));
-    let mut naming: Option<String> = ui.data(|d| d.get_temp(naming_id));
+    let mut naming: Option<String> = ui.data(|d| d.get_temp::<String>(naming_id));
     let mut pick: Option<(String, bool, Value)> = None;
     ui.horizontal(|ui| {
         label(ui, tl!("Preset:"));
@@ -106,12 +109,12 @@ pub(super) fn preset_row(
             && widgets::compact_button(ui, tl!("Delete"), 22.0).on_hover_text(tl!("Delete this saved preset")).clicked()
         {
             ui.data_mut(|d| d.insert_temp(pending_id(), Some(Pending::Delete { kind: kind.to_string(), name: name.clone() })));
-            ui.data_mut(|d| d.remove::<Option<(String, bool, Value)>>(shown_id));
+            ui.data_mut(|d| d.remove::<(String, bool, Value)>(shown_id));
         }
     });
     if let Some((name, user, params)) = pick {
         *v = params;
-        ui.data_mut(|d| d.insert_temp(shown_id, Some((name, user, params_only(v)))));
+        ui.data_mut(|d| d.insert_temp(shown_id, (name, user, params_only(v))));
         e.add(Edit::discrete(true));
     }
     if let Some(name) = naming.as_mut() {
@@ -135,7 +138,7 @@ pub(super) fn preset_row(
             let params = params_only(v);
             ui.data_mut(|d| {
                 d.insert_temp(pending_id(), Some(Pending::Save { kind: kind.to_string(), name: name.clone(), params: params.clone() }));
-                d.insert_temp(shown_id, Some((name, true, params)));
+                d.insert_temp(shown_id, (name, true, params));
             });
             naming = None;
         } else if cancel {
@@ -144,9 +147,9 @@ pub(super) fn preset_row(
     }
     ui.data_mut(|d| match naming {
         Some(n) => {
-            d.insert_temp(naming_id, Some(n));
+            d.insert_temp(naming_id, n);
         }
-        None => d.remove::<Option<String>>(naming_id),
+        None => d.remove::<String>(naming_id),
     });
     e
 }
@@ -164,7 +167,7 @@ pub fn apply_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// The saved presets of `kind` (the editors' [`super::EditorCx::presets`]).
 pub fn saved(app: &PhotocraftApp, kind: &str) -> Vec<(String, Value)> {
-    if matches!(kind, "shading" | "shading2" | "lighting") { crate::dialog_memory::adjust_presets(app, kind) } else { Vec::new() }
+    if matches!(kind, "shading" | "shading2" | "lighting" | "chromaticAberration") { crate::dialog_memory::adjust_presets(app, kind) } else { Vec::new() }
 }
 
 #[cfg(test)]

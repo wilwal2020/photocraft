@@ -15,6 +15,9 @@ pub(super) struct RowSel {
     pub(super) multi: bool,
     /// A group holding the layer is hidden: its own eye shows greyed out (Photoshop).
     pub(super) parent_hidden: bool,
+    /// The layer is clipped to a hidden base, so it doesn't show either: its eye shows greyed out
+    /// too, but still hides and shows the layer itself.
+    pub(super) base_hidden: bool,
     /// The colour of the nearest group holding the layer that has one: a layer or group with no
     /// colour of its own shows it, as in Photoshop (user report: a coloured Photoshop group's
     /// groups came in uncoloured).
@@ -24,6 +27,29 @@ pub(super) struct RowSel {
 /// The colour label a row shows: its own, else its nearest coloured group's.
 pub(super) fn shown_label(own: photocraft_doc::LabelColor, inherited: photocraft_doc::LabelColor) -> photocraft_doc::LabelColor {
     if own == photocraft_doc::LabelColor::None { inherited } else { own }
+}
+
+/// The clipped layers whose base is hidden (a hidden base hides the layers clipped to it). Every
+/// sibling list is visited once from an explicit stack, bottom to top.
+pub(crate) fn clipped_to_hidden(layers: &[Layer]) -> std::collections::HashSet<photocraft_doc::LayerId> {
+    let mut out = std::collections::HashSet::new();
+    let mut stack = vec![layers];
+    while let Some(list) = stack.pop() {
+        let mut base_hidden = false;
+        for l in list {
+            if l.clipped {
+                if base_hidden {
+                    out.insert(l.id);
+                }
+            } else {
+                base_hidden = !l.visible;
+            }
+            if let Some(children) = l.children() {
+                stack.push(children);
+            }
+        }
+    }
+    out
 }
 
 /// For each Layers panel row (`(depth, layer)`, a group listed before its contents), the colour
@@ -538,11 +564,11 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     // It takes drags too (so a drag starting on it never reorders the row): dragging down the eyes
     // gives every row swept over the visibility the first eye toggled to (#8467).
     let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), Sense::click_and_drag());
-    // A hidden layer's eye box is left empty (still clickable); inside a hidden group the eye
-    // is greyed out, as the layer doesn't show either way (Photoshop).
+    // A hidden layer's eye box is left empty (still clickable); inside a hidden group, or clipped
+    // to a hidden base, the eye is greyed out, as the layer doesn't show either way.
     if l.visible {
         let color = t.layer_label_icon(l.label);
-        let color = if row.parent_hidden { color.gamma_multiply(0.35) } else { color };
+        let color = if row.parent_hidden || row.base_hidden { color.gamma_multiply(0.35) } else { color };
         crate::layer_row_ui::paint_eye(ui.painter(), eye_cell.center() - vec2(0.5, 0.0), color);
     }
     eye_sweep(ctx, l, row.parent_hidden, rect, &eye_resp, actions);
@@ -884,4 +910,38 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
     }
     p.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, pro_thumb_border(&t)), StrokeKind::Outside);
     crate::smart_ui::thumb_badge(ui, l, rect);
+}
+
+#[cfg(test)]
+mod clip_eye_tests {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{Layer, LayerContent};
+
+    /// A hidden base greys the eyes of the layers clipped to it, in groups too; a visible one, or
+    /// an unclipped layer above the run, doesn't.
+    #[test]
+    fn layers_clipped_to_a_hidden_base_are_found() {
+        let layer = |name: &str, visible: bool, clipped: bool| {
+            let mut l = Layer::raster(name, PixelFormat::RGBA8);
+            l.visible = visible;
+            l.clipped = clipped;
+            l
+        };
+        let inner = vec![layer("B2", false, false), layer("C3", true, true)];
+        let layers = vec![
+            layer("B", false, false),
+            layer("C1", true, true),
+            layer("C2", false, true),
+            layer("U", true, false),
+            layer("C4", true, true),
+            Layer::group("G", inner),
+        ];
+        let hidden = super::clipped_to_hidden(&layers);
+        let id = |list: &[Layer], i: usize| list[i].id;
+        let LayerContent::Group(g) = &layers[5].content else { panic!("group") };
+        assert!(hidden.contains(&id(&layers, 1)) && hidden.contains(&id(&layers, 2)));
+        assert!(hidden.contains(&id(&g.children, 1)), "inside a group");
+        assert!(!hidden.contains(&id(&layers, 4)), "clipped to a visible base");
+        assert_eq!(hidden.len(), 3);
+    }
 }

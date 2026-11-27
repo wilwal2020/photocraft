@@ -11,17 +11,25 @@ pub const OVER_BUDGET: &str = photocraft_gpu::OVER_BUDGET;
 /// Why a full refresh goes to the CPU compositor while the GPU one is still being built.
 pub const COMPOSITOR_BUILDING: &str = "GPU compositor is building";
 
+/// GPU memory the wgpu compositor may hold for layer pages and effect maps, with the canvas's
+/// display textures assumed to take their whole share of the card ([`vram_share`]); see
+/// [`memory_budget_beside`], which counts what they really take.
+pub fn memory_budget(allowance: u64, pixels: u64, ram: Option<u64>, vram: Option<u64>, fixed: u64) -> u64 {
+    memory_budget_beside(allowance, pixels, ram, vram, fixed, vram.map_or(0, vram_share))
+}
+
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps.
 ///
 /// `fixed` (Preferences › Performance › GPU Memory, bytes) sets it when it isn't 0, within
-/// [`vram_share`] of a discrete GPU's own memory (`vram`, from [`video_memory`]). Otherwise it is
-/// Memory Usage (`allowance`) within a quarter of physical memory (`ram`; 16 GB assumed when
-/// unknown) and the VRAM share. The document's pixels and History (`pixels`) come off Memory Usage
-/// unless the card's own memory is known: a discrete card doesn't hold them, while integrated and
-/// software adapters (and a card whose memory can't be read) share the system's. Never below
-/// [`MIN_GPU_BUDGET`]. Layers beyond it redraw full refreshes on the CPU ([`OVER_BUDGET`]).
-pub fn memory_budget(allowance: u64, pixels: u64, ram: Option<u64>, vram: Option<u64>, fixed: u64) -> u64 {
-    let card = vram.map_or(u64::MAX, vram_share);
+/// [`layer_share`] of a discrete GPU's own memory (`vram`, from [`video_memory`]) beside the
+/// `canvas` bytes the display textures take. Otherwise it is Memory Usage (`allowance`) within a
+/// quarter of physical memory (`ram`; 16 GB assumed when unknown) and that share of the card. The
+/// document's pixels and History (`pixels`) come off Memory Usage unless the card's own memory is
+/// known: a discrete card doesn't hold them, while integrated and software adapters (and a card
+/// whose memory can't be read) share the system's. Never below [`MIN_GPU_BUDGET`]. Layers beyond
+/// it redraw full refreshes on the CPU ([`OVER_BUDGET`]).
+pub fn memory_budget_beside(allowance: u64, pixels: u64, ram: Option<u64>, vram: Option<u64>, fixed: u64, canvas: u64) -> u64 {
+    let card = vram.map_or(u64::MAX, |v| layer_share(v, canvas));
     if fixed > 0 {
         return fixed.min(card).max(MIN_GPU_BUDGET);
     }
@@ -36,6 +44,18 @@ pub fn memory_budget(allowance: u64, pixels: u64, ram: Option<u64>, vram: Option
 /// page (#4536).
 pub fn vram_share(vram: u64) -> u64 {
     vram / 8 * 3
+}
+
+/// What layer pages may take of a discrete GPU's memory (`vram`) beside display textures of
+/// `canvas` bytes: three quarters of the card, less what the canvas takes. The canvas's own share
+/// ([`vram_share`]) is only its ceiling, and an ordinary document's display textures take a
+/// small part of it; reserving all of it left an 8 GB card's layers 2.2 GB, and a 4155 × 3000
+/// page of many layers redrew on the CPU with three gigabytes of the card unused (user report:
+/// "GPU memory full" whatever Memory Usage said). The quarter left stays free for the window,
+/// egui and other programs, and the graphics-memory watch (`gpu_memory`) still gives way when
+/// other programs fill the card.
+pub fn layer_share(vram: u64, canvas: u64) -> u64 {
+    (vram / 4 * 3).saturating_sub(canvas)
 }
 
 /// Why a document whose display textures don't fit [`canvas_budget`] is drawn on the CPU canvas.

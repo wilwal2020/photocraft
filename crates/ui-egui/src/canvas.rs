@@ -562,7 +562,7 @@ fn paint_canvas(
     if primary {
         crate::levels_clipping::paint(app, ctx, painter, &xf, idx);
     }
-    crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
+    crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, &xf);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
         let t = crate::theme::Tokens::get(ctx);
@@ -742,6 +742,13 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
             }
         }
     }
+}
+
+/// Whether screen point `p` is on the active document's image, not merely inside its upright
+/// screen bounds (a rotated view leaves corners of those off the image).
+fn on_image(app: &PhotocraftApp, input: &DialogCanvasInput<'_>, p: Pos2) -> bool {
+    let [x, y] = input.xf.to_doc(p);
+    input.img_rect.contains(p) && app.session.active().is_some_and(|st| x >= 0.0 && y >= 0.0 && x < f64::from(st.doc.size.width) && y < f64::from(st.doc.size.height))
 }
 
 struct DialogCanvasInput<'a> {
@@ -1032,11 +1039,12 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         crate::adjust_dialog::add_point_at(app, input.ctx, d[0], d[1], mods.shift);
     } else if input.primary
         && !input.middle
-        && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect).filter(|p| input.img_rect.contains(*p))
+        && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect).filter(|p| on_image(app, &input, *p))
     {
-        // Color Range samples colours with its eyedropper on the image itself.
+        // Color Range samples colours with its eyedropper on the image itself (on it, not in the
+        // corners of its upright bounds a rotated view leaves around it).
         let press = crate::dialogs::free_press(input.ctx, input.rect)
-            .filter(|p| input.img_rect.contains(*p) && input.ctx.input(|i| i.pointer.primary_pressed() || i.pointer.delta() != egui::Vec2::ZERO))
+            .filter(|p| on_image(app, &input, *p) && input.ctx.input(|i| i.pointer.primary_pressed() || i.pointer.delta() != egui::Vec2::ZERO))
             .map(|q| input.xf.to_doc(q));
         crate::color_range_ui::canvas_eyedropper(app, input.ctx, p, press);
     }

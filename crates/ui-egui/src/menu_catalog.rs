@@ -325,6 +325,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer", "New Adjustment Layer"], "Shading…", None, "layer.newAdjustmentLayer.shading"),
     (&["Layer", "New Adjustment Layer"], "Shading 2…", None, "layer.newAdjustmentLayer.shading2"),
     (&["Layer", "New Adjustment Layer"], "Lighting…", None, "layer.newAdjustmentLayer.lighting"),
+    (&["Layer", "New Adjustment Layer"], "Chromatic Aberration…", None, "layer.newAdjustmentLayer.chromaticAberration"),
     (&["Layer"], "Layer Content Options…", None, "layer.layerContentOptions"),
     (&["Layer"], "---", None, "---"),
     (&["Layer", "Layer Mask"], "Reveal All", None, "layer.layerMask.revealAll"),

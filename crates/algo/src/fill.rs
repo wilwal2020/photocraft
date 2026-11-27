@@ -13,6 +13,10 @@
 //! jagged edge or a speck, and joins its neighbour instead; those thresholds don't depend on the
 //! gap, so a higher Close Gap only ever closes more, never fills more than a lower one.
 //!
+//! The dots of a screentone are no lines to this ([`tone_dots`]): a field of them between two
+//! parts of an area is paper with specks in it, not a wall full of gaps, and a fill runs through
+//! it. A single row of dots (a dotted line) still closes as a broken line does.
+//!
 //! Ignore Thin Lines takes ink up to a width for free paper (an opening of the ink), so a fill
 //! runs on under hatching, speed lines and tone dots and stops at the bolder lines.
 
@@ -180,7 +184,9 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     let tucks = if block.is_some() { TUCK as usize } else { 0 };
     // The pockets the fill shuts in ([`fill_pockets`]) and what lies round them are inside the box too.
     let pockets = POCKET / 2 + 2 * pocket_reach(gap, finite(o.thin_lines, MAX_THIN)) + 2;
-    let pad = (gap / 2.0).ceil() as usize + amount.ceil() as usize + tucks + 4 + pockets;
+    // So are the tone dots beside the ones at the spot's rim ([`tone_dots`]), when gaps close.
+    let dots = if gap >= 1.0 { dot_reach(gap).ceil() as usize + DOT_SIDE } else { 0 };
+    let pad = (gap / 2.0).ceil() as usize + amount.ceil() as usize + tucks + 4 + pockets.max(dots);
     let (cx0, cy0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
     let (cx1, cy1) = ((x1 + pad + 1).min(w), (y1 + pad + 1).min(h));
     let (cw, ch) = (cx1 - cx0, cy1 - cy0);
@@ -215,7 +221,9 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
         // the whole page, and the narrow-spot climb can't step across a thin diagonal line into
         // the next spot.
         let soft = thin.as_deref().map(|t| (t, thin_rise(o.thin_lines)));
-        seed_fill(&spot, &free, cw, ch, gap, [o.image_border; 4], csi, soft, finite(o.thin_lines, MAX_THIN))?
+        let mut fill = seed_fill(&spot, cw, ch, gap, [o.image_border; 4], csi, soft)?;
+        fill_pockets(&mut fill, &free, &strength, margin, cw, ch, gap, finite(o.thin_lines, MAX_THIN));
+        fill
     };
     scale(&mut fill, &strength, &free, cw, ch, o);
     if let Some(b) = &block {
@@ -224,23 +232,11 @@ pub fn click_region_blocked(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &F
     to_region(&fill, cw, ch, carea, o.anti_alias, Some(&free))
 }
 
-/// The seed's area of `spot` (the pixels a fill may cover around `seed`, `free` all the pixels
-/// within the margin) with gaps up to `gap` closed: [`areas`], then each seam beside the area
-/// straightened into a closure from line to line and the areas found again with those as walls
-/// (a gap then closes along the line it breaks), the seams beside it and the pockets it shuts in
-/// added. `None` when the seed is in no area.
-#[allow(clippy::too_many_arguments)]
-fn seed_fill(
-    spot: &[bool],
-    free: &[bool],
-    w: usize,
-    h: usize,
-    gap: f32,
-    border: [bool; 4],
-    seed: usize,
-    soft: Option<(&[bool], f32)>,
-    thin: f32,
-) -> Option<Vec<bool>> {
+/// The seed's area of `spot` (the pixels a fill may cover around `seed`) with gaps up to `gap`
+/// closed: [`areas`], then each seam beside the area straightened into a closure from line to line
+/// and the areas found again with those as walls (a gap then closes along the line it breaks),
+/// and the seams beside it added. `None` when the seed is in no area.
+fn seed_fill(spot: &[bool], w: usize, h: usize, gap: f32, border: [bool; 4], seed: usize, soft: Option<(&[bool], f32)>) -> Option<Vec<bool>> {
     let (labels, seed_label) = areas(spot, w, h, gap, border, Some(seed), soft);
     let l = seed_label?;
     let fill: Vec<bool> = labels.iter().map(|v| *v == l).collect();
@@ -263,7 +259,6 @@ fn seed_fill(
         }
     };
     cover_seams(&mut fill, &labels, spot, w, h);
-    fill_pockets(&mut fill, free, w, h, gap, thin);
     Some(fill)
 }
 
@@ -713,8 +708,20 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
     // Thin ink a fill may pass is free, but distances are measured to it as to any line: it is a
     // passage of no depth.
     let is_thin = |i: usize| thin.is_some_and(|(m, _)| m.get(i) == Some(&true));
-    let lines: Vec<bool> = free.iter().enumerate().map(|(i, f)| !f || is_thin(i)).collect();
+    let mut lines: Vec<bool> = free.iter().enumerate().map(|(i, f)| !f || is_thin(i)).collect();
+    // A screentone's dots close no gaps: the paper between them is as open as the paper around.
+    // How deep an area is, though, is still measured to all the ink: where dots touch into
+    // chains, the bits of the field those part stay as shallow as the dots make them, and join
+    // their neighbours as they did, instead of standing as areas behind the chains' gaps.
+    let mut to_ink: Option<Vec<f32>> = None;
+    if let Some(dots) = tone_dots(&lines, w, h, gap) {
+        to_ink = Some(edt(&lines, w, h)).filter(|d| d.len() == n);
+        for (l, d) in lines.iter_mut().zip(&dots) {
+            *l &= !d;
+        }
+    }
     let dist = edt(&lines, w, h);
+    let depth: &[f32] = to_ink.as_deref().unwrap_or(&dist);
     if dist.len() != n {
         let labels = components(free, w, h);
         let l = seed.and_then(|s| labels.get(s).copied()).filter(|l| *l != 0);
@@ -742,7 +749,7 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
     let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
     let mut peak = vec![0f32; count];
     let mut size = vec![0usize; count];
-    for (l, d) in labels.iter().zip(&dist) {
+    for (l, d) in labels.iter().zip(depth) {
         if let (Some(p), Some(n)) = (peak.get_mut(*l as usize), size.get_mut(*l as usize)) {
             *p = p.max(*d);
             *n += 1;
@@ -755,7 +762,7 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
     // narrower than the gap starts an area of its own at its deepest pixel instead of being
     // flooded by whichever neighbour reaches it first (through the gap it should stay closed by).
     for i in by_depth(free, &labels, &dist) {
-        let here = dist.get(i).copied().unwrap_or(0.0);
+        let here = depth.get(i).copied().unwrap_or(0.0);
         // The areas the pixel's 4-neighbours belong to (at most four: no allocation per pixel).
         let mut roots = [0u32; 4];
         let mut found = 0;
@@ -828,6 +835,134 @@ fn watershed(free: &[bool], w: usize, h: usize, gap: f32, seed: Option<usize>, t
     }
     let seed_label = top.and_then(|t| labels.get(t).copied()).filter(|l| *l != 0);
     (labels, seed_label)
+}
+
+/// The longest side of an ink speck that may be a tone dot, px.
+const DOT_SIDE: usize = 8;
+
+/// How far apart (centre to centre, less half their sizes) two dots can be and still close the
+/// paper between them at Close Gap `gap`: dots further apart are no neighbours.
+fn dot_reach(gap: f32) -> f32 {
+    gap + 3.0
+}
+
+/// The dots of a screentone among the `ink` (the pixels a fill takes for lines), or `None` when
+/// there are none: specks of ink no longer than [`DOT_SIDE`], not much longer than wide, clear of
+/// the edge, with two more such specks near enough to close the paper between them
+/// ([`dot_reach`]) that lie in different directions. So the dots of a field count, at its rim
+/// too, and those of a single row (a dotted line, a broken line's pieces) don't: their
+/// neighbours lie in line with them.
+fn tone_dots(ink: &[bool], w: usize, h: usize, gap: f32) -> Option<Vec<bool>> {
+    /// A speck: its centre, its longest side and where its pixels are in the list.
+    struct Speck {
+        x: f32,
+        y: f32,
+        side: f32,
+        from: usize,
+        to: usize,
+    }
+    const UNSEEN: u8 = 0;
+    const LINE: u8 = 1;
+    const SPECK: u8 = 2;
+    if w == 0 || ink.len() != w * h {
+        return None;
+    }
+    let mut state = vec![UNSEEN; ink.len()];
+    let mut pixels: Vec<usize> = Vec::new();
+    let mut specks: Vec<Speck> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for start in 0..ink.len() {
+        if ink.get(start) != Some(&true) || state.get(start) != Some(&UNSEEN) {
+            continue;
+        }
+        // The speck's pixels (8-connected), given up as soon as it is too big for a dot or runs
+        // into ink already known for a line: no pixel is looked at more than a few times.
+        let from = pixels.len();
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        let mut line = false;
+        if let Some(v) = state.get_mut(start) {
+            *v = SPECK;
+        }
+        pixels.push(start);
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % w, i / w);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            line |= x == 0 || y == 0 || x + 1 == w || y + 1 == h || x1 - x0 >= DOT_SIDE || y1 - y0 >= DOT_SIDE;
+            for j in neighbours8(i, w, h) {
+                if ink.get(j) != Some(&true) {
+                    continue;
+                }
+                match state.get(j) {
+                    Some(&LINE) => line = true,
+                    Some(&UNSEEN) => {
+                        if let Some(v) = state.get_mut(j) {
+                            *v = SPECK;
+                        }
+                        pixels.push(j);
+                        stack.push(j);
+                    }
+                    _ => {}
+                }
+            }
+            if line {
+                break;
+            }
+        }
+        stack.clear();
+        let (sw, sh) = (x1.saturating_sub(x0) + 1, y1.saturating_sub(y0) + 1);
+        // Not much longer than wide: a dash is a piece of a line.
+        if line || sw.max(sh) > 2 * sw.min(sh) + 1 {
+            for &i in pixels.get(from..).unwrap_or(&[]) {
+                if let Some(v) = state.get_mut(i) {
+                    *v = LINE;
+                }
+            }
+            pixels.truncate(from);
+            continue;
+        }
+        specks.push(Speck { x: (x0 + x1) as f32 / 2.0, y: (y0 + y1) as f32 / 2.0, side: sw.max(sh) as f32, from, to: pixels.len() });
+    }
+    if specks.len() < 3 {
+        return None;
+    }
+    // The specks by cell of a grid as wide as the furthest neighbour, so only the cells around
+    // a speck are searched.
+    let cell = dot_reach(gap) + DOT_SIDE as f32;
+    let key = |s: &Speck| ((s.x / cell) as i64, (s.y / cell) as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    for (k, s) in specks.iter().enumerate() {
+        grid.entry(key(s)).or_default().push(k);
+    }
+    let mut dots: Option<Vec<bool>> = None;
+    for (k, s) in specks.iter().enumerate() {
+        // The directions of the specks near enough, as unit vectors.
+        let mut around: Vec<(f32, f32)> = Vec::new();
+        let (cx, cy) = key(s);
+        for gy in cy - 1..=cy + 1 {
+            for gx in cx - 1..=cx + 1 {
+                for &n in grid.get(&(gx, gy)).map_or(&[][..], Vec::as_slice) {
+                    let Some(o) = specks.get(n).filter(|_| n != k) else { continue };
+                    let (dx, dy) = (o.x - s.x, o.y - s.y);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    if d > 0.0 && d <= dot_reach(gap) + (s.side + o.side) / 2.0 && around.len() < 16 {
+                        around.push((dx / d, dy / d));
+                    }
+                }
+            }
+        }
+        // Two of them at an angle of 30 to 150 degrees: a field, not a row.
+        let field = around.iter().enumerate().any(|(a, u)| around.iter().skip(a + 1).any(|v| (u.0 * v.1 - u.1 * v.0).abs() >= 0.5));
+        if field {
+            let mask = dots.get_or_insert_with(|| vec![false; ink.len()]);
+            for &i in pixels.get(s.from..s.to).unwrap_or(&[]) {
+                if let Some(v) = mask.get_mut(i) {
+                    *v = true;
+                }
+            }
+        }
+    }
+    dots
 }
 
 /// How far an area must rise above the passage it meets another through to be kept apart, in
@@ -1033,18 +1168,146 @@ fn pocket_reach(gap: f32, thin: f32) -> usize {
     thin.max(gap / 2.0).max(2.0).ceil() as usize + 1
 }
 
-/// Fills the pockets of free pixels the lines shut in the fill: small spots no wider than the gap
-/// (and 4 px at least), whose free surroundings across the lines (within `thin`, Ignore Thin
-/// Lines, or half the gap of them, and 2 px at least) are this fill or other such pockets only:
-/// the paper between hatching strokes, the tip of a narrow wedge that touches the fill only across
-/// a corner. A spot that also lies beside another area, or is wider (a highlight), stays.
-fn fill_pockets(fill: &mut [bool], free: &[bool], w: usize, h: usize, gap: f32, thin: f32) {
+/// How far from the filled colour a pixel must be to count as solid ink round a pocket: twice the
+/// colour margin, and nearly black at most. Shading only just past the margin (grey screentone, a
+/// neighbouring flat) is not ink.
+fn solid_level(margin: u8) -> u8 {
+    (u16::from(margin) * 2 + 1).min(224) as u8
+}
+
+/// How far behind a pixel beside a pocket solid ink may lie for the pixel to count as a line's
+/// (its soft edge), px.
+const SOFT_EDGE: i64 = 2;
+
+/// The eight directions, as (dx, dy).
+const DIRECTIONS: [(i64, i64); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
+
+/// Fills the pockets of paper the lines shut in the fill: small spots no wider than the gap (and
+/// 4 px at least) with lines all round (looking outwards from the pocket, behind each pixel
+/// beside it lies solid ink, no further than a line's soft edge, or the fill itself, across the
+/// line; [`solid_level`]: `strength` is how far each pixel is from the filled colour, `margin`
+/// the colour margin), and either
+///
+/// - the fill just across the lines (within `thin`, Ignore Thin Lines, or half the gap of them,
+///   and 2 px at least) and no other area there: the paper between hatching strokes, the slit in
+///   a doubled line, the tip of a narrow wedge that touches the fill only across a corner; or
+/// - the fill all round the ink they lie in, which holds no paper but such pockets, and the fill
+///   or a pocket taken this way just across the lines: a patch of cross-hatching or of a dark
+///   tone's dots drawn inside the area, an island in the fill, taken from its rim inwards.
+///
+/// A spot that shading shuts in rather than ink stays (user report: specks of colour outside the
+/// line): a light speck in grey screentone across a line is within the colour margin, small, and
+/// beside nothing but the fill, and so is the soft far edge of a line whose other side is nearly
+/// the filled colour. So do a wider spot (a highlight) and one behind more ink (a pupil's glint).
+#[allow(clippy::too_many_arguments)]
+fn fill_pockets(fill: &mut [bool], free: &[bool], strength: &[u8], margin: u8, w: usize, h: usize, gap: f32, thin: f32) {
+    if strength.len() != fill.len() || free.len() != fill.len() {
+        return;
+    }
+    let Some((labels, pixels)) = pocket_candidates(fill, free, w, h, gap) else { return };
+    let count = pixels.len();
+    let pocket = |l: u32| pixels.get(l as usize).is_some_and(|own| !own.is_empty());
+    let reach = pocket_reach(gap, thin);
+    let level = solid_level(margin);
+    let solid = |j: usize| free.get(j) == Some(&false) && strength.get(j).is_some_and(|s| *s >= level);
+    let mut take = vec![false; count];
+    // The pockets with lines all round, whatever lies beyond them; those of them with the fill
+    // just across the lines; and the pairs of pockets just across the lines from each other.
+    let mut inked_round = vec![false; count];
+    let mut at_fill = vec![false; count];
+    let mut links: Vec<(u32, u32)> = Vec::new();
+    let mut reached = vec![false; fill.len()];
+    for (l, own) in pixels.iter().enumerate() {
+        if own.is_empty() {
+            continue;
+        }
+        // Outwards through the lines, up to `reach` steps: what free pixels lie there.
+        let (mut ours, mut other) = (0usize, 0usize);
+        let mut ring: Vec<usize> = own.clone();
+        let mut touched: Vec<usize> = own.clone();
+        // The line pixels right beside the pocket.
+        let mut rim: Vec<usize> = Vec::new();
+        for &i in own {
+            if let Some(r) = reached.get_mut(i) {
+                *r = true;
+            }
+        }
+        for step in 0..reach {
+            let mut next = Vec::new();
+            for &i in &ring {
+                for j in neighbours8(i, w, h) {
+                    if reached.get(j) != Some(&false) {
+                        continue;
+                    }
+                    if let Some(r) = reached.get_mut(j) {
+                        *r = true;
+                    }
+                    touched.push(j);
+                    if fill.get(j) == Some(&true) {
+                        ours += 1;
+                    } else if free.get(j) == Some(&true) {
+                        let beside = labels.get(j).copied().unwrap_or(0);
+                        if !pocket(beside) {
+                            other += 1;
+                        } else if links.last() != Some(&(l as u32, beside)) {
+                            links.push((l as u32, beside));
+                        }
+                    } else {
+                        if step == 0 {
+                            rim.push(j);
+                        }
+                        next.push(j);
+                    }
+                }
+            }
+            ring = next;
+        }
+        for i in touched {
+            if let Some(r) = reached.get_mut(i) {
+                *r = false;
+            }
+        }
+        let inked = rim.iter().filter(|&&j| lined(j, l as u32, &labels, fill, w, h, reach, &solid)).count();
+        // Three in four: a slit in a doubled line ends where its two lines run on as one.
+        if rim.is_empty() || inked * 4 < rim.len() * 3 {
+            continue;
+        }
+        if let Some(v) = inked_round.get_mut(l) {
+            *v = true;
+        }
+        if let Some(v) = at_fill.get_mut(l) {
+            *v = ours > 0;
+        }
+        if ours > 0
+            && other == 0
+            && let Some(t) = take.get_mut(l)
+        {
+            *t = true;
+        }
+    }
+    // Only when a pocket with lines all round lies beside the fill is there an island to look for.
+    if at_fill.iter().any(|v| *v) {
+        let pockets = Pockets { labels: &labels, pixels: &pixels, lined: &inked_round, at_fill: &at_fill };
+        take_islands(fill, free, w, h, &pockets, links, &mut take);
+    }
+    for (f, l) in fill.iter_mut().zip(&labels) {
+        if take.get(*l as usize) == Some(&true) {
+            *f = true;
+        }
+    }
+}
+
+/// The spots [`fill_pockets`] may take: the open pixels (free and not filled) labelled by spot
+/// (from 1; 0 elsewhere), and for each label the pixels of a spot that is small, clear of the
+/// edge and no wider than the gap (4 px at least); empty for any other spot. `None` when there
+/// is no such spot.
+fn pocket_candidates(fill: &[bool], free: &[bool], w: usize, h: usize, gap: f32) -> Option<(Vec<u32>, Vec<Vec<usize>>)> {
     let open: Vec<bool> = free.iter().zip(fill.iter()).map(|(f, filled)| *f && !filled).collect();
     let labels = components(&open, w, h);
     drop(open);
     let count = labels.iter().copied().max().unwrap_or(0) as usize + 1;
     if count < 2 {
-        return;
+        return None;
     }
     let mut size = vec![0usize; count];
     let mut edge = vec![false; count];
@@ -1064,7 +1327,7 @@ fn fill_pockets(fill: &mut [bool], free: &[bool], w: usize, h: usize, gap: f32, 
     }
     let small = |l: u32| l != 0 && size.get(l as usize).is_some_and(|n| *n <= POCKET) && edge.get(l as usize) == Some(&false);
     if !(1..count as u32).any(small) {
-        return;
+        return None;
     }
     let lines: Vec<bool> = free.iter().map(|f| !f).collect();
     let depth = edt(&lines, w, h);
@@ -1077,7 +1340,6 @@ fn fill_pockets(fill: &mut [bool], free: &[bool], w: usize, h: usize, gap: f32, 
         }
     }
     let pocket = |l: u32| small(l) && deep.get(l as usize).is_some_and(|d| *d <= widest);
-    let reach = pocket_reach(gap, thin);
     let mut pixels: Vec<Vec<usize>> = vec![Vec::new(); count];
     for (i, l) in labels.iter().enumerate() {
         if pocket(*l)
@@ -1086,62 +1348,106 @@ fn fill_pockets(fill: &mut [bool], free: &[bool], w: usize, h: usize, gap: f32, 
             p.push(i);
         }
     }
-    let mut take = vec![false; count];
-    let mut reached = vec![false; fill.len()];
-    for (l, own) in pixels.iter().enumerate() {
-        if own.is_empty() {
+    Some((labels, pixels))
+}
+
+/// Whether `j`, a line pixel right beside pocket `l`, is a line's: outwards from the pocket's
+/// pixel beside it, solid ink at the pixel or just behind it, or the fill across the line (a
+/// thin grey line is no solid ink, but has the fill on its other side). Shading only just past
+/// the margin has neither, and a speck of it lying against a line has the line on one side only.
+#[allow(clippy::too_many_arguments)]
+fn lined(j: usize, l: u32, labels: &[u32], fill: &[bool], w: usize, h: usize, reach: usize, solid: &dyn Fn(usize) -> bool) -> bool {
+    let at = |x: i64, y: i64| (x >= 0 && y >= 0 && x < w as i64 && y < h as i64).then(|| y as usize * w + x as usize);
+    let (x, y) = ((j % w) as i64, (j / w) as i64);
+    DIRECTIONS.iter().any(|&(dx, dy)| {
+        at(x - dx, y - dy).is_some_and(|i| labels.get(i).copied() == Some(l))
+            && ((0..=SOFT_EDGE).any(|k| at(x + dx * k, y + dy * k).is_some_and(solid))
+                || (1..=reach as i64).any(|k| at(x + dx * k, y + dy * k).is_some_and(|q| fill.get(q) == Some(&true))))
+    })
+}
+
+/// The pockets [`fill_pockets`] found: each open pixel's pocket label (0: none), each pocket's
+/// pixels, which have lines all round, and which of those have the fill just across the lines.
+struct Pockets<'a> {
+    labels: &'a [u32],
+    pixels: &'a [Vec<usize>],
+    lined: &'a [bool],
+    at_fill: &'a [bool],
+}
+
+/// Marks in `take` the pockets of the islands in `fill`: the pieces of everything else
+/// (8-connected, as the fill is 4-connected) that stay clear of the edge and hold no paper but
+/// pockets with lines all round. In such an island, from the pockets beside the fill on to those
+/// beside them (`links`: the pairs of pockets just across the lines from each other): a spot
+/// behind more ink than that (the glint in a pupil) stays.
+fn take_islands(fill: &[bool], free: &[bool], w: usize, h: usize, pockets: &Pockets, mut links: Vec<(u32, u32)>, take: &mut [bool]) {
+    let (island, islands) = pieces(fill, w, h);
+    let mut whole = vec![true; islands + 1];
+    for (i, k) in island.iter().enumerate() {
+        if *k == 0 {
             continue;
         }
-        // Outwards through the lines, up to `reach` steps: what free pixels lie there.
-        let (mut ours, mut other) = (0usize, 0usize);
-        let mut ring: Vec<usize> = own.clone();
-        let mut touched: Vec<usize> = own.clone();
-        for &i in own {
-            if let Some(r) = reached.get_mut(i) {
-                *r = true;
-            }
-        }
-        for _ in 0..reach {
-            let mut next = Vec::new();
-            for &i in &ring {
-                for j in neighbours8(i, w, h) {
-                    if reached.get(j) != Some(&false) {
-                        continue;
-                    }
-                    if let Some(r) = reached.get_mut(j) {
-                        *r = true;
-                    }
-                    touched.push(j);
-                    if fill.get(j) == Some(&true) {
-                        ours += 1;
-                    } else if free.get(j) == Some(&true) {
-                        if !pocket(labels.get(j).copied().unwrap_or(0)) {
-                            other += 1;
-                        }
-                    } else {
-                        next.push(j);
-                    }
-                }
-            }
-            ring = next;
-        }
-        for i in touched {
-            if let Some(r) = reached.get_mut(i) {
-                *r = false;
-            }
-        }
-        if ours > 0
-            && other == 0
-            && let Some(t) = take.get_mut(l)
+        let (x, y) = (i % w, i / w);
+        let at_edge = x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+        let stray = free.get(i) == Some(&true) && pockets.lined.get(pockets.labels.get(i).copied().unwrap_or(0) as usize) != Some(&true);
+        if (at_edge || stray)
+            && let Some(v) = whole.get_mut(*k as usize)
         {
+            *v = false;
+        }
+    }
+    let in_island = |l: usize| {
+        let k = pockets.pixels.get(l).and_then(|own| own.first()).and_then(|i| island.get(*i)).copied().unwrap_or(0);
+        k != 0 && whole.get(k as usize) == Some(&true)
+    };
+    let mut queue: Vec<u32> = (0..take.len()).filter(|&l| pockets.at_fill.get(l) == Some(&true) && in_island(l)).map(|l| l as u32).collect();
+    for &l in &queue {
+        if let Some(t) = take.get_mut(l as usize) {
             *t = true;
         }
     }
-    for (f, l) in fill.iter_mut().zip(&labels) {
-        if take.get(*l as usize) == Some(&true) {
-            *f = true;
+    links.sort_unstable();
+    links.dedup();
+    while let Some(l) = queue.pop() {
+        let from = links.partition_point(|(a, _)| *a < l);
+        for &(_, next) in links.get(from..).unwrap_or(&[]).iter().take_while(|(a, _)| *a == l) {
+            if take.get(next as usize) == Some(&false) && in_island(next as usize) {
+                if let Some(t) = take.get_mut(next as usize) {
+                    *t = true;
+                }
+                queue.push(next);
+            }
         }
     }
+}
+
+/// The 8-connected pieces of the pixels `fill` leaves, labelled from 1 (0 on the fill), and how
+/// many there are.
+fn pieces(fill: &[bool], w: usize, h: usize) -> (Vec<u32>, usize) {
+    let mut labels = vec![0u32; fill.len()];
+    let mut next = 0u32;
+    let mut stack = Vec::new();
+    for start in 0..fill.len() {
+        if fill.get(start) != Some(&false) || labels.get(start) != Some(&0) {
+            continue;
+        }
+        next = next.saturating_add(1);
+        if let Some(v) = labels.get_mut(start) {
+            *v = next;
+        }
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            for j in neighbours8(i, w, h) {
+                if fill.get(j) == Some(&false) && labels.get(j) == Some(&0) {
+                    if let Some(v) = labels.get_mut(j) {
+                        *v = next;
+                    }
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    (labels, next as usize)
 }
 
 /// Area Scaling of `fill` by `o.scale` pixels.

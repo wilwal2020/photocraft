@@ -409,3 +409,31 @@ fn the_eraser_end_ends_the_artboard_placing_mode() {
     assert_eq!(app.ui.tool, Tool::Artboard);
     assert!(!app.ui.artboard_tool.adding);
 }
+
+/// User report: with a pen "even just touching something barely will move it". A pen pressed on a
+/// panel holds still until it has gone the Pen Drag Distance; then it moves as it is. A tap that
+/// wobbled lifts where it landed (a click). On the canvas every move goes through.
+#[test]
+fn a_pen_on_a_panel_holds_still_until_it_has_moved_the_drag_distance() {
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    let press = |p: egui::Pos2, pressed: bool| Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let off_canvas = |_: egui::Pos2| false;
+    let mut slop = super::PenSlop::default();
+    let mut ev = vec![press(pos2(100.0, 100.0), true), Event::PointerMoved(pos2(102.0, 101.0)), Event::PointerMoved(pos2(104.0, 103.0))];
+    slop.filter(&mut ev, true, 10.0, off_canvas);
+    assert_eq!(ev.len(), 1, "only the press: {ev:?}");
+    let mut ev = vec![Event::PointerMoved(pos2(112.0, 100.0)), Event::PointerMoved(pos2(115.0, 100.0))];
+    slop.filter(&mut ev, true, 10.0, off_canvas);
+    assert_eq!(ev.len(), 2, "past the distance every move goes: {ev:?}");
+    // A wobbly tap: the release lands where the press did.
+    let mut ev = vec![press(pos2(50.0, 50.0), true), Event::PointerMoved(pos2(53.0, 52.0)), press(pos2(53.0, 52.0), false)];
+    slop.filter(&mut ev, true, 10.0, off_canvas);
+    assert!(matches!(ev.last(), Some(Event::PointerButton { pos, pressed: false, .. }) if *pos == pos2(50.0, 50.0)), "{ev:?}");
+    // The canvas, a mouse, or a distance of 0: nothing held.
+    for (pen, distance, canvas) in [(true, 10.0, true), (false, 10.0, false), (true, 0.0, false)] {
+        let mut slop = super::PenSlop::default();
+        let mut ev = vec![press(pos2(10.0, 10.0), true), Event::PointerMoved(pos2(11.0, 10.0))];
+        slop.filter(&mut ev, pen, distance, |_| canvas);
+        assert_eq!(ev.len(), 2, "pen {pen}, distance {distance}, canvas {canvas}");
+    }
+}

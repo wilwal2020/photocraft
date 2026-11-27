@@ -1,8 +1,10 @@
 //! The Remove Tool as a command: paint over something and it is replaced by its surroundings.
 //!
 //! The stroke's footprint is the hole. A stroke that closes around an object also removes what it
-//! encloses (`closeLoops`), and the hole grows by [`GROW`] pixels so the object's soft edge and
-//! halo go with it. The hole is completed from a window around the stroke by patch-based
+//! encloses (`closeLoops`). The footprint is the Remove Tool's hard round brush
+//! ([`super::remove_brush`]): every pixel its dabs cover at least half, and nothing past that
+//! (user request: "only brush where the preview is"; the hole used to take any pixel a dab
+//! touched and then grow by 2 px, past the brush and its tint). The hole is completed from a window around the stroke by patch-based
 //! completion with texture features (`photocraft_algo::remove`, `photocraft_algo::nonlocal`). The
 //! selection, when there is one, limits what changes. Large holes take seconds, so the command
 //! runs as a background job (#210): with progress, cancellable, and the document unchanged until
@@ -62,9 +64,6 @@ const MAX_PIXELS: u64 = 16 << 20;
 
 /// Cap on the sampling margin around the stroke (the window grows with the stroke).
 const MAX_MARGIN: i32 = 512;
-
-/// How far the hole grows beyond the stroke, in pixels.
-const GROW: usize = 2;
 
 /// Seed of the completion, so a removal is reproducible.
 const SEED: u64 = 0x0052_e30e;
@@ -329,11 +328,18 @@ fn stroke_bounds(stroke: &Stroke) -> Rect {
     Rect::new((x0 - r).floor() as i32, (y0 - r).floor() as i32, (x1 + r).ceil() as i32, (y1 + r).ceil() as i32)
 }
 
+/// `stroke` with the Remove Tool's own brush ([`super::remove_brush`]) at its size: a hard round
+/// tip, whatever the tool's brush is.
+fn hard(stroke: Stroke) -> Stroke {
+    Stroke { brush: super::remove_brush(stroke.brush.size), ..stroke }
+}
+
 /// The strokes of the request: `strokes` (several, each a list of points, sharing the brush
 /// and the target) or the one in `points`.
 fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>)> {
     let Some(list) = p.get("strokes") else {
         let (stroke, id) = parse_brush(s, p, CMD)?;
+        let stroke = hard(stroke);
         reject_huge_stroke(CMD, &stroke)?;
         return Ok((vec![stroke], id));
     };
@@ -365,6 +371,7 @@ fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>
             }
         }
         let (stroke, layer) = parse_brush(s, &one, CMD)?;
+        let stroke = hard(stroke);
         reject_huge_stroke(CMD, &stroke)?;
         strokes.push(stroke);
         id = layer;
@@ -455,7 +462,7 @@ pub(super) fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
         let bw = bounds.width() as usize;
         for (i, c) in cov.iter().enumerate() {
             let (x, y) = (bounds.x0 + (i % bw.max(1)) as i32, bounds.y0 + (i / bw.max(1)) as i32);
-            if *c > 0.0 && win.contains(x, y) {
+            if *c >= 0.5 && win.contains(x, y) {
                 let j = (y - win.y0) as usize * w + (x - win.x0) as usize;
                 if let Some(v) = m.get_mut(j) {
                     *v = true;
@@ -466,7 +473,6 @@ pub(super) fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
     if plan.close_loops {
         m = photocraft_algo::remove::close_loops(w, h, &m);
     }
-    m = photocraft_algo::remove::dilate(w, h, &m, GROW);
     if let Some(sel) = sel {
         for (v, c) in m.iter_mut().zip(coverage(sel, win)) {
             *v &= c > 0.0;

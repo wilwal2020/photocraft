@@ -24,6 +24,16 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
 /// shows at (x, y) only from `min` opacity there (0..1; 0: any at all), so a click goes through
 /// what is all but invisible: a solid colour layer whose mask is 99 % black, a faint smudge.
 fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, min: f32) -> Vec<LayerId> {
+    layers_hit_alpha(doc, x, y, type_bounds, min).into_iter().map(|(id, _)| id).collect()
+}
+
+/// [`layers_at`] with how opaque each layer shows at (x, y) (0..1, through its masks, its
+/// groups' and its clipping base; an artboard counts as 1).
+pub fn layers_shown_at(doc: &Document, x: i32, y: i32) -> Vec<(LayerId, f32)> {
+    layers_hit_alpha(doc, x, y, false, 0.0)
+}
+
+fn layers_hit_alpha(doc: &Document, x: i32, y: i32, type_bounds: bool, min: f32) -> Vec<(LayerId, f32)> {
     // A 1×1 read at i32::MAX would be an empty rect (huge `x` params saturate there).
     if x.checked_add(1).is_none() || y.checked_add(1).is_none() {
         return Vec::new();
@@ -49,7 +59,7 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, min: f32) -> Ve
             continue;
         }
         if l.artboard().is_some() {
-            out.push(l.id);
+            out.push((l.id, 1.0));
             continue;
         }
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
@@ -64,13 +74,17 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, min: f32) -> Ve
                 alpha *= g.opacity * g.mask.as_ref().map_or(1.0, |m| m.value(x, y));
             }
         }
-        if l.clipped
-            && let Some(base) = clip_base(doc, path).filter(|b| !b.is_group())
-        {
-            alpha *= coverage(base, x, y, false);
+        if l.clipped {
+            match clip_base(doc, path) {
+                // A hidden base hides its whole clipping group (user report: ⌘-click picked a
+                // layer clipped to a hidden one, though nothing of it showed).
+                Some(base) if !base.visible => continue,
+                Some(base) if !base.is_group() => alpha *= coverage(base, x, y, false),
+                _ => {}
+            }
         }
         if alpha > 0.0 && alpha >= min {
-            out.push(l.id);
+            out.push((l.id, alpha));
         }
     }
     out
@@ -210,6 +224,7 @@ fn layers_in_rect_with_locks(doc: &Document, r: Rect, group: bool, skip_position
                 locks.unpickable() || (skip_position_locked && locks.position)
             }
             || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
+            || (l.clipped && clip_base(doc, path).is_some_and(|b| !b.visible))
         {
             continue;
         }
@@ -674,5 +689,34 @@ mod tests {
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], a.0);
         s.execute("layer.layerMask.hideAll", json!({})).unwrap();
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
+    }
+
+    /// User report: ⌘-clicking the canvas picked a layer that showed nothing: it was visible but
+    /// clipped to a hidden layer, which hides the whole clipping group.
+    #[test]
+    fn a_layer_clipped_to_a_hidden_base_is_not_picked() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let base = LayerId(s.execute("layer.new.layer", json!({"name": "Base"})).unwrap()["layer"].as_u64().unwrap());
+        let clipped = LayerId(s.execute("layer.new.layer", json!({"name": "Clipped"})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("paint", |doc, _| {
+            for id in [base, clipped] {
+                doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[1.0, 0.0, 0.0, 1.0]);
+            }
+            doc.layer_mut(clipped).unwrap().clipped = true;
+            Ok(())
+        })
+        .unwrap();
+        let hit = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 4, "y": 4, "select": false})).unwrap()["layer"].as_u64();
+        assert_eq!(hit(&mut s), Some(clipped.0), "shown, it is picked");
+        s.edit("hide", |doc, _| {
+            doc.layer_mut(base).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id.0;
+        assert_eq!(hit(&mut s), Some(bg), "its base hidden, the click goes through it");
+        let doc = s.active().unwrap().doc.clone();
+        assert!(!layers_in_rect(&doc, Rect::new(0, 0, 8, 8), false).contains(&clipped));
     }
 }

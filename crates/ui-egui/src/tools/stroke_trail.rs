@@ -9,7 +9,7 @@
 //! egui tessellates a polyline whose width is much larger than its steps (any zoomed-in drag)
 //! into hard pie wedges fanning out across the canvas (#189), and translucent overlaps doubled up.
 
-use egui::{Color32, ColorImage, Rect, TextureHandle, TextureOptions, pos2};
+use egui::{Color32, ColorImage, Pos2, TextureHandle, TextureOptions, pos2};
 use photocraft_paint::{BrushSettings, StrokePoint, StrokeRenderer};
 
 /// Longest side of the mask, in mask pixels (big documents are stamped at a reduced scale).
@@ -49,8 +49,9 @@ pub struct Trail {
 /// The brush stroke behind a [`Trail::feed_dabs`] trail.
 struct Dabs {
     renderer: StrokeRenderer,
-    /// Any coverage counts in full ([`Trail::feed_reach`]).
-    reach: bool,
+    /// Coverage above this counts in full and the rest not at all ([`Trail::feed_reach`]: any;
+    /// [`Trail::feed_hole`]: half); `None`: coverage as it is.
+    threshold: Option<f32>,
     /// Document pixels the last "finish now" tail (a lone first dab, smoothing catch-up) covered.
     tail: photocraft_geom::Rect,
 }
@@ -97,14 +98,14 @@ impl Trail {
     /// shape each dab takes from pen pressure and dynamics. `brush` is asked for once, on the first
     /// call. What finishing the stroke now would add (the press's lone first dab) shows too.
     pub fn feed_dabs(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
-        self.feed_dabs_with(points, brush, false);
+        self.feed_dabs_with(points, brush, None);
     }
 
     /// Show where the brush's own dabs reach at all, in full: the Remove Tool removes every pixel a
     /// dab covers, however faintly (`retouch_cmds::remove`'s hole), so a soft tip's whole reach is
     /// tinted, not just its nominal radius or its opaque core.
     pub fn feed_reach(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
-        self.feed_dabs_with(points, brush, true);
+        self.feed_dabs_with(points, brush, Some(0.0));
     }
 
     /// [`Self::feed_reach`] for a whole new drag into the same mask (the Remove Tool's waiting
@@ -116,12 +117,28 @@ impl Trail {
         self.feed_reach(points, brush);
     }
 
-    fn feed_dabs_with(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings, reach: bool) {
+    /// Show the pixels the brush's dabs cover at least half, in full and nothing else: the Remove
+    /// Tool's hole (`retouch_cmds::remove`), which is exactly its hard round brush's footprint
+    /// (user request: "only brush where the preview is").
+    pub fn feed_hole(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.feed_dabs_with(points, brush, Some(0.5 - 1e-4));
+    }
+
+    /// [`Self::feed_hole`] for a whole new drag into the same mask (the Remove Tool's waiting
+    /// strokes): the earlier strokes' tint stays under it.
+    pub fn feed_stroke_hole(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.base.clone_from(&self.cov);
+        self.dabs = None;
+        self.fed = 0;
+        self.feed_hole(points, brush);
+    }
+
+    fn feed_dabs_with(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings, threshold: Option<f32>) {
         if self.dabs.is_some() && self.fed >= points.len() {
             return;
         }
         let mut dabs =
-            self.dabs.take().unwrap_or_else(|| Dabs { renderer: StrokeRenderer::new(&brush(), None, 1.0), reach, tail: photocraft_geom::Rect::EMPTY });
+            self.dabs.take().unwrap_or_else(|| Dabs { renderer: StrokeRenderer::new(&brush(), None, 1.0), threshold, tail: photocraft_geom::Rect::EMPTY });
         let new: Vec<StrokePoint> = points
             .get(self.fed..)
             .unwrap_or(&[])
@@ -137,8 +154,13 @@ impl Trail {
         changed = changed.union(&dabs.tail);
         let tail = tail.map(|(_, t)| t);
         let renderer = &dabs.renderer;
-        let full = |c: f32| if dabs.reach && c > 0.0 { 1.0 } else { c };
-        let reach = dabs.reach;
+        let threshold = dabs.threshold;
+        let full = move |c: f32| match threshold {
+            Some(t) if c > t => 1.0,
+            Some(_) => 0.0,
+            None => c,
+        };
+        let reach = threshold.is_some();
         let touches = |r| renderer.touches(r) || tail.as_ref().is_some_and(|t| t.touches(r));
         self.restamp(changed, reach, touches, |x, y| full(renderer.coverage_at(x, y).max(tail.as_ref().map_or(0.0, |t| t.coverage_at(x, y)))));
         self.dabs = Some(dabs);
@@ -310,7 +332,11 @@ impl Trail {
 
     /// Upload what changed and draw the trail over the document (`doc_rect` = the document's
     /// screen rectangle, `flip` = mirrored view), tinted `color` where fully covered.
-    pub fn draw(&mut self, painter: &egui::Painter, doc_rect: Rect, flip: bool, color: Color32) {
+    /// Draw the trail over the document, whose corners are `quad` on screen (clockwise from its
+    /// top-left, as `ViewXform::doc_quad` gives them): a turned or flipped view turns the trail
+    /// with it. (Drawn into the turned document's upright bounds, a Remove trail showed nowhere
+    /// near the stroke in a rotated view: user report.)
+    pub fn draw(&mut self, painter: &egui::Painter, quad: [Pos2; 4], color: Color32) {
         let opts = TextureOptions::LINEAR;
         let dirty = self.dirty.take();
         if self.tex.is_none() {
@@ -328,8 +354,17 @@ impl Trail {
         let Some(t) = &self.tex else { return };
         // The mask's last column/row may reach past the document (sizes rounded up).
         let (u, v) = (self.doc[0] as f32 / (self.w as f32 * self.k), self.doc[1] as f32 / (self.h as f32 * self.k));
-        let uv = if flip { Rect::from_min_max(pos2(u, 0.0), pos2(0.0, v)) } else { Rect::from_min_max(pos2(0.0, 0.0), pos2(u, v)) };
-        painter.image(t.id(), doc_rect, uv, Color32::WHITE);
+        if !quad.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+            return;
+        }
+        let uv = [pos2(0.0, 0.0), pos2(u, 0.0), pos2(u, v), pos2(0.0, v)];
+        let mut mesh = egui::Mesh::with_texture(t.id());
+        for (pos, uv) in quad.into_iter().zip(uv) {
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
     }
 }
 

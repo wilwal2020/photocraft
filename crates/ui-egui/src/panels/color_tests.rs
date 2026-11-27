@@ -681,3 +681,21 @@ fn each_chip_keeps_its_own_hue_on_black() {
     let [r, g, b] = srgb_bytes(h.state().session.tools.foreground);
     assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
 }
+
+/// Show Other Colors (user request, 2026-11-25): the pair not in use sits at the foot of the
+/// chips column, under the warning rows; a column too short leaves it out, and the slider modes
+/// make their column tall enough.
+#[test]
+fn the_other_colour_pair_fits_under_the_chips_and_warnings() {
+    let col = |h: f32| egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(38.0, h));
+    for rows in 0..=2 {
+        let need = crate::panels::other_chips_height(rows);
+        assert!(crate::panels::other_chips_rects(col(need - 2.0), rows).is_none());
+        let [fg, bg] = crate::panels::other_chips_rects(col(need), rows).unwrap();
+        assert!(fg.top() >= 20.0 + 40.0 + 18.0 * rows as f32 - 1.0, "under the warnings: {fg:?}");
+        assert!(bg.bottom() <= 20.0 + need && bg.min.x > fg.min.x && bg.min.y > fg.min.y, "{fg:?} {bg:?}");
+    }
+    assert_eq!(crate::panels::alert_rows(crate::state::ColorPanelMode::ColorWheel), 0);
+    assert_eq!(crate::panels::alert_rows(crate::state::ColorPanelMode::WebColorSliders), 2);
+    assert_eq!(crate::panels::alert_rows(crate::state::ColorPanelMode::RgbSliders), 1);
+}

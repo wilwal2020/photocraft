@@ -220,6 +220,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
     let large_tabs = app.session.prefs().workspace.large_tabs;
+    let compact = app.session.prefs().workspace.compact_tab_titles;
     // The strip is as tall as the Pro themes' (26, or 34 with Large Tabs): the tabs and the
     // 2-point margins above and below them.
     let tab_h = if large_tabs { 30.0 } else { 22.0 };
@@ -252,7 +253,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 2, bottom: 2 }).show(ui, |ui| {
         let (row, row_resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::click());
         row_resp.context_menu(|ui| {
-            tab_action = tab_context_menu(ui, None, tab_count, false);
+            tab_action = tab_context_menu(ui, None, tab_count, false, compact);
         });
         let f = fit_doc_tabs(&natural, selected, row.width());
         let mut x = row.left();
@@ -315,7 +316,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             }
             let has_path = st.path.is_some();
             resp.context_menu(|ui| {
-                tab_action = tab_context_menu(ui, Some(doc), document_count, has_path);
+                tab_action = tab_context_menu(ui, Some(doc), document_count, has_path, compact);
             });
         }
         // Files opening in the background: a tab with a progress underline; × cancels.
@@ -407,8 +408,9 @@ type TabMenuRow = Option<(&'static str, &'static str, serde_json::Value, bool)>;
 /// empty strip beside the tabs, which offers only New and Open, plus Close All). All tab actions
 /// go through the same guarded File commands as the menu bar, including the unsaved-changes
 /// prompt. The clicked tab is explicit even when another document is active.
-pub(crate) fn tab_context_items(index: Option<usize>, count: usize, has_path: bool) -> Vec<TabMenuRow> {
-    let mut rows = Vec::with_capacity(11);
+/// `compact`: the tabs show just their file names (Show Less Detail, `workspace.compactTabTitles`).
+pub(crate) fn tab_context_items(index: Option<usize>, count: usize, has_path: bool, compact: bool) -> Vec<TabMenuRow> {
+    let mut rows = Vec::with_capacity(13);
     if let Some(index) = index {
         rows.push(Some(("Consolidate All to Here", "window.arrange.consolidateAllToTabs", json!({}), count > 1)));
         rows.push(Some(("Close", "file.close", json!({"document": index}), true)));
@@ -426,14 +428,23 @@ pub(crate) fn tab_context_items(index: Option<usize>, count: usize, has_path: bo
         rows.push(None);
         rows.push(Some((crate::menus::reveal_label(), "file.revealInFinder", json!({"document": index}), has_path)));
     }
+    rows.push(None);
+    let label = if compact { "Show More Detail" } else { "Show Less Detail" };
+    rows.push(Some((label, "prefs.set", json!({"values": {"workspace.compactTabTitles": !compact}}), true)));
     rows
 }
 
-pub(crate) fn tab_context_menu(ui: &mut egui::Ui, index: Option<usize>, count: usize, has_path: bool) -> Option<(&'static str, serde_json::Value)> {
+pub(crate) fn tab_context_menu(
+    ui: &mut egui::Ui,
+    index: Option<usize>,
+    count: usize,
+    has_path: bool,
+    compact: bool,
+) -> Option<(&'static str, serde_json::Value)> {
     crate::widgets::style_spectrum_popup_menu(ui);
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(170.0);
-        for row in tab_context_items(index, count, has_path) {
+        for row in tab_context_items(index, count, has_path, compact) {
             let Some((label, id, params, enabled)) = row else {
                 ui.separator();
                 continue;
@@ -600,7 +611,11 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){}{saving}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+    let dirty = if st.is_dirty() { "*" } else { "" };
+    if app.session.prefs().workspace.compact_tab_titles {
+        return format!("{}{dirty}{saving}", st.doc.name);
+    }
+    format!("{} @ {}% ({layer}{model}/{}){}{saving}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), dirty)
 }
 
 /// The Studio strip's tab name: "name *" when unsaved, "name * - Saving 45%" while it saves (#3389).
@@ -627,6 +642,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let mut drag_over = None;
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let large_tabs = app.session.prefs().workspace.large_tabs;
+    let compact = app.session.prefs().workspace.compact_tab_titles;
     let font = egui::FontId::proportional(if large_tabs { 13.0 } else { 11.5 });
     let tab_h = if large_tabs { 34.0 } else { 26.0 };
     // The strip's empty part has its own menu (New, Open, Close All); the tabs, drawn over it,
@@ -634,7 +650,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let (strip, strip_resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::click());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     strip_resp.context_menu(|ui| {
-        tab_action = tab_context_menu(ui, None, tab_count, false);
+        tab_action = tab_context_menu(ui, None, tab_count, false, compact);
     });
     // Files opening in the background (#210) are tabs too ("name (Opening… 45%)" with a progress
     // underline); they share the fit's index space, after the documents.
@@ -691,7 +707,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         }
         let has_path = app.session.documents().get(doc).is_some_and(|d| d.path.is_some());
         resp.context_menu(|ui| {
-            tab_action = tab_context_menu(ui, Some(doc), document_count, has_path);
+            tab_action = tab_context_menu(ui, Some(doc), document_count, has_path, compact);
         });
         doc_tabs.push((doc, r));
     }

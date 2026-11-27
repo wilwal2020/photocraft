@@ -127,7 +127,7 @@ pub fn slow_cpu_refresh(app: &mut PhotocraftApp, doc: u64, ms: f64, reason: Opti
             ));
         }
         lines.push(
-            tl!("Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.")
+            tl!("Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/4 of its memory less what the canvas takes. Automatic follows Memory Usage, within a quarter of this computer's memory and that share of the card, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.")
                 .into(),
         );
     } else if let Some(r) = reason {

@@ -325,7 +325,9 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, mode: ColorPanelMode) {
     let v = current_values(ui, model, background, rgb);
     let dynamic = app.session.prefs().interface.dynamic_color_sliders;
     let rows_h = model.channels().len() as f32 * (ROW_H + ui.spacing().item_spacing.y);
-    let top_h = rows_h.max(CHIPS_W + 40.0);
+    // Show Other Colors: room for the other pair under the warnings.
+    let other = if app.ui.color_panel.show_other_colors { crate::panels::other_chips_height(crate::panels::alert_rows(mode)) } else { 0.0 };
+    let top_h = rows_h.max(CHIPS_W + 40.0).max(other);
     let mut edited = None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -544,7 +546,8 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let v = current_values(ui, Model::Hsb, background, rgb);
     let dynamic = app.session.prefs().interface.dynamic_color_sliders;
     let rows_h = 3.0 * (ROW_H + ui.spacing().item_spacing.y);
-    let top_h = rows_h.max(CHIPS_W);
+    let other = if app.ui.color_panel.show_other_colors { crate::panels::other_chips_height(0) } else { 0.0 };
+    let top_h = rows_h.max(CHIPS_W).max(other);
     let mut edited = None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -820,6 +823,16 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if ui.button(tl!("Copy Color's Hex Code")).clicked() {
         ui.ctx().copy_text(hex_code(rgb));
+        ui.close();
+    }
+    ui.separator();
+    // PhotoCraft additions (user request, 2026-11-25).
+    if check_item(ui, app.ui.color_panel.show_other_colors, "Show Other Colors") {
+        app.ui.color_panel.show_other_colors = !app.ui.color_panel.show_other_colors;
+        ui.close();
+    }
+    if check_item(ui, app.ui.color_panel.mask_entry_black_white, "Black or White When Brushing Enters a Mask") {
+        app.ui.color_panel.mask_entry_black_white = !app.ui.color_panel.mask_entry_black_white;
         ui.close();
     }
     ui.separator();

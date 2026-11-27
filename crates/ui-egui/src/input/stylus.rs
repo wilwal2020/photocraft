@@ -140,6 +140,7 @@ pub struct Stylus {
     peak: f32,
     /// The pen's touch contacts in the raw input, so a held pen is no press-and-hold right click.
     pub(crate) pen_contacts: PenContacts,
+    pub(crate) pen_slop: PenSlop,
     /// The egui frame [`Self::update_for_frame`] last ran in.
     updated_frame: Option<u64>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
@@ -170,6 +171,7 @@ impl Default for Stylus {
             current: None,
             peak: 0.0,
             pen_contacts: PenContacts::default(),
+            pen_slop: PenSlop::default(),
             updated_frame: None,
             stroke: Vec::new(),
             times: Vec::new(),
@@ -474,6 +476,54 @@ impl PenContacts {
             }
         }
         pen
+    }
+}
+
+/// A pen pressed off the canvas holds still until it has moved [`PenSlop::distance`] screen
+/// points from where it landed (Preferences › Tools › Pen Drag Distance). egui drags a widget
+/// that only drags (a list's background, which scrolls it; a panel's divider) from the press
+/// on, so a pen's slightest wobble as it touched a panel scrolled or moved it (user report:
+/// "even just touching something barely will move it"). Its pointer moves are held back until
+/// then, and a pen lifted before then lifts where it landed: a tap is still a click. The
+/// canvas takes every move from the press on, so a stroke loses nothing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PenSlop {
+    /// Where the held-still pen landed, while it is held still.
+    press: Option<egui::Pos2>,
+}
+
+impl PenSlop {
+    /// Hold back this frame's pointer moves of a pen pressed off the canvas (`on_canvas`) that
+    /// hasn't gone `distance` points yet. `pen_down`: a pen contact was down in the frame.
+    pub(crate) fn filter(&mut self, events: &mut Vec<egui::Event>, pen_down: bool, distance: f32, on_canvas: impl Fn(egui::Pos2) -> bool) {
+        if !pen_down && self.press.is_none() {
+            return;
+        }
+        events.retain_mut(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => {
+                self.press = (pen_down && distance > 0.0 && distance.is_finite() && !on_canvas(*pos)).then_some(*pos);
+                true
+            }
+            egui::Event::PointerMoved(p) => match self.press {
+                Some(at) if p.distance(at) < distance => false,
+                Some(_) => {
+                    self.press = None;
+                    true
+                }
+                None => true,
+            },
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => {
+                if let Some(at) = self.press.take() {
+                    *pos = at;
+                }
+                true
+            }
+            egui::Event::PointerGone => {
+                self.press = None;
+                true
+            }
+            _ => true,
+        });
     }
 }
 

@@ -2512,7 +2512,9 @@ fn remove_strokes_each_keep_their_own_brush() {
         let mut s = square_session(8, "rgb");
         let bg = rgba(&s, 10, 10);
         s.execute("paint.remove", json!({"strokes": strokes, "size": size})).unwrap();
-        [(41, 30), (46, 30), (51, 30)].iter().all(|&(x, y)| near(rgba(&s, x, y), bg, 0.03))
+        // Three rows off the strokes: a 16 px brush reaches there, a 2 px one doesn't (it removes
+        // exactly its footprint, no more).
+        [(41, 27), (46, 27), (51, 27)].iter().all(|&(x, y)| near(rgba(&s, x, y), bg, 0.03))
     };
     let (a, b) = (json!([[38, 30], [45, 30]]), json!([[47, 30], [54, 30]]));
     assert!(removed(json!([entry(a.clone(), 16.0), entry(b.clone(), 16.0)]), 2.0), "each entry's 16 px, not the 2 px of the call");
@@ -3340,4 +3342,42 @@ fn stroke_brush_takes_the_smoothing_param() {
     assert_eq!(stroke_brush(&base, &json!({"smoothing": 25})).smoothing.amount, 0.25);
     assert_eq!(stroke_brush(&base, &json!({"smoothing": 1e9})).smoothing.amount, 1.0);
     assert_eq!(stroke_brush(&base, &json!({"smoothing": -5})).smoothing.amount, 0.0);
+}
+
+/// User request: the Remove Tool is "always just a hard brush", and removes what its tint shows.
+/// A soft brush with pen-pressure size removes the same hole as a plain hard one at full size:
+/// the brush's footprint, the pixels its dabs cover at least half, exactly what the tint shows.
+#[test]
+fn remove_uses_a_hard_round_brush_whatever_the_brush_and_matches_its_tint() {
+    let hole_for = |brush: serde_json::Value| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 160, "height": 80, "background": "white"})).unwrap();
+        s.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
+        let points: Vec<[f64; 3]> = (0..=40).map(|i| [30.0 + f64::from(i) * 2.0, 40.0, 0.3]).collect();
+        let p = json!({"points": points, "closeLoops": false});
+        let plan = remove::plan(&s, &p).unwrap();
+        let hole = remove::hole(&plan, None).unwrap();
+        (plan.window, hole, points)
+    };
+    let (win, soft, points) = hole_for(json!({"size": 24, "hardness": 0, "pressureSize": true, "spacing": 40}));
+    let (win2, hard, _) = hole_for(json!({"size": 24, "hardness": 100}));
+    assert_eq!(win, win2);
+    assert_eq!(soft, hard, "the brush's hardness, pressure and spacing change nothing");
+    let stroke = Stroke { brush: remove_brush(24.0), points: points.iter().map(|p| StrokePoint::new(p[0], p[1], p[2] as f32)).collect() };
+    let (b, cov) = photocraft_paint::retouch::stroke_coverage(&stroke);
+    let w = win.width() as usize;
+    let (mut differ, mut total) = (0usize, 0usize);
+    for (i, h) in hard.iter().enumerate() {
+        let (x, y) = (win.x0 + (i % w) as i32, win.y0 + (i / w) as i32);
+        let tint = b.contains(x, y) && cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] >= 0.5;
+        total += usize::from(*h);
+        differ += usize::from(*h != tint);
+    }
+    assert!(total > 2000, "{total} px removed");
+    assert_eq!(differ, 0, "{differ} of {total} px differ between the hole and its tint");
+    // Nothing past the brush: the stroke runs along y = 40 with a 12 px radius.
+    for (i, h) in hard.iter().enumerate() {
+        let y = win.y0 + (i / w) as i32;
+        assert!(!*h || (28..=52).contains(&y), "row {y} is past the brush");
+    }
 }

@@ -38,8 +38,13 @@ const SHADING_VERSION: u32 = 1;
 pub const LIGHTING_KEY: [u8; 4] = *b"PClt";
 const LIGHTING_VERSION: u32 = 1;
 
+/// PhotoCraft's private block for a Chromatic Aberration adjustment layer, laid out like
+/// [`SHADING_KEY`] (Photoshop has no such adjustment; its merged image still shows the fringes).
+pub const CHROMATIC_KEY: [u8; 4] = *b"PCca";
+const CHROMATIC_VERSION: u32 = 1;
+
 /// All PSD adjustment keys recognized as adjustment layers.
-pub const ADJUSTMENT_KEYS: [&[u8; 4]; 20] = [
+pub const ADJUSTMENT_KEYS: [&[u8; 4]; 21] = [
     b"levl",
     b"curv",
     b"hue2",
@@ -60,6 +65,7 @@ pub const ADJUSTMENT_KEYS: [&[u8; 4]; 20] = [
     &GRAIN_PS_KEY,
     &SHADING_KEY,
     &LIGHTING_KEY,
+    &CHROMATIC_KEY,
 ];
 
 /// The JSON of a private PhotoCraft block without the zero bytes PSD pads blocks with to an
@@ -295,6 +301,11 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
             .filter(|_| data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == LIGHTING_VERSION))
             .and_then(|json| serde_json::from_slice::<photocraft_doc::adjust::Lighting>(json_body(json)).ok())
             .map(|s| Adjustment::Lighting(s.sanitized())),
+        b"PCca" => data
+            .get(4..)
+            .filter(|_| data.get(..4).is_some_and(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]) == CHROMATIC_VERSION))
+            .and_then(|json| serde_json::from_slice::<photocraft_doc::adjust::ChromaticAberration>(json_body(json)).ok())
+            .map(|s| Adjustment::ChromaticAberration(s.sanitized())),
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
         // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
@@ -823,6 +834,11 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             let mut data = LIGHTING_VERSION.to_be_bytes().to_vec();
             data.extend(serde_json::to_vec(&s.sanitized()).unwrap_or_default());
             return vec![(LIGHTING_KEY, data)];
+        }
+        Adjustment::ChromaticAberration(s) => {
+            let mut data = CHROMATIC_VERSION.to_be_bytes().to_vec();
+            data.extend(serde_json::to_vec(&s.sanitized()).unwrap_or_default());
+            return vec![(CHROMATIC_KEY, data)];
         }
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();

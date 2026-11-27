@@ -838,7 +838,9 @@ fn waiting_remove_strokes_keep_their_own_brush() {
     app.run("tools.setBrush", json!({"brush": {"size": 4, "hardness": 1.0}})).unwrap();
     stroke(&mut app, 75.0);
     assert!(tint(&app).unwrap() > first.unwrap(), "the second stroke adds its tint");
-    assert!((0..100).filter(|&x| app.remove_trail.as_ref().unwrap().coverage(x, 30) > 0).any(|x| x < 25 - 10), "the first keeps its soft 20 px reach");
+    // The first keeps its 20 px: x 15..35, its hard footprint, whatever the hardness was.
+    let tinted: Vec<usize> = (0..50).filter(|&x| app.remove_trail.as_ref().unwrap().coverage(x, 30) > 0).collect();
+    assert_eq!((tinted.first().copied(), tinted.last().copied()), (Some(15), Some(34)), "the first keeps its 20 px: {tinted:?}");
     assert!(remove_pending_commit(&mut app));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let (_, p) = app.session.journal.last().cloned().expect("a journaled command");
@@ -1342,7 +1344,7 @@ fn the_released_remove_tint_is_the_drags_and_fills_a_circle_solid() {
     // The drag's trail, as the canvas draws it.
     let points: Vec<[f64; 3]> = ring.iter().map(|p| [p[0], p[1], 1.0]).collect();
     let mut drag = crate::stroke_trail::Trail::new([100, 60]);
-    drag.feed_reach(&points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
+    drag.feed_hole(&points, || photocraft_engine::retouch_cmds::remove_brush(app.session.tools.brush.size));
     let dragged: Vec<u8> = (0..100).map(|x| drag.coverage(x, 30)).collect();
     let last = ring[ring.len() - 1];
     tool_event(&mut app, ToolEvent::Up { x: last[0], y: last[1] }, m);

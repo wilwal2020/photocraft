@@ -1406,3 +1406,22 @@ fn benchmark_u16_rgba_reads() {
         }
     }
 }
+
+#[test]
+fn prune_rect_drops_only_the_empty_tiles_it_touches() {
+    let t = TILE_SIZE;
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    // Four tiles in a row: written, empty, empty, written.
+    s.write_region(Rect::new(0, 0, 4 * t, 1), &vec![0.0; 4 * t as usize * 4]);
+    s.write_pixel(1, 0, &[1.0, 0.0, 0.0, 1.0]);
+    s.write_pixel(3 * t + 1, 0, &[0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(s.tile_count(), 4);
+    // Only the first two tiles are looked at: the empty third one stays until its band is done.
+    s.prune_rect(Rect::new(0, 0, 2 * t, t));
+    assert_eq!(s.tiles().map(|(c, _)| c.tx).collect::<Vec<_>>(), vec![0, 2, 3]);
+    s.prune_rect(Rect::new(2 * t, 0, 4 * t, t));
+    assert_eq!(s.tiles().map(|(c, _)| c.tx).collect::<Vec<_>>(), vec![0, 3]);
+    s.prune_rect(Rect::default());
+    assert_eq!(s.pixel(1, 0), vec![1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.pixel(3 * t + 1, 0), vec![0.0, 1.0, 0.0, 1.0]);
+}

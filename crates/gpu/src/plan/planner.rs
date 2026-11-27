@@ -841,7 +841,8 @@ impl<'a> Planner<'a> {
         p.a = Some(base);
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
+        // Fill goes inside the blend of the special eight (`fs_atop`, compose::composite_atop).
+        (p.opacity, p.fill) = (layer.opacity, layer.fill_opacity);
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
         Ok(self.emit(p))
@@ -881,12 +882,44 @@ impl<'a> Planner<'a> {
         self.emit(p)
     }
 
+    /// Chromatic Aberration on a slot (consumes it): with softness, the backdrop's premultiplied
+    /// red and blue blurred across, then down, and the shift reading both. Its samples reach past
+    /// the pixel; the executor draws chunks grown by that reach (`encode::chunk_apron`).
+    fn chromatic(&mut self, params: [[f32; 4]; 4], blur: Option<(f32, i32)>, src: Slot) -> Slot {
+        let canvas = params[2];
+        let blurred = blur.map(|(sigma, radius)| {
+            let mut across = Pass::new(Kernel::Adjust, 0);
+            across.a = Some(self.retain(src));
+            across.adjust_kind = super::lower::CA_BLUR_KIND;
+            across.params[0] = [sigma, radius as f32, 0.0, 1.0];
+            across.params[2] = canvas;
+            let across = self.emit(across);
+            let mut down = Pass::new(Kernel::Adjust, 0);
+            down.a = Some(across);
+            down.adjust_kind = super::lower::CA_BLUR_KIND;
+            down.params[0] = [sigma, radius as f32, 1.0, 0.0];
+            down.params[2] = canvas;
+            self.emit(down)
+        });
+        let mut p = Pass::new(Kernel::Adjust, 0);
+        p.a = Some(src);
+        p.b = blurred;
+        p.adjust_kind = super::lower::CA_KIND;
+        p.params = params;
+        self.emit(p)
+    }
+
     /// adjust::apply_with on a slot (consumes it).
     fn adjust(&mut self, adj: &Adjustment, src: Slot) -> Result<Slot, Unsupported> {
         // Shading and Lighting are planned by `amount_mix` (their mask is the amount); what
         // reaches here (Dissolve) composites on the CPU.
         if matches!(adj, Adjustment::Shading(_) | Adjustment::Lighting(_)) {
             return Err(Unsupported(format!("{} with Dissolve (composited on the CPU)", adj.label())));
+        }
+        if let Adjustment::ChromaticAberration(c) = adj
+            && let Some((params, blur)) = super::lower::chromatic_program(c, self.cx.canvas, self.cx.mode)
+        {
+            return Ok(self.chromatic(params, blur, src));
         }
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));

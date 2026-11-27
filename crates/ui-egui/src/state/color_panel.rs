@@ -51,6 +51,14 @@ pub struct ColorPanelState {
     pub ramp: ColorRamp,
     /// Make Ramp Web Safe: the ramp shows (and picks) web colours only.
     pub web_safe_ramp: bool,
+    /// Show Other Colors (user request, 2026-11-25): under the chips, the colour pair that isn't
+    /// in use (the mask's while the layer is targeted, the layer's while a mask is).
+    pub show_other_colors: bool,
+    /// Black or White When Brushing Enters a Mask (user request, 2026-11-25): when a stroke on a
+    /// fill layer's colour moves the target to its mask, the mask's foreground becomes black or
+    /// white, whichever its saved colour is nearer (50 % grey: white), and the background the
+    /// other.
+    pub mask_entry_black_white: bool,
 }
 
 /// The Color panel's display, Photoshop's panel menu choices in its order. Hue Cube is

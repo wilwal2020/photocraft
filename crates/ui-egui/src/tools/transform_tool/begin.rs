@@ -629,14 +629,37 @@ fn begin_lone(
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let (image, uv) = crate::transform_tex::read_surface(&lifted, None, b, max_side);
+    let (mut image, uv) = crate::transform_tex::read_surface(&lifted, None, b, max_side);
+    // A Solid Color layer's own mask (user report: its grey preview was drawn over everything,
+    // instead of showing what the mask shows): the moving part shows as the layer does, its colour
+    // where the mask reveals, at its opacity, with the layers over it drawn over it.
+    let solid = matches!(target.as_str(), Some("mask" | "secondMask"))
+        .then(|| doc.layer(LayerId(layer)))
+        .flatten()
+        .and_then(|l| match &l.content {
+            LayerContent::Fill(photocraft_doc::Fill::Solid(c)) => Some((c.to_rgb(), l.opacity * l.fill_opacity)),
+            _ => None,
+        });
+    let (opacity, above) = match solid {
+        Some((rgb, opacity)) => {
+            let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            for p in &mut image.pixels {
+                *p = Color32::from_rgba_unmultiplied(r, g, b, p.r());
+            }
+            let plan = AbovePlan::new(&doc, LayerId(layer));
+            plan.hide_in(&mut pd.layers);
+            let shown = plan.image(max_side);
+            (opacity, Some(Above::from_plan(ctx, format!("transform-{session}-above"), max_side, plan, shown)))
+        }
+        None => (0.6, None),
+    };
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
         doc: Arc::new(pd),
         texture,
-        opacity: 0.6,
-        above: None,
+        opacity,
+        above,
         styled: None,
         follow: None,
         committing: None,

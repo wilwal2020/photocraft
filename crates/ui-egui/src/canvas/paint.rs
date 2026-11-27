@@ -783,7 +783,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             };
             let Some(st) = app.session.active() else { return };
             let size = [st.doc.size.width, st.doc.size.height];
-            let doc_rect = xf.doc_rect(st.doc.bounds());
+            let quad = xf.doc_quad(st.doc.bounds());
             // The retouching tools change nothing outside the selection: neither does their trail
             // (Quick Selection's trail is the selection being made, so it isn't clipped).
             let clip = if t == Tool::QuickSelection { None } else { st.doc.selection.as_ref() };
@@ -795,17 +795,17 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 trail
             });
             let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+            let size = app.session.tools.brush.size;
             match t {
                 // Quick Selection reads the brush's size alone (`select.quick`).
                 Tool::QuickSelection => trail.feed(&d.points, app.session.tools.brush.size),
-                // Remove removes every pixel a dab touches, so its whole reach is tinted: a soft
-                // tip's reaches well past the nominal radius.
-                Tool::Remove => trail.feed_reach(&d.points, brush),
+                // Remove removes its hard round brush's footprint, exactly what is tinted.
+                Tool::Remove => trail.feed_hole(&d.points, || photocraft_engine::retouch_cmds::remove_brush(size)),
                 // What the stroke covers, dab by dab: soft edges, pressure and shape dynamics
                 // (Spot Healing #2364; the Mixer Brush, and a tool whose live stroke didn't start).
                 _ => trail.feed_dabs(&d.points, brush),
             }
-            trail.draw(painter, doc_rect, xf.flip, col);
+            trail.draw(painter, quad, col);
         }
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {

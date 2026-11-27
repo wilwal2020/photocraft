@@ -737,7 +737,12 @@ fn overlay_pixel(mode: &str, coverage: f32) -> Color32 {
 
 /// Photoshop's Selection Preview on the image, shared by CPU/GPU canvases and all platforms.
 /// This never edits the real selection, image, channels or history; closing the dialog removes it.
-pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, doc: DocId, image: Rect, flip: bool) {
+/// It is drawn on the image's corners as `xf` maps them, so a rotated or flipped view turns it
+/// with the image (user report: on a rotated canvas it was drawn into the turned image's upright
+/// bounds, stretched and out of place).
+pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, doc: DocId, xf: &crate::canvas::ViewXform) {
+    let Some(bounds) = app.session.active().filter(|st| st.doc.id == doc).map(|st| st.doc.bounds()) else { return };
+    let image = xf.doc_rect(bounds);
     let Some(fields) = app.ui.dialogs.last().filter(|d| owns(&d.fields)).map(|d| d.fields.clone()) else { return };
     let mode = s(&fields, "__selectionPreview", "none");
     if mode == "none" || !app.session.active().is_some_and(|st| st.doc.id == doc) {
@@ -805,10 +810,25 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
             p.overlay_key = shown;
         }
     }
-    if let Some(tex) = app.color_range.as_ref().and_then(|p| p.overlay.as_ref()) {
-        let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)) };
-        painter.image(tex.id(), image, uv, Color32::WHITE);
+    if let Some(mesh) = app.color_range.as_ref().and_then(|p| p.overlay.as_ref()).and_then(|tex| overlay_mesh(tex.id(), xf, bounds)) {
+        painter.add(egui::Shape::mesh(mesh));
     }
+}
+
+/// The Selection Preview texture `tex` over document rect `bounds` as view `xf` shows it: the
+/// whole texture on the rect's four mapped corners. `None` for corners off any screen.
+fn overlay_mesh(tex: egui::TextureId, xf: &crate::canvas::ViewXform, bounds: photocraft_geom::Rect) -> Option<egui::Mesh> {
+    let quad = xf.doc_quad(bounds);
+    if !quad.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (pos, uv) in quad.into_iter().zip([pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)]) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    Some(mesh)
 }
 
 /// The canvas overlay's proxy scale for a document whose long side is `side` pixels, shown

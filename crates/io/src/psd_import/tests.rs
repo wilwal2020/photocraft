@@ -371,22 +371,33 @@ fn a_complete_alpha_identifiers_resource_keeps_photoshop_polarity() {
 #[test]
 fn layer_bands_end_on_tile_rows_and_cover_the_layer() {
     let t = TILE_SIZE as usize;
-    for (top, h, row_bytes) in [(0, 2000, 8000), (-37, 15000, 80_000), (100, 5, 4), (255, 1, 4), (-256, 40_000, 1 << 20), (7, 0, 4)] {
-        let bands = band_rows(top, h, row_bytes);
-        let mut next = 0;
-        for &(a, b) in &bands {
-            assert_eq!(a, next);
-            assert!(b > a);
-            if b < h {
-                assert_eq!((top + b as i32).rem_euclid(TILE_SIZE), 0, "{top} {h}: band ends inside a tile row");
-                assert!((b - a) * row_bytes <= BAND_BYTES + t * row_bytes || b - a <= t);
+    for band_bytes in [BAND_BYTES, 1 << 20, 0] {
+        for (top, h, row_bytes) in [(0, 2000, 8000), (-37, 15000, 80_000), (100, 5, 4), (255, 1, 4), (-256, 40_000, 1 << 20), (7, 0, 4)] {
+            let bands = band_rows(top, h, row_bytes, band_bytes);
+            let mut next = 0;
+            for &(a, b) in &bands {
+                assert_eq!(a, next);
+                assert!(b > a);
+                if b < h {
+                    assert_eq!((top + b as i32).rem_euclid(TILE_SIZE), 0, "{top} {h}: band ends inside a tile row");
+                    assert!((b - a) * row_bytes <= band_bytes + t * row_bytes || b - a <= t);
+                }
+                next = b;
             }
-            next = b;
+            assert_eq!(next, h);
         }
-        assert_eq!(next, h);
     }
-    // A small layer is one band.
-    assert_eq!(band_rows(0, 2000, 8000), vec![(0, 2000)]);
+    // A small layer is one band; a smaller band size gives tile-row bands.
+    assert_eq!(band_rows(0, 2000, 8000, BAND_BYTES), vec![(0, 2000)]);
+    assert_eq!(band_rows(0, 600, 8000, 0), vec![(0, 256), (256, 512), (512, 600)]);
+}
+
+#[test]
+fn parallel_bands_share_the_working_memory_allowance() {
+    let transient = photocraft_raster::memory::stats().1.transient_bytes as usize;
+    assert_eq!(parallel_band_bytes(1), (transient / 3).min(BAND_BYTES));
+    assert!(parallel_band_bytes(32) * 32 * 3 <= transient.max(BAND_BYTES * 32 * 3));
+    assert!(parallel_band_bytes(32) <= BAND_BYTES);
 }
 
 // Tall, narrow masks cross tile bands while keeping these cases only a few KiB.

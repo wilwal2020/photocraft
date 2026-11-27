@@ -24,6 +24,7 @@ use crate::tone::{self, HistSource, Histograms};
 use crate::widgets::{self, hue_color};
 
 mod basic;
+mod chromatic;
 mod curves;
 mod gradient_map;
 mod hue_saturation;
@@ -192,6 +193,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "shading" => shading::shading(ui, v, cx.mem, false, &cx.presets),
         "shading2" => shading::shading(ui, v, cx.mem, true, &cx.presets),
         "lighting" => lighting::lighting(ui, v, cx.mem, &cx.presets),
+        "chromaticAberration" => chromatic::chromatic(ui, v, cx.mem, &cx.presets),
         "selectiveColor" => selective_color(ui, v, cx),
         _ => Edit::default(),
     }

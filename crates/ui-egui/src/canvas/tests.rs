@@ -1180,7 +1180,7 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 
 #[test]
 fn tab_context_uses_clicked_document_and_existing_close_commands() {
-    let rows = |index, count, has_path| tab_context_items(index, count, has_path).into_iter().flatten().collect::<Vec<_>>();
+    let rows = |index, count, has_path| tab_context_items(index, count, has_path, false).into_iter().flatten().collect::<Vec<_>>();
     let items = rows(Some(2), 3, true);
     assert_eq!(
         items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(),
@@ -1192,7 +1192,8 @@ fn tab_context_uses_clicked_document_and_existing_close_commands() {
             "window.arrange.floatInWindow",
             "file.new",
             "file.open",
-            "file.revealInFinder"
+            "file.revealInFinder",
+            "prefs.set"
         ]
     );
     assert_eq!(items[1].2, json!({"document": 2}));
@@ -1213,13 +1214,17 @@ fn tab_context_uses_clicked_document_and_existing_close_commands() {
     );
     // The empty part of the strip: New and Open, and Close All.
     let strip = rows(None, 2, false);
-    assert_eq!(strip.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.closeAll", "file.new", "file.open"]);
+    assert_eq!(strip.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.closeAll", "file.new", "file.open", "prefs.set"]);
+    // Show Less Detail turns compact tab titles on; with them on, Show More Detail turns them off.
+    let detail = |compact| tab_context_items(None, 1, false, compact).into_iter().flatten().last().unwrap();
+    assert_eq!((detail(false).0, detail(false).2), ("Show Less Detail", json!({"values": {"workspace.compactTabTitles": true}})));
+    assert_eq!((detail(true).0, detail(true).2), ("Show More Detail", json!({"values": {"workspace.compactTabTitles": false}})));
 }
 
 #[test]
 fn tab_context_reveal_names_the_platform_file_manager() {
-    let rows: Vec<_> = tab_context_items(Some(0), 1, true).into_iter().flatten().collect();
-    let (label, id, _, _) = rows.last().unwrap();
+    let rows: Vec<_> = tab_context_items(Some(0), 1, true, false).into_iter().flatten().collect();
+    let (label, id, _, _) = rows.iter().find(|r| r.1 == "file.revealInFinder").unwrap();
     assert_eq!((*label, *id), (crate::menus::reveal_label(), "file.revealInFinder"));
 }
 
@@ -1370,7 +1375,7 @@ fn tab_close_others_prompts_for_unsaved_nonactive_document() {
     app.run("file.new", json!({"width": 8, "height": 8, "name": "Edited"})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     assert_eq!(app.session.active_index(), Some(1));
-    let (_, id, params, _) = tab_context_items(Some(0), 2, false).into_iter().flatten().find(|r| r.1 == "file.closeOthers").unwrap();
+    let (_, id, params, _) = tab_context_items(Some(0), 2, false, false).into_iter().flatten().find(|r| r.1 == "file.closeOthers").unwrap();
     crate::menus::invoke(&mut app, &egui::Context::default(), id, params).unwrap();
     assert!(app.discard.is_some(), "close others must ask before discarding the edited tab");
     assert_eq!(app.session.documents().len(), 2);
@@ -3446,9 +3451,11 @@ fn smoothed_brush_drag_draws_the_string_from_brush_to_pointer() {
 #[test]
 fn retouch_drags_show_the_footprint_without_wedges() {
     // The retouching tools' trail was the same brush-wide polyline (#189): now a mask of the
-    // footprint, with nothing outside it, however small the steps. The Remove Tool's is where
-    // the stroke's dabs reach at all, which is what it removes, so a soft tip's whole reach
-    // past the radius is tinted.
+    // footprint, with nothing outside it, however small the steps. The Remove Tool's is what it
+    // removes: its own hard round brush's footprint at the brush's size (`retouch_cmds::
+    // remove_brush`, pixels covered at least half), whatever the chosen brush's hardness (user
+    // requests: "make it always just a hard brush", "only brush where the preview is").
+    let mut trails = Vec::new();
     for hardness in [1.0, 0.0] {
         let ctx = egui::Context::default();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -3468,26 +3475,26 @@ fn retouch_drags_show_the_footprint_without_wedges() {
         drag_preview_shapes(&mut app, &ctx, 12.0);
         // The stroke the removal gets on release, and the pixels its hole takes.
         let points = app.drag.as_ref().unwrap().points.iter().map(|p| photocraft_paint::StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
-        let brush = photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+        let brush = photocraft_engine::retouch_cmds::remove_brush(app.session.tools.brush.size);
         let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points });
         let trail = app.trail.as_ref().unwrap();
+        trails.push((0..60).flat_map(|y| (0..120).map(move |x| (x, y))).map(|(x, y)| trail.coverage(x, y)).collect::<Vec<u8>>());
         assert_eq!(trail.scale(), 1.0);
         let mut beyond = 0;
         for y in 0..60 {
             for x in 0..120 {
-                let removed = b.contains(x, y) && cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] > 0.0;
+                let removed = b.contains(x, y) && cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] >= 0.5;
                 assert_eq!(trail.coverage(x as usize, y as usize), if removed { 255 } else { 0 }, "hardness {hardness}: ({x}, {y})");
                 // Past the 15 px radius of the path's ends and sides (y 27..33).
                 beyond += usize::from(removed && !(12..=48).contains(&y));
             }
         }
-        if hardness == 0.0 {
-            assert!(beyond > 100, "a soft tip's removal reaches past its radius: {beyond} px");
-        }
+        assert_eq!(beyond, 0, "hardness {hardness}: nothing past the brush's 15 px radius");
         tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
         drag_preview_shapes(&mut app, &ctx, 12.0);
         assert!(app.trail.is_none(), "the trail ends with the drag");
     }
+    assert_eq!(trails[0], trails[1], "the brush's hardness changes nothing");
 }
 
 #[test]

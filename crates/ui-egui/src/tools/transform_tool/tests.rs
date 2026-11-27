@@ -4300,3 +4300,44 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
 }
+
+/// User report: free-transforming the mask of a Solid Color layer drew the mask in grey over
+/// everything. Its moving part shows as the layer does instead: the colour where the mask reveals
+/// and nothing where it hides, at the layer's opacity, under the layers above it.
+#[test]
+fn a_solid_color_layers_mask_previews_as_the_colour_under_the_layers_above() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let fill = photocraft_doc::LayerId(app.session.execute("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})).unwrap()["layer"].as_u64().unwrap());
+    app.session
+        .edit("mask", |doc, _| {
+            let l = doc.layer_mut(fill).unwrap();
+            l.opacity = 0.5;
+            let m = l.mask.get_or_insert_with(photocraft_doc::LayerMask::reveal_all);
+            m.linked = false;
+            m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+            m.surface.fill_rect(photocraft_geom::Rect::new(16, 16, 32, 32), &[1.0]);
+            m.surface.fill_rect(photocraft_geom::Rect::new(22, 22, 26, 26), &[0.0]);
+            Ok(())
+        })
+        .unwrap();
+    // A layer over the fill, covering part of it.
+    app.session.execute("layer.new.layer", json!({"name": "Over"})).unwrap();
+    app.session
+        .edit("over", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(16, 16, 20, 20), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.select", json!({"layer": fill.0})).unwrap();
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let r = app.ui.transform.as_ref().unwrap().rect;
+    let p = app.transform_preview.as_ref().unwrap();
+    let (img, _) = p.texture.level_image(0).unwrap();
+    let at = |x: f64, y: f64| img.pixels[(y - r[1]) as usize * img.size[0] + (x - r[0]) as usize];
+    assert_eq!(at(18.0, 18.0), Color32::from_rgb(255, 0, 0), "the layer's colour where the mask reveals");
+    assert_eq!(at(r[0] + 2.0, r[1] + 2.0).a(), 0, "nothing where the mask hides, round it");
+    assert_eq!(at(23.0, 23.0).a(), 0, "nothing where it hides");
+    assert_eq!(p.opacity, 0.5, "the layer's opacity");
+    assert!(p.above.is_some(), "the layer above is drawn over the moving colour");
+}

@@ -136,7 +136,9 @@ pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius:
 /// The tip outline in radius units, cached across frames; `None` when the plain circle says it all
 /// (a plain round tip) or the tip has no traceable shape.
 pub(crate) fn rings(ctx: &egui::Context, brush: &BrushSettings, full: bool) -> Option<Arc<Vec<Vec<[f32; 2]>>>> {
-    if matches!(brush.tip, TipShape::Round) && brush.angle == 0.0 && brush.roundness >= 1.0 {
+    // A round tip at full roundness is a circle at any angle (Turn Tip with View off gives it one
+    // in a rotated view): the exact circle, as unrotated (user report, 2026-11-25).
+    if matches!(brush.tip, TipShape::Round) && brush.roundness >= 1.0 {
         return None;
     }
     let id = egui::Id::unique("photocraft-tip-outline");
@@ -291,6 +293,25 @@ mod tests {
         assert!(close(turned[0][0], Vec2::new(0.0, 20.0)), "{turned:?}");
         let flipped = on_screen(&rings, tip_axes(&view(0.0, true, 1.0), 20.0));
         assert!(close(flipped[0][0], Vec2::new(-20.0, 0.0)), "{flipped:?}");
+    }
+
+    /// User report (2026-11-25): with the canvas rotated, a hard round brush's cursor was a
+    /// tenth smaller than its dab. A round tip is the circle at any angle, and an ellipse's traced
+    /// 50 % contour reaches as far as the circle's along its long axis.
+    #[test]
+    fn a_round_tip_keeps_the_circle_at_any_angle_and_its_outline_its_size() {
+        let ctx = egui::Context::default();
+        for angle in [0.0, 30.0, -112.0] {
+            let b = BrushSettings { size: 300.0, hardness: 1.0, angle, ..BrushSettings::default() };
+            assert!(rings(&ctx, &b, false).is_none(), "angle {angle}: the plain circle");
+        }
+        for hardness in [1.0, 0.9, 0.5, 0.0] {
+            let b = BrushSettings { size: 300.0, hardness, angle: 30.0, roundness: 0.6, ..BrushSettings::default() };
+            let ring = photocraft_paint::outline::tip_outline(&b, false).unwrap().remove(0);
+            let reach = ring.iter().map(|p| p[0].hypot(p[1])).fold(0.0f32, f32::max);
+            let want = photocraft_paint::half_coverage_radius(150.0, hardness) / 150.0;
+            assert!((reach - want).abs() < 0.01, "hardness {hardness}: {reach} vs {want}");
+        }
     }
 
     #[test]

@@ -508,6 +508,91 @@ mod tests {
         out
     }
 
+    /// User report (2026-11-25): on a rotated canvas the ⇧ line preview was a little off the line a
+    /// click then painted, even with a hard round brush.
+    #[test]
+    fn on_a_rotated_canvas_the_shift_line_paints_where_its_preview_was() {
+        use egui::{Event, Modifiers, PointerButton, vec2};
+        let mut a = app();
+        a.ui.tool = Tool::Brush;
+        a.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0}})).unwrap();
+        a.sync_views();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            a,
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.run_steps(4);
+        {
+            let st = h.state_mut();
+            let i = st.session.active_index().unwrap();
+            st.ui.views[i].rotation = 33.0;
+        }
+        h.run_steps(4);
+        let c = h.state().last_canvas_rect.center();
+        let start = c - vec2(40.0, 20.0);
+        let click = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, pts: &[egui::Pos2], m: Modifiers| {
+            h.event(Event::PointerMoved(pts[0]));
+            h.run();
+            h.event(Event::PointerButton { pos: pts[0], button: PointerButton::Primary, pressed: true, modifiers: m });
+            h.run();
+            for p in &pts[1..] {
+                h.event(Event::PointerMoved(*p));
+                h.run();
+            }
+            let last = *pts.last().unwrap();
+            h.event(Event::PointerButton { pos: last, button: PointerButton::Primary, pressed: false, modifiers: m });
+            h.run_steps(2);
+        };
+        let pts: Vec<_> = (0..=6).map(|k| start + vec2(3.0 * k as f32, 0.0)).collect();
+        click(&mut h, &pts, Modifiers::NONE);
+        let xf = |h: &egui_kittest::Harness<'static, PhotocraftApp>| {
+            let st = h.state();
+            let v = st.ui.views[st.session.active_index().unwrap()].clone();
+            crate::canvas::ViewXform { rect: st.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 }
+        };
+        let end = h.state().last_stroke_end.map(|(_, p)| p).unwrap();
+        let target = c + vec2(30.0, 35.0);
+        h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+        h.event(Event::PointerMoved(target));
+        h.run_steps(2);
+        let x = xf(&h);
+        let from = x.to_screen(end[0] as f32, end[1] as f32);
+        // The preview's centre line, back in the document.
+        let (pa, pb) = (x.to_doc(from), x.to_doc(target));
+        click(&mut h, &[target], Modifiers::SHIFT);
+        let line = last_stroke_points(h.state());
+        eprintln!("preview {pa:?} → {pb:?}; painted {line:?}; zoom {} rot {}", x.zoom, x.rotation);
+        let close = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) < 0.75;
+        assert!(close(line[0], pa) && close(*line.last().unwrap(), pb), "preview {pa:?} → {pb:?}, painted {line:?}");
+        // The pixels: inside the preview's band (a radius either side of the centre line, away
+        // from the ends) painted, a pixel past its edges not.
+        let r = 6.0;
+        let (ab, len) = ([pb[0] - pa[0], pb[1] - pa[1]], (pb[0] - pa[0]).hypot(pb[1] - pa[1]));
+        let mut wrong = Vec::new();
+        for y in 0..120 {
+            for x in 0..120 {
+                let (px, py) = (x as f64 + 0.5 - pa[0], y as f64 + 0.5 - pa[1]);
+                let t = (px * ab[0] + py * ab[1]) / len;
+                if t < r || t > len - r {
+                    continue;
+                }
+                let d = (px * ab[1] - py * ab[0]).abs() / len;
+                let a = alpha(h.state(), x, y);
+                if (d < r - 1.0 && a < 0.5) || (d > r + 1.0 && a > 0.5) {
+                    wrong.push((x, y, d, a));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} pixels off the preview: {:?}", wrong.len(), &wrong[..wrong.len().min(8)]);
+    }
+
     #[test]
     fn shift_shows_a_rubber_band_from_the_last_stroke_to_the_pointer() {
         use egui::{Event, Modifiers, PointerButton, vec2};

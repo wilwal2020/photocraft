@@ -465,6 +465,102 @@ impl Lighting {
     }
 }
 
+/// Chromatic Aberration: PhotoCraft's lens-fringe adjustment layer (user request, 2026-11-21).
+/// The red and blue channels of the composite beneath are shifted against green, which stays
+/// put: radially (scaled from `center`, like a lens whose magnification differs per colour, so
+/// edges far from the centre get red/cyan and blue/yellow fringes) and by a fixed offset (red
+/// one way, blue the other: the "RGB split" look). Distances are in document pixels.
+///
+/// It samples neighbouring pixels, so a compositor renders the pixels within [`Self::reach`] of
+/// what it draws too. Samples are taken inside the canvas (clamped to its edge); pixels outside
+/// the canvas and every alpha value are left as they are. Saved in `.pcraft`, flattened in PSD.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChromaticAberration {
+    /// How far the red channel moves outward from the centre at the farthest canvas corner, in
+    /// pixels (-50..=50; below 0 it moves inward). It grows linearly from nothing at the centre.
+    pub red_shift: f32,
+    /// The same for the blue channel (-50..=50).
+    pub blue_shift: f32,
+    /// A fixed shift of the red channel, in pixels (-50..=50 each); blue moves the opposite way.
+    pub offset_x: f32,
+    pub offset_y: f32,
+    /// The centre of the radial shift, as fractions of the canvas width and height (0..=1).
+    pub center: [f32; 2],
+    /// How much of the image centre is left clean (0..=1): the fraction of the centre-to-corner
+    /// distance where the effect reaches full strength, fading in from half that distance. It
+    /// scales the offset as well as the radial shift. 0: the effect reaches the centre.
+    pub falloff: f32,
+    /// Softness of the fringes, in pixels (0..=10): the shifted red and blue are blurred this
+    /// much where they have moved a pixel or more, so a clean centre stays sharp.
+    pub softness: f32,
+}
+
+impl Default for ChromaticAberration {
+    fn default() -> Self {
+        Self { red_shift: 3.0, blue_shift: -3.0, offset_x: 0.0, offset_y: 0.0, center: [0.5, 0.5], falloff: 0.0, softness: 0.0 }
+    }
+}
+
+impl ChromaticAberration {
+    /// Largest shift either way, in pixels.
+    pub const MAX_SHIFT: f32 = 50.0;
+    /// Largest softness, in pixels.
+    pub const MAX_SOFTNESS: f32 = 10.0;
+
+    /// The settings with every number finite and in its range.
+    pub fn sanitized(&self) -> Self {
+        let f = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
+        let d = Self::default();
+        let m = Self::MAX_SHIFT;
+        Self {
+            red_shift: f(self.red_shift, -m, m, d.red_shift),
+            blue_shift: f(self.blue_shift, -m, m, d.blue_shift),
+            offset_x: f(self.offset_x, -m, m, d.offset_x),
+            offset_y: f(self.offset_y, -m, m, d.offset_y),
+            center: [f(self.center[0], 0.0, 1.0, d.center[0]), f(self.center[1], 0.0, 1.0, d.center[1])],
+            falloff: f(self.falloff, 0.0, 1.0, d.falloff),
+            softness: f(self.softness, 0.0, Self::MAX_SOFTNESS, d.softness),
+        }
+    }
+
+    /// The softness blur's radius in pixels (a Gaussian of sigma `softness / 2`, cut at 3 sigma).
+    pub fn blur_radius(&self) -> i32 {
+        let s = self.sanitized().softness;
+        if s <= 0.0 { 0 } else { (s * 1.5).ceil() as i32 }
+    }
+
+    /// How far from a pixel the result there can read, in pixels: the largest shift, the softness
+    /// blur and one more for the bilinear sample. 0 when it changes nothing.
+    pub fn reach(&self) -> i32 {
+        let s = self.sanitized();
+        if s.is_identity() {
+            return 0;
+        }
+        let shift = s.red_shift.abs().max(s.blue_shift.abs()) + s.offset_x.hypot(s.offset_y);
+        shift.ceil() as i32 + self.blur_radius() + 1
+    }
+
+    /// Whether it leaves every pixel as it is (no shift at all).
+    pub fn is_identity(&self) -> bool {
+        self.red_shift == 0.0 && self.blue_shift == 0.0 && self.offset_x == 0.0 && self.offset_y == 0.0
+    }
+
+    /// The same settings for a copy of the document scaled down by `k` (a proxy or a reduced
+    /// preview): the pixel distances shrink with it.
+    pub fn scaled(&self, k: f32) -> Self {
+        let k = if k.is_finite() && k > 0.0 { k } else { 1.0 };
+        Self {
+            red_shift: self.red_shift / k,
+            blue_shift: self.blue_shift / k,
+            offset_x: self.offset_x / k,
+            offset_y: self.offset_y / k,
+            softness: self.softness / k,
+            ..self.clone()
+        }
+    }
+}
+
 /// Shading's and Lighting's Advanced Curve kept usable: a path in the order drawn, from the base
 /// colour (0, 1) to full shadow or light (1, 0), its points within the graph (half a box past
 /// the box on each side: -0.5..=1.5), at most 16, none on top of the one before. Fewer than one
@@ -642,6 +738,9 @@ pub enum Adjustment {
     Shading(Shading),
     /// PhotoCraft's Lighting (see [`Lighting`]); saved in `.pcraft`, flattened in PSD.
     Lighting(Lighting),
+    /// PhotoCraft's Chromatic Aberration (see [`ChromaticAberration`]): the one adjustment that
+    /// reads neighbouring pixels; saved in `.pcraft`, flattened in PSD.
+    ChromaticAberration(ChromaticAberration),
     /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
     /// document snapshots (#4535).
     Unsupported {
@@ -687,6 +786,7 @@ impl Adjustment {
             Adjustment::Shading(s) if s.picker_axes => "Shading 2",
             Adjustment::Shading(_) => "Shading",
             Adjustment::Lighting(_) => "Lighting",
+            Adjustment::ChromaticAberration(_) => "Chromatic Aberration",
             Adjustment::Unsupported { .. } => "Adjustment",
         }
     }
@@ -736,6 +836,33 @@ mod tests {
         assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, pencil: false, .. }));
         let g: Adjustment = serde_json::from_str(r#"{"GradientMap":{"stops":[],"reverse":true}}"#).unwrap();
         assert!(matches!(g, Adjustment::GradientMap { dither: false, .. }));
+    }
+
+    #[test]
+    fn chromatic_aberration_reads_missing_fields_as_defaults_and_sanitizes() {
+        let a: Adjustment = serde_json::from_str(r#"{"ChromaticAberration":{"red_shift":5.0}}"#).unwrap();
+        assert_eq!(a, Adjustment::ChromaticAberration(ChromaticAberration { red_shift: 5.0, ..ChromaticAberration::default() }));
+        assert_eq!(a.label(), "Chromatic Aberration");
+        let wild = ChromaticAberration {
+            red_shift: f32::NAN,
+            blue_shift: -1e9,
+            offset_x: f32::INFINITY,
+            offset_y: 7.0,
+            center: [-3.0, f32::NAN],
+            falloff: 2.0,
+            softness: 99.0,
+        };
+        let s = wild.sanitized();
+        assert_eq!((s.red_shift, s.blue_shift, s.offset_x, s.offset_y), (3.0, -50.0, 0.0, 7.0));
+        assert_eq!((s.center, s.falloff, s.softness), ([0.0, 0.5], 1.0, 10.0));
+        assert_eq!(ChromaticAberration::default().sanitized(), ChromaticAberration::default());
+        // Reach: the largest shift, the blur and the bilinear sample; nothing when it shifts nothing.
+        assert_eq!(ChromaticAberration::default().reach(), 4);
+        assert_eq!(ChromaticAberration { offset_x: 3.0, offset_y: 4.0, softness: 2.0, ..Default::default() }.reach(), 3 + 5 + 3 + 1);
+        assert_eq!(wild.reach(), 50 + 7 + 15 + 1);
+        assert_eq!(ChromaticAberration { red_shift: 0.0, blue_shift: 0.0, softness: 5.0, ..Default::default() }.reach(), 0);
+        let half = ChromaticAberration { offset_x: 4.0, softness: 2.0, ..Default::default() }.scaled(2.0);
+        assert_eq!((half.red_shift, half.blue_shift, half.offset_x, half.softness, half.center), (1.5, -1.5, 2.0, 1.0, [0.5, 0.5]));
     }
 
     #[test]

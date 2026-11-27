@@ -87,6 +87,8 @@ fn shrink_layer(l: &mut Layer, k: u32) {
         LayerContent::Text(t) => t.cache = t.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Shape(sh) => sh.cache = sh.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Smart(so) => shrink_smart(so, k),
+        // Chromatic Aberration's shifts are in document pixels: they shrink with the proxy.
+        LayerContent::Adjustment(photocraft_doc::Adjustment::ChromaticAberration(c)) => *c = c.scaled(k as f32),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }

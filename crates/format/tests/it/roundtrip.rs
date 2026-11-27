@@ -1397,6 +1397,25 @@ fn shading_adjustment_round_trips() {
     assert_eq!(back, doc);
 }
 
+/// PhotoCraft's Chromatic Aberration adjustment layer keeps every setting in `.pcraft` (user
+/// request, 2026-11-21), and a manifest missing its newer keys loads them at their defaults.
+#[test]
+fn chromatic_aberration_adjustment_round_trips() {
+    use photocraft_doc::adjust::ChromaticAberration;
+    let ca = ChromaticAberration { red_shift: -7.5, blue_shift: 12.0, offset_x: 2.5, offset_y: -1.0, center: [0.25, 0.8], falloff: 0.45, softness: 3.0 };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = rich_doc(ColorMode::Rgb, depth);
+        let mut layer = Layer::new("Chromatic Aberration 1", LayerContent::Adjustment(photocraft_doc::Adjustment::ChromaticAberration(ca.clone())));
+        layer.clipped = true;
+        layer.opacity = 0.6;
+        doc.insert_above(None, layer);
+        let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+        assert_eq!(back, doc, "{depth:?}");
+    }
+    let old: photocraft_doc::Adjustment = serde_json::from_str(r#"{"ChromaticAberration":{"red_shift":1.0}}"#).unwrap();
+    assert_eq!(old, photocraft_doc::Adjustment::ChromaticAberration(ChromaticAberration { red_shift: 1.0, ..Default::default() }));
+}
+
 /// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
 /// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
 /// dropping the count would let Save write one frame over a multi-image file. A manifest written

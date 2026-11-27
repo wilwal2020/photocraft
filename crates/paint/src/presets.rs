@@ -11,7 +11,7 @@ use crate::brush::{
 use photocraft_color::BlendMode;
 
 use crate::procedural::{
-    bristle_clump_tip, bristle_tip, chalk_tip, charcoal_tip, dash_tip, dry_wash_edged_tip, dry_wash_square_tip, fine_spatter_tip, gouache_rim_tip,
+    bristle_clump_tip, bristle_tip, chalk_tip, charcoal_tip, dash_tip, dry_wash_edged_tip, dry_wash_soft_side_tip, dry_wash_square_tip, fine_spatter_tip, gouache_rim_tip,
     granulation_tile, grass_tip, leaf_tip, rake_tip, spatter_tip, sponge_tip, star_tip,
 };
 
@@ -337,6 +337,35 @@ fn wet_media(base: &BrushSettings) -> Vec<BrushPreset> {
                 },
                 transfer: transfer(Dynamic::default(), pressure_min(0.3)),
                 texture: Texture { enabled: true, pattern: Pattern::Tile(granulation_tile(256, 4)), depth: 0.8, ..Default::default() },
+                ..base.clone()
+            },
+        ),
+        // Dry Wash Grain with one soft, streaky side (user request, 2026-11-20: "one of the edges
+        // soft, maybe a little textured soft"): a shadow shape with one hard edge and one that
+        // feathers out. The tip turns with the stroke, so the soft side is on the left of the
+        // direction of travel (paint the other way round to put it on the right); it was on the
+        // right first, and faded too quickly ("make the other side the smooth one, and make it
+        // smoother"), so the fade now runs over 1.4 of the half-width. Wet Edges is off:
+        // its curve peaks at half coverage and drew a darker ring partway through the soft fade;
+        // Opacity 0.67 keeps the middle of the wash as dense as Dry Wash Grain's (0.8 at Wet
+        // Edges' 59 %), and the grain is shallower since Wet Edges no longer flattens it.
+        g(
+            "Dry Wash Grain Soft Edge",
+            BrushSettings {
+                size: 60.0,
+                tip: TipShape::Sampled(dry_wash_soft_side_tip(96, 5, 0.06, 1.4)),
+                spacing: 0.04,
+                opacity: 0.67,
+                flow: 0.3,
+                wet_edges: false,
+                shape_dynamics: ShapeDynamics {
+                    enabled: true,
+                    angle: Dynamic { jitter: 0.02, ..Dynamic::controlled(Control::Direction) },
+                    size: Dynamic { jitter: 0.05, ..pressure_min(0.6) },
+                    ..Default::default()
+                },
+                transfer: transfer(Dynamic::default(), pressure_min(0.3)),
+                texture: Texture { enabled: true, pattern: Pattern::Tile(granulation_tile(256, 4)), depth: 0.35, ..Default::default() },
                 ..base.clone()
             },
         ),

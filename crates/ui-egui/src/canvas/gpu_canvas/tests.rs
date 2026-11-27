@@ -167,6 +167,34 @@ fn gpu_budgets_fit_a_discrete_gpus_own_memory() {
     assert_eq!(canvas_budget(ram, Some(G)), MIN_GPU_BUDGET);
 }
 
+/// User report: an 8 GB card's layers got 2.2 GB, and a 4155 × 3000 page that needed 3.4 GB
+/// redrew on the CPU ("GPU Memory Full") however high Memory Usage was set. The canvas's share of
+/// the card is a ceiling its display textures seldom reach: beside what they take, layer pages
+/// may have the rest of three quarters of the card.
+#[test]
+fn layer_pages_may_have_what_the_canvas_leaves_of_three_quarters_of_the_card() {
+    const G: u64 = 1 << 30;
+    const M: u64 = 1 << 20;
+    let (ram, vram) = (Some(24 * G), Some(7891 * M));
+    // The user's machine: 24 GB, an 8 GB laptop RTX 5070, Memory Usage 15000 MB, one 4155 × 3000
+    // canvas of 16-bit float display textures (about 133 MB with its mips).
+    let canvas = canvas_texture_bytes([4155, 3000], 8192, 8);
+    let budget = memory_budget_beside(15000 * M, 0, ram, vram, 0, canvas);
+    assert_eq!(budget, layer_share(7891 * M, canvas));
+    assert!(budget > 5 * G, "{} MB", budget >> 20);
+    assert!(memory_budget(15000 * M, 0, ram, vram, 0) < 3 * G, "it was 3/8 of the card");
+    // Never more than three quarters of the card with the canvas: a quarter stays free.
+    for canvas in [0, canvas, 2 * G, vram_share(7891 * M)] {
+        assert!(memory_budget_beside(64 * G, 0, Some(64 * G), vram, 0, canvas) + canvas <= 7891 * M / 4 * 3);
+    }
+    // GPU Memory set: up to that share too; Memory Usage and a quarter of RAM still cap it.
+    assert_eq!(memory_budget_beside(15000 * M, 0, ram, vram, 12 * G, canvas), layer_share(7891 * M, canvas));
+    assert_eq!(memory_budget_beside(4 * G, 0, ram, vram, 0, canvas), 4 * G);
+    assert_eq!(memory_budget_beside(64 * G, 0, Some(16 * G), vram, 0, canvas), 4 * G);
+    // A canvas that fills the card leaves the floor.
+    assert_eq!(memory_budget_beside(64 * G, 0, Some(64 * G), Some(G), 0, G), MIN_GPU_BUDGET);
+}
+
 /// DXGI reports each adapter's dedicated memory, found by the vendor and device ids wgpu gives.
 #[cfg(windows)]
 #[test]

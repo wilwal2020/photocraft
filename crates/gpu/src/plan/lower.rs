@@ -470,7 +470,44 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
         // Planned by `Planner::amount_mix`, never through `adjust()`.
         Adjustment::Shading(_) | Adjustment::Lighting(_) => (0, p, None),
+        // Planned by `Planner::chromatic` ([`chromatic_program`]); one that changes nothing (no
+        // shift, or no colour channels to shift) is the identity here.
+        Adjustment::ChromaticAberration(_) => (0, p, None),
     }
+}
+
+/// The `fs_adjust` kinds of Chromatic Aberration's passes (`ca_blur`, `ca_px` in compose.wgsl).
+pub const CA_BLUR_KIND: i32 = 21;
+pub const CA_KIND: i32 = 22;
+
+/// The shift pass's parameters and, with softness, the blur's (sigma, radius).
+pub type ChromaticProgram = ([[f32; 4]; 4], Option<(f32, i32)>);
+
+/// Chromatic Aberration's passes (`compose::adjust::chromatic`): the shift's parameters (p0:
+/// centre x, y, centre-to-corner distance, falloff; p1: red and blue shift, offset x, y; p2: the
+/// canvas) and, with softness, the blur's (sigma, radius). `None` when it changes nothing:
+/// no shift, or a document without colour channels.
+pub fn chromatic_program(
+    c: &photocraft_doc::adjust::ChromaticAberration,
+    canvas: photocraft_geom::Rect,
+    mode: photocraft_color::ColorMode,
+) -> Option<ChromaticProgram> {
+    use photocraft_color::ColorMode;
+    use photocraft_compose::adjust::chromatic;
+    let c = c.sanitized();
+    if c.is_identity() || matches!(mode, ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone) || canvas.is_empty() {
+        return None;
+    }
+    let g = chromatic::geometry(&c, canvas);
+    let radius = c.blur_radius();
+    let blur = (radius > 0).then(|| (chromatic::blur_sigma(&c), radius));
+    let p = [
+        [g.cx, g.cy, g.corner, c.falloff],
+        [c.red_shift, c.blue_shift, c.offset_x, c.offset_y],
+        [canvas.x0 as f32, canvas.y0 as f32, canvas.x1 as f32, canvas.y1 as f32],
+        [if blur.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+    ];
+    Some((p, blur))
 }
 
 /// A gradient's colour and alpha as four 4096-entry LUT rows (`lut_tex`).

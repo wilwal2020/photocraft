@@ -188,10 +188,32 @@ pub fn visible_plane(doc: &Document, id: LayerId, source: Source) -> Option<Vec<
     Some(out)
 }
 
-/// The layer a Ctrl+Space click at (x, y) on the canvas measures: the topmost visible one with
-/// pixels there, Lock Selection layers passed through.
+/// The layer a Ctrl+Space click at (x, y) on the canvas measures: of the visible ones with pixels
+/// there, the one that makes up most of what shows (how opaque it is there × how much the layers
+/// above let through; the topmost on a tie), Lock Selection layers passed through.
+///
+/// Not simply the topmost with any pixels (user report, 2026-11-24): masks keep faint leftovers
+/// (1/255 where a soft brush trailed off), so a click on the socks picked the skin layer above
+/// them, and one on the shoes the skirt, wherever those had an invisible smudge.
 pub fn layer_at(doc: &Document, x: i32, y: i32) -> Option<LayerId> {
-    crate::pick_cmds::layers_at(doc, x, y).into_iter().find(|id| !doc.effective_locks(*id).selection && doc.layer(*id).is_some_and(|l| l.artboard().is_none()))
+    let mut through = 1.0f32;
+    let mut best: Option<(LayerId, f32)> = None;
+    for (id, alpha) in crate::pick_cmds::layers_shown_at(doc, x, y) {
+        if doc.effective_locks(id).selection || doc.layer(id).is_none_or(|l| l.artboard().is_some()) {
+            continue;
+        }
+        let a = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 0.0 };
+        let shows = a * through;
+        if shows > best.map_or(0.0, |(_, s)| s) {
+            best = Some((id, shows));
+        }
+        through *= 1.0 - a;
+        // Nothing below can make up more than what is left.
+        if best.is_some_and(|(_, s)| s >= through) {
+            break;
+        }
+    }
+    best.map(|(id, _)| id)
 }
 
 fn load_visible(s: &mut Session, p: &Value) -> Result<Value> {

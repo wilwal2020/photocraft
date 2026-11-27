@@ -168,11 +168,17 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
         let lowest_id = *ids.first().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
         let is_background = doc.is_background(lowest_id);
 
-        let mut solo = doc.clone();
-        solo.layers = ids.iter().filter_map(|id| doc.layer(*id)).filter(|l| l.visible).cloned().collect();
-        if solo.layers.is_empty() {
+        let drawn: Vec<LayerId> = ids.iter().copied().filter(|&id| draws(doc, id)).collect();
+        if drawn.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
+        // Clipped layers of one chain merge into a layer still clipped to their base. Clipped
+        // layers of different chains don't: the result, at the top one's slot, would clip the
+        // lower chain's pixels to the upper chain's base.
+        let clip_to = drawn.first().and_then(|&id| crate::clip_group::base_of(doc, id)).filter(|base| {
+            !ids.contains(base) && drawn.iter().all(|&id| doc.layer(id).is_some_and(|l| l.clipped) && crate::clip_group::base_of(doc, id) == Some(*base))
+        });
+        let solo = merge_source(doc, &ids, clip_to);
 
         if is_background {
             let base = doc.layer(lowest_id).ok_or(EngineError::NoLayer(lowest_id))?.clone();
@@ -198,14 +204,11 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
             let mut merged = Layer::raster(top.name.clone(), fmt);
             merged.locks = top.locks;
             merged.label = top.label;
-            // Clipped layers of one chain merge into a layer still clipped to their base. Clipped
-            // layers of different chains don't: the result, at the top one's slot, would clip the
-            // lower chain's pixels to the upper chain's base.
-            let base = crate::clip_group::base_of(doc, top_id);
-            merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
+            merged.clipped = clip_to.is_some();
             *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
             let mid = merged.id;
-            // Hidden selected layers are discarded, as in Photoshop.
+            // Hidden selected layers are discarded, as in Photoshop (so are those that show nothing:
+            // in a hidden group, or clipped to a hidden base).
             for id in &ids[..ids.len() - 1] {
                 doc.remove(*id);
             }
@@ -216,6 +219,53 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
     })?;
     reselect(s, vec![mid], Some(mid));
     Ok(json!({ "layer": mid.0 }))
+}
+
+/// Whether layer `id` shows on the canvas: it and every group around it are visible, and when it is
+/// clipped, so is its base (a hidden base hides its clipped layers).
+fn draws(doc: &Document, id: LayerId) -> bool {
+    crate::hidden_target::shown(doc, id)
+        && (!doc.layer(id).is_some_and(|l| l.clipped) || crate::clip_group::base_of(doc, id).is_none_or(|base| crate::hidden_target::shown(doc, base)))
+}
+
+/// What Merge Layers composites: the document with only the layers `ids` (and what they contain)
+/// showing, so the result looks as they do on screen. A layer in a hidden group or clipped to a
+/// hidden base adds nothing, and the opacity, mask and blend mode of a group around them still
+/// apply. A layer clipped to a base outside `ids` stays clipped to that base's shape without
+/// drawing the base itself (its fill and effects off, its clipped layers blended one by one), unless the result will be clipped to that
+/// base (`clip_to`): then it is drawn unclipped, so the base's shape isn't applied twice.
+fn merge_source(doc: &Document, ids: &[LayerId], clip_to: Option<LayerId>) -> Document {
+    let walk = doc.walk();
+    let picked: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.clone()).collect();
+    // The picked layers, what they contain, and the groups around them.
+    let mut keep: Vec<LayerId> = walk.iter().filter(|(p, _, _)| picked.iter().any(|q| p.starts_with(q) || q.starts_with(p))).map(|(_, _, l)| l.id).collect();
+    let mut solo = doc.clone();
+    for &id in ids {
+        if !draws(doc, id) || !doc.layer(id).is_some_and(|l| l.clipped) {
+            continue;
+        }
+        let Some(base) = crate::clip_group::base_of(doc, id).filter(|base| !ids.contains(base)) else { continue };
+        if Some(base) == clip_to {
+            if let Some(l) = solo.layer_mut(id) {
+                l.clipped = false;
+            }
+        } else if let Some(b) = solo.layer_mut(base) {
+            // Clipped one by one, the layers keep to the base's alpha × opacity, which ignores its
+            // fill: with fill 0 the base itself draws nothing.
+            b.fill_opacity = 0.0;
+            b.effects.enabled = false;
+            b.advanced.blend_clipped = false;
+            keep.push(base);
+        }
+    }
+    for (_, _, l) in &walk {
+        if !keep.contains(&l.id)
+            && let Some(hidden) = solo.layer_mut(l.id)
+        {
+            hidden.visible = false;
+        }
+    }
+    solo
 }
 
 /// Next visible layer row below the deleted target, then rows above in reverse order.

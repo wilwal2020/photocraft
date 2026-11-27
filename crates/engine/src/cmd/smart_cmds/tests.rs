@@ -1622,3 +1622,34 @@ fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
     s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
     assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
 }
+
+/// User report: "photoshop camera raw filters get lost when you check the visibility". A PSD's
+/// smart object comes with Photoshop's render of its filters; hiding a filter and showing it again
+/// rendered the stack with PhotoCraft's own version of the filter (Camera Raw is approximated).
+/// The pixels before an edit stay the render of the stack as it was, so showing the filter
+/// again gives the file's own render back.
+#[test]
+fn hiding_and_showing_a_filter_again_gives_the_files_own_render_back() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = LayerId(convert(&mut s));
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    // As a PSD brings it: the filter's render made elsewhere, unlike PhotoCraft's own.
+    s.edit("imported render", |doc, _| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
+        let cache = sm.cache.as_mut().unwrap();
+        let fmt = cache.format();
+        cache.fill_rect(Rect::new(0, 0, W, H), &photocraft_raster::from_rgba(&fmt, [0.9, 0.2, 0.6, 1.0]));
+        Ok(())
+    })
+    .unwrap();
+    let theirs = flat(&s);
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": false})).unwrap();
+    assert!(max_diff(&flat(&s), &theirs) > 0.1, "hidden, the filter is off");
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": true})).unwrap();
+    assert_eq!(flat(&s), theirs, "shown again: the file's own render");
+    // The same with the stack's own switch.
+    s.execute("layer.smartFilter.disableSmartFilters", json!({})).unwrap();
+    s.execute("layer.smartFilter.disableSmartFilters", json!({})).unwrap();
+    assert_eq!(flat(&s), theirs);
+}

@@ -818,14 +818,20 @@ impl Surface {
         let bpp = self.format.bytes_per_pixel();
         let mut saved = 0;
         for t in self.tiles.values_mut() {
-            let Ok(bytes) = t.try_bytes() else { continue };
-            let mut px = bytes.chunks_exact(bpp);
-            let Some(p0) = px.next() else { continue };
-            if !px.all(|p| p == p0) {
-                continue;
-            }
-            let p0 = p0.to_vec();
-            drop(bytes);
+            // A compressed tile tells without being expanded (a large file has thousands).
+            let p0 = match t.cell.packed_uniform(bpp) {
+                Some(Some(p0)) => p0,
+                Some(None) => continue,
+                None => {
+                    let Ok(bytes) = t.try_bytes() else { continue };
+                    let mut px = bytes.chunks_exact(bpp);
+                    let Some(p0) = px.next() else { continue };
+                    if !px.all(|p| p == p0) {
+                        continue;
+                    }
+                    p0.to_vec()
+                }
+            };
             let shared = interner.tiles.entry(t.len()).or_default().entry(p0).or_insert_with(|| t.clone());
             if !Arc::ptr_eq(shared, t) {
                 saved += t.len();
@@ -840,6 +846,21 @@ impl Surface {
         let dp = self.default_pixel.as_ref();
         let bpp = dp.len();
         self.tiles.retain(|_, t| t.bytes().chunks_exact(bpp).any(|px| px != dp));
+    }
+
+    /// [`Surface::prune`] for the tiles that touch `r` only: a producer that finishes a band of
+    /// tiles drops its empty ones while they are still in memory, instead of reading every tile
+    /// again at the end (by then idle ones may be compressed or on disk).
+    pub fn prune_rect(&mut self, r: Rect) {
+        if r.is_empty() {
+            return;
+        }
+        let dp = self.default_pixel.as_ref();
+        let bpp = dp.len();
+        let empty: Vec<TileCoord> = r.tiles().filter(|c| self.tiles.get(c).is_some_and(|t| !t.bytes().chunks_exact(bpp).any(|px| px != dp))).collect();
+        for c in empty {
+            self.tiles.remove(&c);
+        }
     }
 
     /// A [`PruneCursor`] for [`Surface::prune_batch`], which drops the same tiles as [`Surface::prune`]

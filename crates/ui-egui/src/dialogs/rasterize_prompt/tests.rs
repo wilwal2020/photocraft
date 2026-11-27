@@ -436,3 +436,47 @@ fn painting_a_fill_layer_with_a_mask_paints_the_mask() {
     let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
     assert!(mask.value(30, 20) < 0.5, "black painted into the mask: {}", mask.value(30, 20));
 }
+
+/// Color panel › Black or White When Brushing Enters a Mask (user request, 2026-11-25): the
+/// stroke that moves the target to a Solid Color's mask paints pure black or white, whichever the
+/// mask's saved colour is nearer (50 % grey: white); off, the saved grey stays. A click on the
+/// mask thumbnail leaves the saved colours alone either way.
+#[test]
+fn brushing_into_a_fill_layers_mask_can_snap_its_colours_to_black_or_white() {
+    let grey = |v: f32| [v, v, v, 1.0];
+    for (saved, on, expect) in [
+        (0.3, true, Some(([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]))),
+        (0.5, true, Some(([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]))),
+        (127.0 / 255.0, true, Some(([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]))),
+        (0.8, true, Some(([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]))),
+        (0.3, false, None),
+    ] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 120, "height": 80})).unwrap();
+        app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
+        // The mask's saved pair: a grey.
+        app.ui.mask_target = true;
+        app.sync_mask_targets();
+        app.session.tools.foreground = grey(saved);
+        app.session.tools.background = grey(0.6);
+        app.ui.mask_target = false;
+        app.sync_mask_targets();
+        app.ui.color_panel.mask_entry_black_white = on;
+        app.ui.tool = Tool::Brush;
+        click(&mut app, 30.0, 20.0);
+        assert!(app.ui.mask_target, "the mask is targeted");
+        let now = (app.session.tools.foreground, app.session.tools.background);
+        assert_eq!(now, expect.unwrap_or((grey(saved), grey(0.6))), "saved {saved}, option {on}");
+    }
+}
+
+#[test]
+fn black_or_white_takes_the_nearer_and_its_opposite() {
+    let mut t = photocraft_engine::ToolState::default();
+    for (fg, white) in [([0.2, 0.2, 0.2, 1.0], false), ([0.5, 0.5, 0.5, 1.0], true), ([0.9, 0.1, 0.1, 1.0], false), ([f32::NAN, 0.0, 0.0, 1.0], true)] {
+        t.foreground = fg;
+        black_or_white(&mut t);
+        let (w, b) = ([1.0; 4], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!((t.foreground, t.background), if white { (w, b) } else { (b, w) }, "{fg:?}");
+    }
+}

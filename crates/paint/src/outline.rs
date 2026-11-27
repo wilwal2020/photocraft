@@ -29,7 +29,11 @@ pub fn tip_outline(b: &BrushSettings, full: bool) -> Option<Vec<Vec<[f32; 2]>>> 
         TipShape::Round => {
             // The normal cursor is the 50 % contour, matching the plain-circle path (#2744):
             // the soft tip falls off as (1 - t²)⁴, not the old smoothstep midpoint.
-            let f = if full { 1.0 } else { crate::half_coverage_radius(1.0, b.hardness) };
+            // At the tip's own radius: the edge is a pixel or so wide whatever the size, so the
+            // contour worked out at radius 1 sat a tenth inside a hard tip (user report,
+            // 2026-11-25: on a rotated canvas the cursor was smaller than the dab).
+            let r = b.size / 2.0;
+            let f = if full { 1.0 } else { (crate::half_coverage_radius(r, b.hardness) / r).clamp(0.0, 1.0) };
             let ring = (0..ELLIPSE_SEGMENTS)
                 .map(|i| {
                     let t = std::f32::consts::TAU * i as f32 / ELLIPSE_SEGMENTS as f32;
@@ -288,7 +292,7 @@ mod tests {
             let b = BrushSettings { size: 40.0, angle: 33.0, roundness: 0.4, hardness, ..Default::default() };
             let normal = tip_outline(&b, false).expect("a rotated round tip traces");
             let full = tip_outline(&b, true).expect("a rotated round tip traces");
-            assert!((max_radius(&normal) - crate::half_coverage_radius(1.0, hardness)).abs() < 1e-4, "hardness {hardness}");
+            assert!((max_radius(&normal) - crate::half_coverage_radius(20.0, hardness) / 20.0).abs() < 1e-4, "hardness {hardness}");
             assert!((max_radius(&full) - 1.0).abs() < 1e-4, "hardness {hardness}");
         }
     }

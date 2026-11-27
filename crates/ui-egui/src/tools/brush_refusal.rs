@@ -84,8 +84,14 @@ fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
 }
 
 /// Opens the alert: ordinary dialog state, listed by `ui.inspect` and closed by `ui.dialog.confirm`.
+/// Not again while the same alert is open: one press reaches the tool up to three times through
+/// the canvas (on the press, as the drag starts, and as a click on the release), and each refused
+/// one opened its own alert (user report: the hidden-layer alert came up three times).
 pub fn prompt(app: &mut PhotocraftApp, message: &str) {
-    app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    let open = app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(serde_json::Value::as_str) == Some(message));
+    if !open {
+        app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
 }
 
 #[cfg(test)]

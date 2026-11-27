@@ -108,6 +108,9 @@ pub(super) fn edit_filters(s: &mut Session, p: &Value, label: &str, f: impl FnOn
         s,
         label,
         move |doc, _, ctx| {
+            // The pixels as they are stay the render of the stack as it was (a hidden filter
+            // shown again gives Photoshop's render back, not PhotoCraft's of it).
+            super::rendering::remember_rendered(doc, smart(doc, id)?);
             *smart_mut(doc, id)? = edited;
             refresh_or_fail_in(doc, id, ctx)
         },

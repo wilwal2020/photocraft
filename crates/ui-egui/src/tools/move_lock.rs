@@ -6,10 +6,8 @@
 //! (`photocraft_engine::float_cmds::locked_for_float`) when there is one. As in Photoshop the
 //! message comes when the pointer starts to drag; a plain click says nothing. OK closes it.
 
-use serde_json::json;
-
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 pub const MESSAGE: &str = "Could not use the move tool because the layer is locked.";
 
@@ -42,7 +40,8 @@ pub fn blocked(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifie
     crate::canvas::selection_drag_kind(app, tool, p, mods) == Some(true) && mods.command && pixels_locked()
 }
 
-/// Opens the message. The dialog is ordinary UI state (`ui.dialog.confirm` closes it).
+/// Opens the message, unless it is already up. The dialog is ordinary UI state
+/// (`ui.dialog.confirm` closes it).
 pub fn prompt(app: &mut PhotocraftApp) {
-    app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(MESSAGE)}).as_object().cloned().unwrap_or_default());
+    crate::brush_refusal::prompt(app, tl!(MESSAGE));
 }

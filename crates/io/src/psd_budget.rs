@@ -3,6 +3,12 @@
 //!
 //! Reserve the sum of all possible retained tiles and the largest workspace, without credit
 //! for pruning or tile sharing. Reserving before any worker starts makes scheduling irrelevant.
+//!
+//! While idle tiles are kept compressed ([`photocraft_raster::spill::set_compression`], on in
+//! the app) the tile pixels are counted at the size they are expected to compress to, judged by
+//! how well the file's own encoding shrank each layer, plus the layers decoding at once
+//! uncompressed. A colouring PSD of hundreds of full-canvas layers of flat colour and line art
+//! needs a tenth of its pixels' size or less; that is how Photoshop opens it with little RAM.
 
 use photocraft_geom::TILE_SIZE;
 use photocraft_psd::{
@@ -31,6 +37,9 @@ pub struct PsdMemoryEstimate {
     /// does not bound them by physical RAM; the merged planes, pattern decodes and the workspace
     /// are ordinary memory.
     pub tile_bytes: u64,
+    /// Tile pixels uncompressed: `tile_bytes` before compression credit. Equal to it while idle
+    /// tiles are not compressed.
+    pub raw_tile_bytes: u64,
 }
 
 #[derive(Default)]
@@ -38,6 +47,51 @@ struct ImportBudget {
     retained: u64,
     workspace: u64,
     tiles: u64,
+    /// Expected compressed size of `tiles`, and each surface's uncompressed tile bytes.
+    packed: u64,
+    surfaces: Vec<u64>,
+}
+
+/// How a surface's tiles are expected to compress, from how well the file encoded the same
+/// pixels: `(expected, raw)` byte weights summed over its stored channels.
+#[derive(Clone, Copy, Default)]
+struct Shrink {
+    expected: u64,
+    raw: u64,
+}
+
+impl Shrink {
+    /// Uncompressed: no evidence it shrinks (raw or unknown channel data, merged images).
+    const NONE: Shrink = Shrink { expected: 1, raw: 1 };
+
+    /// From the channels of one surface, each `plane` bytes decoded. LZ4 on whole interleaved
+    /// tiles does about as well as PackBits rows on flat colour and line art and far better on
+    /// empty areas; allow 1.5x the RLE size for planes where PackBits wins (one flat channel
+    /// beside noisy ones). zlib packs 2 to 4 times tighter than LZ4, so its size counts 4x.
+    fn of<'a>(channels: impl Iterator<Item = &'a photocraft_psd::layer::ChannelData>, plane: u64) -> Shrink {
+        use photocraft_psd::Compression;
+        let mut s = Shrink::default();
+        for ch in channels {
+            let len = ch.encoded_len();
+            let expected = match ch.compression {
+                Some(Compression::Rle) => len.saturating_mul(3) / 2,
+                Some(Compression::Zip | Compression::ZipPrediction) => len.saturating_mul(4),
+                _ => plane,
+            };
+            s.expected = s.expected.saturating_add(expected.min(plane));
+            s.raw = s.raw.saturating_add(plane);
+        }
+        // Tiles that don't shrink to 3/4 are kept uncompressed (spill's PACK_RATIO).
+        if s.raw == 0 || s.expected.saturating_mul(4) > s.raw.saturating_mul(3) { Shrink::NONE } else { s }
+    }
+
+    /// The expected compressed size of `bytes` of tiles.
+    fn apply(self, bytes: u64) -> u64 {
+        if self.raw == 0 {
+            return bytes;
+        }
+        (u128::from(bytes) * u128::from(self.expected)).div_ceil(u128::from(self.raw)).min(u128::from(bytes)) as u64
+    }
 }
 
 #[cfg(any(test, feature = "testgen"))]
@@ -142,7 +196,7 @@ impl ImportBudget {
         self.retained.checked_add(self.workspace).ok_or_else(overflow)
     }
 
-    fn surface(&mut self, rect: Rect, channels: u64, sample: u64) -> Result<(), IoError> {
+    fn surface(&mut self, rect: Rect, channels: u64, sample: u64, shrink: Shrink) -> Result<(), IoError> {
         if rect.is_empty() {
             return Ok(());
         }
@@ -152,7 +206,19 @@ impl ImportBudget {
         let nx = (i64::from(rect.right) - 1).div_euclid(tile) - i64::from(rect.left).div_euclid(tile) + 1;
         let ny = (i64::from(rect.bottom) - 1).div_euclid(tile) - i64::from(rect.top).div_euclid(tile) + 1;
         let bytes = mul(mul(mul(nx as u64, ny as u64)?, (TILE_SIZE as u64).pow(2))?, mul(channels, sample)?)?;
+        self.packed = self.packed.saturating_add(shrink.apply(bytes));
+        self.surfaces.push(bytes);
         self.tile(bytes)
+    }
+
+    /// Tile memory once idle tiles are compressed: the expected compressed size, plus the
+    /// surfaces decoding at once (the import decodes a layer per core, largest first), which are
+    /// whole until the residency sweep compresses them. Never more than the pixels themselves.
+    fn compressed_tiles(&mut self) -> u64 {
+        let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
+        self.surfaces.sort_unstable_by(|a, b| b.cmp(a));
+        let decoding = self.surfaces.iter().take(workers).fold(0u64, |n, &b| n.saturating_add(b));
+        self.packed.saturating_add(decoding).min(self.tiles)
     }
 
     /// Retained tile pixels: spillable to the scratch disk.
@@ -183,7 +249,8 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
             if !rec.rect.is_empty() && rec.channels.iter().any(|c| c.id >= 0 || c.id == -1) {
                 let (w, hh) = rec.rect.size()?;
                 let pixels = mul(w as u64, hh as u64)?;
-                budget.surface(rec.rect, cc + 1, sample)?;
+                let shrink = Shrink::of(rec.channels.iter().filter(|c| c.id >= 0 || c.id == -1), mul(pixels, sample)?);
+                budget.surface(rec.rect, cc + 1, sample, shrink)?;
                 // Whole ZIP planes + band planes + interleave + temporary float pixels.
                 // Counting a full layer for each band buffer also covers a single very wide row.
                 let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?.checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?).ok_or_else(overflow)?;
@@ -196,7 +263,8 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                         continue;
                     }
                     let (w, hh) = rect.size()?;
-                    budget.surface(rect, 1, sample)?;
+                    let shrink = Shrink::of(rec.channel(id).into_iter(), mul(mul(w as u64, hh as u64)?, sample)?);
+                    budget.surface(rect, 1, sample, shrink)?;
                     // The layer's ZIP decoders have been dropped before record_mask runs.
                     let pixels = mul(w as u64, hh as u64)?;
                     budget.scratch(mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?);
@@ -210,9 +278,9 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         let canvas = Rect::from_xywh(0, 0, h.width, h.height);
         // Multichannel and extra channels become individual grayscale surfaces. Reserving
         // their tiles separately matters for images smaller than a tile.
-        budget.surface(canvas, channels.max(cc + 1), sample.max(1))?;
+        budget.surface(canvas, channels.max(cc + 1), sample.max(1), Shrink::NONE)?;
         // A fallback surface can coexist with the layers when none produced usable pixels.
-        budget.surface(canvas, cc + 1, sample.max(1))?;
+        budget.surface(canvas, cc + 1, sample.max(1), Shrink::NONE)?;
         // The merged planes stay alive while layers are built.
         let merged = mul(mul(h.row_bytes() as u64, u64::from(h.height))?, channels)?;
         budget.retain(merged)?;
@@ -229,7 +297,7 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
             let sample = u64::from(p.depth.div_ceil(8));
             let color = if p.mode == 2 { 3 } else { photocraft_psd::patterns::mode_channels(p.mode) as u64 };
             let alpha = u64::from(p.planes > photocraft_psd::patterns::mode_channels(p.mode));
-            budget.surface(Rect::from_xywh(0, 0, p.width, p.height), color + alpha, sample)?;
+            budget.surface(Rect::from_xywh(0, 0, p.width, p.height), color + alpha, sample, Shrink::NONE)?;
             // The block parser returns all planes together. Count them as retained so
             // previous converted patterns and later blocks cannot reuse this allowance.
             budget.retain(p.decoded_bytes)?;
@@ -242,8 +310,44 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
     let (charge, tile_charge) = test_estimate_charge_value();
     budget.retain(charge)?;
     budget.tile(tile_charge)?;
+    budget.packed = budget.packed.saturating_add(tile_charge);
+    let raw_tile_bytes = budget.tiles;
+    if compressing() {
+        let saved = budget.tiles.saturating_sub(budget.compressed_tiles());
+        budget.retained = budget.retained.saturating_sub(saved);
+        budget.tiles = budget.tiles.saturating_sub(saved);
+    }
     let total_bytes = budget.required()?;
-    Ok(PsdMemoryEstimate { retained_bytes: budget.retained, workspace_bytes: budget.workspace, total_bytes, tile_bytes: budget.tiles })
+    Ok(PsdMemoryEstimate { retained_bytes: budget.retained, workspace_bytes: budget.workspace, total_bytes, tile_bytes: budget.tiles, raw_tile_bytes })
+}
+
+/// Whether idle tiles are being kept compressed, so the estimate may count them compressed.
+fn compressing() -> bool {
+    #[cfg(any(test, feature = "testgen"))]
+    if let Some(on) = TEST_COMPRESSING.with(std::cell::Cell::get) {
+        return on;
+    }
+    photocraft_raster::spill::compression_budget() > 0
+}
+
+#[cfg(any(test, feature = "testgen"))]
+thread_local! {
+    /// [`with_test_compression`]'s override of [`compressing`] on this thread.
+    static TEST_COMPRESSING: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with estimates made on this thread treating idle tiles as compressed (`on`) or not,
+/// whatever the process-wide setting, so a test needn't change it for other tests.
+#[cfg(any(test, feature = "testgen"))]
+pub fn with_test_compression<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_COMPRESSING.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_COMPRESSING.with(|c| c.replace(Some(on))));
+    f()
 }
 
 /// Checks that `file`'s estimate does not exceed `limit`.

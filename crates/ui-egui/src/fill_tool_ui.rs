@@ -157,7 +157,15 @@ pub struct DragFill {
     gesture: String,
     last: [f64; 2],
     wand: bool,
+    /// The pointer has gone [`DRAG_START`] screen points from the press: the drag fills on.
+    armed: bool,
 }
+
+/// How far (screen points) the pointer must go from a click fill's or wand click's press before
+/// the drag fills (selects) the areas it passes over too (user report: the wand "sometimes goes
+/// outside of lines": a pen tap that slid a pixel or two across a thin line added the area on the
+/// other side). At least Preferences › Tools › Pen Drag Distance.
+const DRAG_START: f64 = 8.0;
 
 /// A fresh gesture id for a press.
 fn gesture_id(kind: &str) -> String {
@@ -314,7 +322,7 @@ pub fn press(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     p["y"] = json!(y.floor());
     p["gesture"] = json!(gesture);
     p["coalesce"] = json!(gesture);
-    app.fill_drag = Some(DragFill { gesture, last: [x.floor(), y.floor()], wand: false });
+    app.fill_drag = Some(DragFill { gesture, last: [x.floor(), y.floor()], wand: false, armed: false });
     run(app, p, tl!("Nothing to fill there"));
     true
 }
@@ -330,7 +338,7 @@ pub fn wand_press(app: &mut PhotocraftApp, x: f64, y: f64, mode: &str) {
         let gesture = gesture_id("wand");
         p["gesture"] = json!(gesture);
         p["coalesce"] = json!(gesture);
-        app.fill_drag = Some(DragFill { gesture, last: [x.floor(), y.floor()], wand: true });
+        app.fill_drag = Some(DragFill { gesture, last: [x.floor(), y.floor()], wand: true, armed: false });
     } else {
         app.fill_drag = None;
     }
@@ -362,6 +370,16 @@ pub fn drag_to(app: &mut PhotocraftApp, x: f64, y: f64) {
     let (from, to) = (d.last, [x.floor(), y.floor()]);
     if from == to {
         return;
+    }
+    if !d.armed {
+        let start = DRAG_START.max(f64::from(app.session.prefs().tools.pen_drag_distance.min(photocraft_engine::prefs::MAX_PEN_DRAG_DISTANCE)));
+        let zoom = f64::from(app.point_zoom()).max(1e-6);
+        if (x - from[0] - 0.5).hypot(y - from[1] - 0.5) * zoom < start {
+            return;
+        }
+        if let Some(d) = app.fill_drag.as_mut() {
+            d.armed = true;
+        }
     }
     // Every 3 px along the way (a quick drag mustn't skip a small area), at most 64 steps.
     let len = (to[0] - from[0]).hypot(to[1] - from[1]);
@@ -419,12 +437,12 @@ pub fn draw_drag(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXfor
         SubTool::Unfilled => {
             let Some(st) = app.session.active() else { return };
             let size = [st.doc.size.width, st.doc.size.height];
-            let doc_rect = xf.doc_rect(st.doc.bounds());
+            let quad = xf.doc_quad(st.doc.bounds());
             let colour = stroke_colour(painter.ctx());
             let diameter = app.ui.tool_options.fill_tool.current().size;
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
             trail.feed(points, diameter);
-            trail.draw(painter, doc_rect, xf.flip, colour);
+            trail.draw(painter, quad, colour);
         }
     }
 }

@@ -284,15 +284,20 @@ struct StandIn<'a> {
 impl<'a> StandIn<'a> {
     /// Ready to render `rect` (effect maps built up front, as the RGB compositor does).
     fn prepare(&self, rect: Rect) {
+        let rect = rect.inflate(crate::adjust::chromatic::stack_reach(&self.doc.layers));
         self.cx.set_fx_clip(rect);
         crate::prepare_effects(&self.doc.layers, rect, &self.cx, |f| crate::in_blend_space(false, false, f));
     }
 
     fn tile(&self, rect: Rect) -> Buffer {
+        // Over the pixels Chromatic Aberration reads around the tile too (`render::with_apron`).
+        let apron = crate::adjust::chromatic::stack_reach(&self.doc.layers);
         crate::in_blend_space(false, false, || {
-            let mut b = Buffer::transparent(rect);
-            crate::composite_stack_at(&self.doc.layers, &mut b, &self.cx, advanced::Scope::ROOT);
-            b
+            crate::render::with_apron(rect, apron, |r| {
+                let mut b = Buffer::transparent(r);
+                crate::composite_stack_at(&self.doc.layers, &mut b, &self.cx, advanced::Scope::ROOT);
+                b
+            })
         })
     }
 }

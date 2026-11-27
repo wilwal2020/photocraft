@@ -470,6 +470,38 @@ fn adjustment_fill_changes_the_special_blend_modes() {
     }
 }
 
+/// User report: Fill acted like Opacity on a clipped layer. A Hard Mix Color Fill at 15% Fill
+/// clipped to a painted layer was composited at 15% coverage, where Photoshop puts Fill inside the
+/// blend of the special eight (its saved composites of the user's files differed on up to a sixth
+/// of the page). Clipped onto an opaque base, the layer now blends as it does unclipped over it.
+#[test]
+fn a_clipped_layers_fill_goes_inside_the_special_blend() {
+    let render_with = |clipped: bool, mode: BlendMode, fill: f32, opacity: f32| {
+        let mut d = Document::new("clip", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let mut base = Layer::raster("base", d.pixel_format());
+        base.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &[0.25, 0.5, 0.75, 1.0]);
+        d.layers.push(base);
+        let mut top = Layer::new("tone", LayerContent::Fill(Fill::Solid(Color::rgb(0.9, 0.4, 0.1))));
+        top.blend = mode;
+        top.fill_opacity = fill;
+        top.opacity = opacity;
+        top.clipped = clipped;
+        d.layers.push(top);
+        px(&d, 0, 0)
+    };
+    for mode in [BlendMode::HardMix, BlendMode::ColorDodge, BlendMode::LinearBurn, BlendMode::Difference, BlendMode::VividLight] {
+        for (fill, opacity) in [(0.15, 1.0), (0.25, 0.4), (1.0, 0.5)] {
+            let (clip, plain) = (render_with(true, mode, fill, opacity), render_with(false, mode, fill, opacity));
+            assert!(close4(clip, plain), "{mode:?} fill {fill} opacity {opacity}: clipped {clip:?}, unclipped {plain:?}");
+        }
+    }
+    // Hard Mix at low Fill is not Hard Mix at low Opacity: that was the bug.
+    let (fill, opacity) = (render_with(true, BlendMode::HardMix, 0.15, 1.0), render_with(true, BlendMode::HardMix, 1.0, 0.15));
+    assert!(!close4(fill, opacity), "{fill:?} vs {opacity:?}");
+    // Normal keeps Fill as coverage, as before.
+    assert!(close4(render_with(true, BlendMode::Normal, 0.3, 1.0), render_with(true, BlendMode::Normal, 1.0, 0.3)));
+}
+
 /// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
 fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
     let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);

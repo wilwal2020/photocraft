@@ -38,6 +38,12 @@ fn write_pattern_band(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, 
     );
 }
 
+/// `apron` rounded up to whole tiles: how far a cell's pages reach past it when its chunks are
+/// drawn grown by `apron`.
+pub(crate) fn page_apron(apron: i32) -> i32 {
+    if apron <= 0 { 0 } else { apron.saturating_add(TILE_SIZE - 1) / TILE_SIZE * TILE_SIZE }
+}
+
 impl Compositor {
     /// Bring the pages of `cell` that `plan` samples up to date and resolve its effect maps.
     #[allow(clippy::too_many_arguments)]
@@ -52,9 +58,12 @@ impl Compositor {
         cell: Cell,
         fr: &FrameRes,
         first_pass: usize,
+        apron: i32,
         stats: &mut Stats,
     ) -> Bound {
-        let cr = cell_rect(cell, self.page);
+        // The cell's chunks are drawn over themselves grown by `apron`: its pages cover that too,
+        // in whole tiles (pages are uploaded tile by tile).
+        let cr = cell_rect(cell, self.page).inflate(page_apron(apron));
         let mut views: Vec<(Option<ResidentRef>, Option<ResidentRef>)> = Vec::with_capacity(plan.passes.len());
         let mut keys: Vec<ResKey> = Vec::new();
         let mut maps = Vec::with_capacity(plan.passes.len());
@@ -109,6 +118,8 @@ impl Compositor {
         cell: Cell,
         fr: &FrameRes,
         chunks: &[Rect],
+        // How far each of `chunks` reaches past the pixels handed to `sink` (its middle).
+        apron: i32,
         checkpoint: Option<plan::Checkpoint>,
         stats: &mut Stats,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
@@ -122,14 +133,15 @@ impl Compositor {
         let first_pass = checkpoint
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
-        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, apron, stats);
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {
             return;
         }
 
-        // Chunk pool.
-        while self.pool.len() < plan.slots as usize {
+        // Chunk pool, and one more texture the middle of a grown chunk is copied into.
+        let crop = (apron > 0).then_some(plan.slots as usize);
+        while self.pool.len() < plan.slots as usize + usize::from(crop.is_some()) {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("pc_compose_chunk"),
                 size: wgpu::Extent3d { width: self.chunk, height: self.chunk, depth_or_array_layers: 1 },
@@ -327,7 +339,24 @@ impl Compositor {
                 self.prefix.capture(device, encoder, *c, src, cp);
             }
             let (t, v) = &self.pool[plan.root as usize];
-            sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
+            match crop.and_then(|k| self.pool.get(k)) {
+                Some((ct, cv)) => {
+                    let inner = c.inflate(-apron);
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: t,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: apron as u32, y: apron as u32, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        ct.as_image_copy(),
+                        wgpu::Extent3d { width: inner.width(), height: inner.height(), depth_or_array_layers: 1 },
+                    );
+                    self.recorded += 1;
+                    sink(encoder, ChunkOut { rect: inner, texture: ct, view: cv });
+                }
+                None => sink(encoder, ChunkOut { rect: *c, texture: t, view: v }),
+            }
         }
     }
 

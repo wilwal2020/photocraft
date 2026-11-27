@@ -68,6 +68,13 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "nudgeBundlePauseMs" {
         return "Nudge Bundle Pause (ms)".into();
     }
+    // Tools: a pen on a panel drags nothing until it has moved this far; lists stop with the pen.
+    if key == "penDragDistance" {
+        return "Pen Drag Distance (points)".into();
+    }
+    if key == "glideAfterDrag" {
+        return "Lists Glide On After a Drag".into();
+    }
     // Performance: presentation without vsync (#1343); like the other graphics settings, it
     // takes effect when the window next opens.
     // File Handling: Photoshop's wording (#8080).

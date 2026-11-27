@@ -101,6 +101,19 @@ pub fn needed(app: &PhotocraftApp) -> Option<(Kind, photocraft_doc::LayerId)> {
     Some((kind, id))
 }
 
+/// Color panel › Black or White When Brushing Enters a Mask (user request, 2026-11-25): the
+/// mask's foreground becomes white or black, whichever its saved colour is nearer (a 50 % grey,
+/// 127 or 128, counts as white), and its background the other, so the stroke hides or reveals
+/// fully even after a grey was picked for the mask.
+pub(crate) fn black_or_white(tools: &mut photocraft_engine::ToolState) {
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    let [r, g, b, _] = tools.foreground;
+    let grey = photocraft_color::convert::rgb_to_gray([r, g, b]);
+    let white = !grey.is_finite() || grey >= 0.49;
+    (tools.foreground, tools.background) = if white { (WHITE, BLACK) } else { (BLACK, WHITE) };
+}
+
 /// A tool's pointer press: when it would paint a layer that must be rasterized first, park it
 /// behind the prompt, or drop it (the Remove tool on a type layer), and return true (the tool
 /// must not see the press).
@@ -113,10 +126,14 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
     // stroke with a Solid Color's colour square targeted gave the warning). The tool sees the
     // press, now on the mask.
     if kind == Kind::Fill && app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.mask.is_some()) {
+        let entered = !app.session.tools.mask_targeted;
         app.ui.mask_target = true;
         app.ui.second_mask_target = false;
         app.ui.vector_mask_target = false;
         app.sync_mask_targets();
+        if entered && app.ui.color_panel.mask_entry_black_white && app.session.tools.mask_targeted {
+            black_or_white(&mut app.session.tools);
+        }
         return false;
     }
     // The reference's Remove tool ignores a type layer: no prompt and no stroke (#12553).

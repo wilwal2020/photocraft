@@ -84,6 +84,26 @@ fn a_canvas_click_measures_the_layer_under_it() {
     assert_eq!((at(&s, 30, 30), at(&s, 2, 2)), (1.0, 0.0));
 }
 
+/// A layer that is all but invisible at the click doesn't take it from the one that shows (user
+/// report, 2026-11-24: a mask's faint leftover over the socks made a click there pick the skin);
+/// the layer that makes up most of the pixel does, the upper one on a tie.
+#[test]
+fn a_canvas_click_measures_the_layer_that_shows_most_there() {
+    let (mut s, a, top) = covered();
+    let pick = |s: &mut Session| load(s, json!({"x": 7.5, "y": 7.5}))["layer"].as_u64();
+    for (opacity, expect) in [(1.0 / 255.0, a), (0.02, a), (0.4, a), (0.5, top), (0.6, top)] {
+        s.execute("layer.setProps", json!({"layer": top.0, "opacity": opacity})).unwrap();
+        assert_eq!(pick(&mut s), Some(expect.0), "Top at {opacity}");
+    }
+    // Where Top is the only layer with pixels over the Background, a faint Top still loses to it,
+    // and on its own (Background hidden) it is picked.
+    s.execute("layer.setProps", json!({"layer": top.0, "opacity": 0.02})).unwrap();
+    let bg = load(&mut s, json!({"x": 30, "y": 30}))["layer"].as_u64().unwrap();
+    assert_ne!(load(&mut s, json!({"x": 13, "y": 13}))["layer"].as_u64(), Some(top.0));
+    s.execute("layer.setProps", json!({"layer": bg, "visible": false})).unwrap();
+    assert_eq!(load(&mut s, json!({"x": 13, "y": 13}))["layer"].as_u64(), Some(top.0));
+}
+
 #[test]
 fn operations_combine_with_the_selection() {
     let (mut s, a, top) = covered();

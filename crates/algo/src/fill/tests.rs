@@ -363,7 +363,13 @@ fn click_region_whole_page(img: &[[u8; 4]], area: Rect, seed: (i32, i32), o: &Fi
     let gap = finite(o.close_gap, MAX_GAP);
     let mut spot = vec![false; free.len()];
     flood(&free, &mut spot, w, h, si, true)?;
-    let mut fill = if gap < 1.0 { spot } else { seed_fill(&spot, &free, w, h, gap, [o.image_border; 4], si, None, 0.0)? };
+    let mut fill = if gap < 1.0 {
+        spot
+    } else {
+        let mut fill = seed_fill(&spot, w, h, gap, [o.image_border; 4], si, None)?;
+        fill_pockets(&mut fill, &free, &strength, margin, w, h, gap, 0.0);
+        fill
+    };
     scale(&mut fill, &strength, &free, w, h, o);
     to_region(&fill, w, h, area, o.anti_alias, Some(&free))
 }
@@ -894,4 +900,151 @@ fn pockets_the_hatching_shuts_in_fill() {
     assert!(filled(&r, 12, 11) && filled(&r, 22, 12), "the slits between the strokes");
     assert!(!filled(&r, 15, 27), "the highlight stays");
     assert!(!filled(&r, 39, 21), "the pocket beside the next area stays");
+}
+
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+/// The user's settings when the specks were reported: a wide colour margin and a small gap.
+fn wide_margin() -> FillOptions {
+    FillOptions { tolerance: 35.0, close_gap: 2.0, anti_alias: false, ..FillOptions::default() }
+}
+
+/// User report: colouring a white area beside grey screentone left specks of colour outside the
+/// line. Light specks in the tone (within the colour margin of the paper) were taken for pockets
+/// the lines shut in the fill, being small and beside nothing but the fill. They lie beside it,
+/// not in it, and what shuts them in is shading, not ink.
+#[test]
+fn a_light_speck_in_shading_across_a_line_stays() {
+    let grey = [127, 127, 127, 255];
+    let mut img = Img::new(60, 40, grey);
+    // Paper on the left, a 2 px line, grey tone on the right with lighter specks beside the line.
+    for y in 0..40 {
+        for x in 0..30 {
+            img.set(x, y, WHITE);
+        }
+        img.set(30, y, INK);
+        img.set(31, y, INK);
+    }
+    let specks = [(32usize, 10usize, 3usize, 2usize), (33, 20, 2, 4), (32, 30, 1, 1)];
+    for (x0, y0, sw, sh) in specks {
+        for y in y0..y0 + sh {
+            for x in x0..x0 + sw {
+                img.set(x, y, [175, 175, 175, 255]);
+            }
+        }
+    }
+    for scaling in [Scaling::Darkest, Scaling::Round] {
+        let r = img.click(10, 20, FillOptions { scale: 1.0, scaling, ..wide_margin() }).unwrap();
+        assert!(filled(&r, 29, 20), "the paper fills up to the line");
+        for y in 0..40 {
+            for x in 32..60 {
+                assert!(!filled(&r, x, y), "({x}, {y}) is outside the line ({scaling:?})");
+            }
+        }
+    }
+}
+
+/// The same across a line whose far side is another flat, nearly the filled colour: the line's
+/// soft far edge is within the margin and the flat beyond it just isn't, so that edge was a
+/// pocket, and recolouring a flat put colour on the far side of its lines.
+#[test]
+fn the_far_edge_of_a_line_beside_another_flat_stays() {
+    let beige = [252, 222, 161, 255];
+    let mut img = Img::new(60, 40, WHITE);
+    for y in 0..40 {
+        for x in 0..30 {
+            img.set(x, y, beige);
+        }
+        img.set(30, y, INK);
+        // The line's soft edge on the white side.
+        img.set(31, y, [190, 190, 190, 255]);
+    }
+    let r = img.click(10, 20, FillOptions { scale: 1.0, scaling: Scaling::Round, ..wide_margin() }).unwrap();
+    assert!(filled(&r, 29, 20));
+    for y in 0..40 {
+        for x in 32..60 {
+            assert!(!filled(&r, x, y), "({x}, {y}) is the next flat's");
+        }
+    }
+}
+
+/// A patch of cross-hatching drawn inside the area is an island in the fill: all its cells fill,
+/// the middle ones too (only the cells at its rim did). The same patch joined to the outline is
+/// part of the outline, and its cells are left for Paint Unfilled Area.
+#[test]
+fn a_patch_of_cross_hatching_inside_the_area_fills_whole() {
+    let grid = |img: &mut Img, x0: usize, y0: usize| {
+        for k in 0..=3 {
+            for t in 0..=12 {
+                img.set(x0 + 4 * k, y0 + t, INK);
+                img.set(x0 + t, y0 + 4 * k, INK);
+            }
+        }
+    };
+    let mut img = Img::new(60, 40, WHITE);
+    img.outline(1, 1, 58, 38);
+    grid(&mut img, 10, 10);
+    let o = FillOptions { close_gap: 4.0, anti_alias: false, ..FillOptions::default() };
+    let r = img.click(5, 5, o).unwrap();
+    for (cx, cy) in [(12, 12), (16, 16), (20, 20), (16, 12), (12, 20)] {
+        assert!(filled(&r, cx, cy), "the cell at ({cx}, {cy})");
+    }
+    // Joined to the outline by a stroke: no island.
+    for x in 1..10 {
+        img.set(x, 16, INK);
+    }
+    let r = img.click(5, 5, o).unwrap();
+    assert!(!filled(&r, 16, 16), "the middle cell of a patch that is part of the outline");
+}
+
+/// A box with ink from wall to wall across its middle: `dot(x, y)` says where, for `x` in
+/// 2..=57 and `y` in 18..=26.
+fn box_with_band(dot: impl Fn(usize, usize) -> bool) -> Img {
+    let mut img = Img::new(60, 44, WHITE);
+    img.outline(1, 1, 58, 42);
+    for y in 18..=26 {
+        for x in 2..=57 {
+            if dot(x, y) {
+                img.set(x, y, INK);
+            }
+        }
+    }
+    img
+}
+
+/// User report (testing): with Close Gap on, a fill stopped part-way through a field of
+/// screentone dots set closer than the gap. The dots were lines, and the paper between them gaps
+/// to close, so two parts of one area met at a seam somewhere in the field. A field of dots is
+/// paper with specks in it: the fill runs through to the other side, round the dots.
+#[test]
+fn a_fill_runs_through_a_field_of_tone_dots() {
+    // 2 px dots every 4 px, three rows of them, each row shifted.
+    let img = box_with_band(|x, y| (y - 18) % 4 < 2 && (x + 2 * ((y - 18) / 4)) % 4 < 2);
+    let o = FillOptions { close_gap: 4.0, anti_alias: false, ..FillOptions::default() };
+    let r = img.click(30, 8, o).unwrap();
+    for y in 2..42 {
+        for x in 2..58 {
+            let paper = img.px[y * 60 + x] == WHITE;
+            assert_eq!(filled(&r, x as i32, y as i32), paper, "({x}, {y}): all the paper in the box, and no dot");
+        }
+    }
+    // Ignore Thin Lines takes the dots for paper, and fills them with the rest.
+    let r = img.click(30, 8, FillOptions { thin_lines: 3.0, ..o }).unwrap();
+    assert!(filled(&r, 30, 36), "through the field with thin lines ignored too");
+}
+
+/// A single row of dots is a dotted line: Close Gap closes it as it closes a broken line, and
+/// the fill stays on its side.
+#[test]
+fn a_dotted_line_still_closes() {
+    let img = box_with_band(|x, y| (20..22).contains(&y) && x % 4 < 2);
+    let o = FillOptions { close_gap: 4.0, anti_alias: false, ..FillOptions::default() };
+    let r = img.click(30, 8, o).unwrap();
+    assert!(filled(&r, 30, 15));
+    for y in 24..42 {
+        for x in 2..58 {
+            assert!(!filled(&r, x, y), "({x}, {y}) is past the dotted line");
+        }
+    }
+    assert!(img.click(30, 8, FillOptions { close_gap: 0.0, ..o }).is_some_and(|r| filled(&r, 30, 36)), "open without Close Gap");
 }

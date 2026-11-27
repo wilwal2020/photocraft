@@ -2233,6 +2233,41 @@ fn autosave_runs_for_dirty_documents() {
     assert_eq!(saved.lock().unwrap().len(), 2, "autosave off");
 }
 
+/// An idle window gets no frames, so autosave must ask for one at its due time: a document left
+/// unsaved and untouched was never written to crash recovery and was lost in a system crash.
+#[test]
+fn autosave_wakes_an_idle_window_when_due() {
+    let saved: Arc<Mutex<u32>> = Arc::default();
+    let s2 = saved.clone();
+    let services = crate::Services {
+        autosave: Some(Box::new(move |_: &Arc<photocraft_doc::Document>, _: u64, _: Option<&str>| {
+            *s2.lock().unwrap() += 1;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "fileHandling.autosaveMinutes", "value": 3})).unwrap();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(super::save::autosave(&mut app), None, "a clean document needs no wake-up");
+
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let wait = super::save::autosave(&mut app).expect("unsaved changes wake the window for autosave");
+    assert!(wait > std::time::Duration::from_secs(170) && wait <= std::time::Duration::from_secs(180), "{wait:?}");
+
+    // Overdue: the wake-up asks for a frame now, and that frame writes the recovery file.
+    app.prefs_rt.next_autosave_ms = crate::gpu_canvas::now_ms() - 1.0;
+    tick(&mut app, &ctx);
+    assert_eq!(*saved.lock().unwrap(), 1);
+    assert_eq!(super::save::autosave(&mut app), None, "nothing left to autosave");
+
+    app.run("prefs.set", json!({"path": "fileHandling.autosave", "value": false})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    assert_eq!(super::save::autosave(&mut app), None, "autosave off");
+}
+
 #[test]
 fn recovered_documents_adopt_their_entries_until_saved_or_closed() {
     type Log = Arc<Mutex<Vec<String>>>;

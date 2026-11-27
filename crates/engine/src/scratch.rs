@@ -140,7 +140,14 @@ pub(crate) fn configure(prefs: &Preferences) {
         let limit = prefs.scratch_disks.size_limit_mb;
         photocraft_raster::spill::set_size_cap((limit > 0).then(|| u64::from(limit).saturating_mul(1 << 20)));
         let _ = photocraft_raster::spill::configure(dir.as_deref(), tiles);
+        // Idle tiles beyond the same budget are kept LZ4-compressed in memory first, as
+        // Photoshop keeps its tiles: a colouring PSD's flat fills and line art shrink 10 to 100
+        // times, so large documents fit in RAM without a scratch disk (or one with no room).
+        photocraft_raster::spill::set_compression(tiles);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (prefs, budget);
+    {
+        let _ = prefs;
+        photocraft_raster::spill::set_compression(usize::try_from(budget.tile_bytes).unwrap_or(usize::MAX));
+    }
 }

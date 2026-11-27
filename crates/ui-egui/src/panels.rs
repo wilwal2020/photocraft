@@ -94,6 +94,8 @@ pub(crate) const ADJUSTMENT_MENU: [&[(&str, &str)]; 5] = [
         ("layer.newAdjustmentLayer.posterize", "Posterize…"),
         ("layer.newAdjustmentLayer.threshold", "Threshold…"),
         ("layer.newAdjustmentLayer.gradientMap", "Gradient Map…"),
+        // PhotoCraft's own lens look: red and blue fringes shifted against green.
+        ("layer.newAdjustmentLayer.chromaticAberration", "Chromatic Aberration…"),
     ],
     &[("layer.newFillLayer.solidColor", "Solid Color…"), ("layer.newFillLayer.gradient", "Gradient…"), ("layer.newFillLayer.pattern", "Pattern…")],
 ];
@@ -104,7 +106,9 @@ use color::COLOR_FIELD_MIN_H;
 use color::color_field_height;
 #[cfg(test)]
 pub(crate) use color::strip_arrows;
-pub(crate) use color::{body_scroll_bar, color_field, color_field_fill_id, field_chips, field_hsva, offer_color_field_fill, srgb_hsva};
+pub(crate) use color::{alert_rows, body_scroll_bar, color_field, color_field_fill_id, field_chips, field_hsva, offer_color_field_fill, other_chips_height, srgb_hsva};
+#[cfg(test)]
+pub(crate) use color::other_chips_rects;
 #[cfg(test)]
 pub(crate) use color::{hsva_color32, hsva_srgb, srgb_bytes};
 #[cfg(test)]
@@ -2332,7 +2336,7 @@ mod adjustment_menu_tests {
         }
         assert_eq!(listed.len(), wanted.len(), "{listed:?}");
         // The colour group also holds PhotoCraft's own Shading.
-        assert_eq!(super::ADJUSTMENT_MENU.map(|g| g.len()), [3, 3, 10, 4, 3]);
+        assert_eq!(super::ADJUSTMENT_MENU.map(|g| g.len()), [3, 3, 10, 5, 3]);
     }
 }
 

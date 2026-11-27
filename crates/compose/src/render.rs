@@ -61,23 +61,30 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
     if let Some(buf) = native_lab::render_lab(doc, rect, tile) {
         return buf;
     }
-    cx.set_fx_clip(rect);
+    // Chromatic Aberration reads around each pixel: every tile composites over the pixels within
+    // its reach too and keeps its middle, so tiles agree at their seams.
+    let apron = adjust::chromatic::stack_reach(&doc.layers);
+    cx.set_fx_clip(rect.inflate(apron));
     if i64::from(rect.width()) <= i64::from(tile) && i64::from(rect.height()) <= i64::from(tile) {
         return photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut buf = multichannel::backdrop(doc, rect);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut buf, cx, advanced::Scope::ROOT));
-            buf
+            with_apron(rect, apron, |r| {
+                let mut buf = multichannel::backdrop(doc, r);
+                in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut buf, cx, advanced::Scope::ROOT));
+                buf
+            })
         });
     }
     // Effect maps are built once, here, before any tile needs them (#276).
-    prepare_effects(&doc.layers, rect, cx, |f| {
+    prepare_effects(&doc.layers, rect.inflate(apron), cx, |f| {
         photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
     });
     let run = |t: Rect| {
         photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut b = multichannel::backdrop(doc, t);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT));
-            b
+            with_apron(t, apron, |r| {
+                let mut b = multichannel::backdrop(doc, r);
+                in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT));
+                b
+            })
         })
     };
     // Tiles are written straight into the output, one row of tiles (a band) at a time, so the
@@ -147,6 +154,34 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         }
     }
     drop(bands);
+    out
+}
+
+/// `render(rect.inflate(apron))` cropped back to `rect`: the composite of `rect` when something
+/// in it reads up to `apron` pixels around (Chromatic Aberration, [`adjust::chromatic::stack_reach`]).
+/// Just `render(rect)` without an apron.
+pub(crate) fn with_apron(rect: Rect, apron: i32, render: impl FnOnce(Rect) -> Buffer) -> Buffer {
+    if apron <= 0 || rect.is_empty() {
+        return render(rect);
+    }
+    let padded = rect.inflate(apron);
+    // A padded rect too large to hold renders unpadded rather than not at all.
+    if u64::from(padded.width()) * u64::from(padded.height()) > MAX_RENDER_PIXELS {
+        return render(rect);
+    }
+    let big = render(padded);
+    if big.rect != padded {
+        return big;
+    }
+    let mut out = Buffer::transparent(rect);
+    let (w, pw) = (rect.width() as usize, padded.width() as usize);
+    let (dx, dy) = ((rect.x0 - padded.x0) as usize, (rect.y0 - padded.y0) as usize);
+    for (row, dst) in out.px.chunks_exact_mut(w).enumerate() {
+        let start = (dy + row) * pw + dx;
+        if let Some(src) = big.px.get(start..start + w) {
+            dst.copy_from_slice(src);
+        }
+    }
     out
 }
 
@@ -331,16 +366,22 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
     if u64::from(rect.width()) * u64::from(rect.height()) > MAX_RENDER_PIXELS {
         return Buffer::transparent(Rect::EMPTY);
     }
-    let mut buf = Buffer::transparent(rect);
     let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
+    let apron = adjust::chromatic::stack_reach(std::slice::from_ref(layer));
+    with_apron(rect, apron, |r| render_layer_bare(layer, r, rect, &patterns))
+}
+
+/// [`render_layer`] over `r`, without an apron; `canvas` is the rect asked for.
+fn render_layer_bare(layer: &Layer, r: Rect, canvas: Rect, patterns: &pattern::PreparedPatterns) -> Buffer {
+    let mut buf = Buffer::transparent(r);
     composite_stack_at(
         std::slice::from_ref(layer),
         &mut buf,
         &Ctx {
-            canvas: rect,
+            canvas,
             transfer: adjust::Transfer::Srgb,
             light: photocraft_doc::GlobalLight::default(),
-            patterns: &patterns,
+            patterns,
             mode: photocraft_color::ColorMode::Rgb,
             depth: photocraft_color::SampleType::F32,
             vector_masks: RenderVectorMasks::default(),
@@ -374,10 +415,13 @@ pub fn render_layer_in(doc: &Document, layer: &Layer, rect: Rect) -> Buffer {
     let lab = doc.mode == photocraft_color::ColorMode::Lab;
     let hdr = doc.depth == photocraft_color::SampleType::F32;
     let cmyk = cmyk_space(doc);
+    let apron = adjust::chromatic::stack_reach(std::slice::from_ref(layer));
     photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-        let mut buf = Buffer::transparent(rect);
-        in_blend_space(lab, hdr, || composite_stack_at(std::slice::from_ref(layer), &mut buf, &cx, advanced::Scope::ROOT));
-        buf
+        with_apron(rect, apron, |r| {
+            let mut buf = Buffer::transparent(r);
+            in_blend_space(lab, hdr, || composite_stack_at(std::slice::from_ref(layer), &mut buf, &cx, advanced::Scope::ROOT));
+            buf
+        })
     })
 }
 

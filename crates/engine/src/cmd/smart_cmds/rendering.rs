@@ -322,14 +322,8 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let bytes = display_source(sm, &bytes);
-    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
-    if photocraft_io::svg::is_svg(&bytes) {
-        let mut h = blake3::Hasher::new();
-        h.update(&placed_key);
-        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
-        placed_key = *h.finalize().as_bytes();
-    }
+    let canvas = doc.bounds();
+    let placed_key = placed_stage_key(doc, sm, &bytes);
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
@@ -376,6 +370,43 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
         Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
         None => cur.surface,
     }))
+}
+
+/// The key of the placed stage of `sm` (its display source `bytes`) in `doc`.
+fn placed_stage_key(doc: &Document, sm: &SmartObject, bytes: &[u8]) -> stack_cache::StageKey {
+    let mut placed_key = stack_cache::placed_key(bytes, doc.pixel_format(), sm, doc.bounds());
+    if photocraft_io::svg::is_svg(bytes) {
+        let mut h = blake3::Hasher::new();
+        h.update(&placed_key);
+        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+        placed_key = *h.finalize().as_bytes();
+    }
+    placed_key
+}
+
+/// Keep smart object `sm`'s pixels as they are (its cache) as the result of its filter stack as
+/// it is, so a render of this state again gives them back instead of rendering the stack anew.
+/// Called before a filter edit re-renders: Photoshop's own render of a filter PhotoCraft only
+/// approximates (Camera Raw) comes back when the edit is undone by another one (user report:
+/// "photoshop camera raw filters get lost when you check the visibility": hiding the filter and
+/// showing it again rendered the stack with PhotoCraft's Camera Raw instead of Photoshop's).
+/// Nothing is kept for a stack with an enabled filter mask (its result mixes in the placed
+/// source after the last stage) or without visible filters.
+pub(super) fn remember_rendered(doc: &Document, sm: &SmartObject) {
+    let Some(cache) = sm.cache.as_ref() else { return };
+    if sm.filter_mask.as_ref().is_some_and(|m| m.enabled) {
+        return;
+    }
+    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
+    if filters.is_empty() {
+        return;
+    }
+    let Some((_, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return };
+    let bytes = display_source(sm, &bytes);
+    let key = filters.iter().fold(placed_stage_key(doc, sm, &bytes), |key, f| stack_cache::filter_key(&key, f));
+    // What shows wins over an earlier render of the same stack (PhotoCraft's own, say).
+    let extent = doc.bounds().union(&cache.content_bounds());
+    stack_cache::put(key, &stack_cache::Stage { surface: cache.clone(), extent });
 }
 
 /// Bytes held by rendered smart filter stages.

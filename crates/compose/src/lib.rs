@@ -175,3 +175,5 @@ mod tests;
 
 #[cfg(test)]
 mod advanced_tests;
+#[cfg(test)]
+mod chromatic_tests;

@@ -31,12 +31,17 @@ impl PhotocraftApp {
         let undone =
             matches!(id, "edit.undo" | "edit.stepBackward").then(|| self.session.active().and_then(|st| st.history.undo_label().map(str::to_string))).flatten();
         let generative = (id == "edit.generativeFill").then(|| params.clone());
+        let prompt = matches!(id, "edit.generativeFill" | "paint.remove").then(|| params.get("prompt").and_then(Value::as_str).map(str::to_string)).flatten();
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
         }
         if let (Ok(_), Some(p)) = (&result, &generative) {
             crate::dialog_memory::used_generative_fill(self, p);
+        }
+        // Generative Fill's and the Remove tool's prompt go to the recent list (user request).
+        if let (Ok(_), Some(prompt)) = (&result, &prompt) {
+            crate::dialog_memory::remember_prompt(self, prompt);
         }
         if result.is_ok() && undone.is_some() {
             crate::fill_tool_ui::after_undo(self, undone.as_deref());

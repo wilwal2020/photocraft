@@ -11,6 +11,13 @@ use crate::PhotocraftApp;
 const PREVIEW: &str = "colorRangePreview";
 const MODEL: &str = "generativeFillModel";
 const COLOR_RANGE: &str = "colorRange";
+/// Generative prompts last used, newest first (Edit › Generative Fill and the Remove tool share
+/// them; user request, 2026-11-25).
+const PROMPTS: &str = "recentPrompts";
+/// How many prompts the list keeps.
+pub const RECENT_PROMPTS: usize = 5;
+/// Longest prompt kept (the fields take 500 characters).
+const PROMPT_MAX_CHARS: usize = 500;
 /// The Home screen's Recent view: "grid" or "list" (user request, 2026-11-11: it was forgotten
 /// at every launch).
 const HOME_RECENT_VIEW: &str = "homeRecentView";
@@ -41,6 +48,42 @@ pub fn used_generative_fill(app: &mut PhotocraftApp, params: &Value) {
     if generative_models().contains(&model) && generative_model(app) != model {
         set(app, MODEL, json!(model));
     }
+}
+
+/// The prompts last used (Generative Fill, the Remove tool), newest first, at most
+/// [`RECENT_PROMPTS`]. Whatever else a settings file holds there is left out.
+pub fn recent_prompts(app: &PhotocraftApp) -> Vec<String> {
+    let saved = app.session.prefs().dialog_choices.get(PROMPTS).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    for p in saved.iter().filter_map(Value::as_str).map(clean_prompt) {
+        if !p.is_empty() && !out.contains(&p) && out.len() < RECENT_PROMPTS {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// A prompt as the list keeps it: trimmed, on one line, at most [`PROMPT_MAX_CHARS`].
+fn clean_prompt(p: &str) -> String {
+    let one_line: String = p.chars().map(|c| if c.is_control() { ' ' } else { c }).take(PROMPT_MAX_CHARS).collect();
+    one_line.trim().to_string()
+}
+
+/// After a generative run with `prompt`: put it first in the recent list (moved up if it was
+/// there already). An empty prompt (the model's own guess) is not kept.
+pub fn remember_prompt(app: &mut PhotocraftApp, prompt: &str) {
+    let p = clean_prompt(prompt);
+    if p.is_empty() {
+        return;
+    }
+    let mut list = recent_prompts(app);
+    if list.first() == Some(&p) {
+        return;
+    }
+    list.retain(|q| *q != p);
+    list.insert(0, p);
+    list.truncate(RECENT_PROMPTS);
+    set(app, PROMPTS, json!(list));
 }
 
 fn set(app: &mut PhotocraftApp, key: &str, v: Value) {
@@ -217,5 +260,28 @@ mod tests {
         assert_eq!(generative_model(&c), "diffusion");
         used_generative_fill(&mut c, &json!({"model": "nope"}));
         assert_eq!(generative_model(&c), "diffusion");
+    }
+
+    /// The prompts last used come back newest first, five at most, each once; empty ones aren't
+    /// kept, and a settings file's junk is left out (user request, 2026-11-25).
+    #[test]
+    fn recent_prompts_keep_the_last_five_newest_first() {
+        let mut a = app();
+        assert!(recent_prompts(&a).is_empty());
+        for p in ["a cat", "  ", "a dog", "sky
+blue", "a cat", "grass", "sea", "rocks", "trees"] {
+            remember_prompt(&mut a, p);
+        }
+        assert_eq!(recent_prompts(&a), ["trees", "rocks", "sea", "grass", "a cat"]);
+        // A run through the app keeps its prompt too.
+        let _ = a.run("edit.generativeFill", json!({"prompt": "a red door", "model": "lama"}));
+        remember_prompt(&mut a, "sky
+blue");
+        assert_eq!(recent_prompts(&a)[0], "sky blue");
+        let mut b = app();
+        b.session.prefs.edit(|p| p.dialog_choices = json!({"recentPrompts": [3, "", "x", "x", "y", null, "z", "w", "v", "u"]}));
+        assert_eq!(recent_prompts(&b), ["x", "y", "z", "w", "v"]);
+        b.session.prefs.edit(|p| p.dialog_choices = json!({"recentPrompts": "nope"}));
+        assert!(recent_prompts(&b).is_empty());
     }
 }

@@ -467,15 +467,21 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
 }
 
 /// How far beyond an edit's damage rect the composite can change: layer effects (shadows, glows,
-/// strokes, …) on the edited layer and on the groups around it reach that far.
+/// strokes, …) on the edited layer and on the groups around it reach that far, and Chromatic
+/// Aberration layers move colour that far too (all of them added up: one reads what another
+/// shifted).
 pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
+    layer_effect_reach(layers).saturating_add(photocraft_compose::adjust::chromatic::stack_reach(layers))
+}
+
+fn layer_effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
     layers
         .iter()
         .filter(|l| l.visible)
         .map(|l| {
             let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
             let inner = match &l.content {
-                LayerContent::Group(g) => effect_reach(&g.children),
+                LayerContent::Group(g) => layer_effect_reach(&g.children),
                 _ => 0,
             };
             own + inner
@@ -663,7 +669,9 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     }
     let Some(st) = app.session.documents().get(idx) else { return };
     let pixels = st.memory_bytes() as u64;
-    let budget = crate::gpu_canvas::memory_budget(allowance.0, pixels, crate::gpu_canvas::physical_memory(), gpu.video_memory(), allowance.1);
+    // Beside what the display textures really take, not their whole share of the card.
+    let canvas = gpu.display_bytes(&st.doc);
+    let budget = crate::gpu_canvas::memory_budget_beside(allowance.0, pixels, crate::gpu_canvas::physical_memory(), gpu.video_memory(), allowance.1, canvas);
     // Less while other programs hold the card's memory (`gpu_memory`).
     let budget = budget.min(app.gpu_memory.cap().unwrap_or(u64::MAX));
     gpu.set_memory_budget(budget);

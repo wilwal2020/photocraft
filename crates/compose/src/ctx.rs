@@ -337,6 +337,14 @@ impl<'a> Ctx<'a> {
     }
 
     pub(crate) fn apply_adjustment(&self, adj: &photocraft_doc::Adjustment, buf: &mut Buffer) {
+        // Chromatic Aberration samples around each pixel, on the document's canvas; a document
+        // without colour channels has no fringes to show.
+        if let photocraft_doc::Adjustment::ChromaticAberration(c) = adj {
+            if !matches!(self.mode, photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Duotone) {
+                adjust::chromatic::apply_chromatic(c, buf, self.canvas);
+            }
+            return;
+        }
         if let photocraft_doc::Adjustment::Levels { space, .. } | photocraft_doc::Adjustment::Curves { space, .. } = adj
             && !matches!(adj, photocraft_doc::Adjustment::Levels { space: photocraft_doc::adjust::ToneSpace::Rgb, .. } if self.depth == photocraft_color::SampleType::F32)
             && let Some((_, luts)) = self.tone_luts.iter().find(|(a, _)| std::ptr::eq(*a, adj))

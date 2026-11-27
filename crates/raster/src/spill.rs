@@ -1,7 +1,10 @@
-//! Scratch disk: tile pixels beyond a memory budget move to a file and come back on access.
+//! Tile residency: pixels beyond a memory budget are compressed in memory or moved to a scratch
+//! file, and come back on access.
 //!
-//! Every [`Tile`](crate::Tile) keeps its bytes in a [`Cell`]: resident (`Some`) or on disk
-//! (`None`, with its [`Extent`] in the scratch file). Readers take the cell's read lock, so a
+//! Every [`Tile`](crate::Tile) keeps its bytes in a [`Cell`]: resident (`Some`), compressed in
+//! memory (`None`, with an LZ4 copy: [`set_compression`]) or on disk (`None`, with its
+//! [`Extent`] in the scratch file). Compressed idle tiles are what lets a document of many
+//! full-canvas layers of flat colour and line art fit in RAM: they shrink 10 to 100 times. Readers take the cell's read lock, so a
 //! tile in use is never evicted; a spilled tile is read back (LZ4 + CRC-checked) by whoever
 //! touches it first.
 //!
@@ -46,12 +49,25 @@ pub(crate) struct Cell {
     slot: Mutex<Option<(Arc<ScratchFile>, Extent)>>,
     /// Touched since the clock hand last passed.
     referenced: AtomicBool,
+    /// An LZ4 copy held in memory while `data` is `None` ([`set_compression`]): idle tiles cost
+    /// their compressed size, and come back without disk I/O.
+    packed: Mutex<Option<Box<[u8]>>>,
+    /// The pixels did not compress well enough to keep packed; cleared when they change.
+    incompressible: AtomicBool,
 }
 
 impl Cell {
     pub(crate) fn new(bytes: Vec<u8>) -> Arc<Cell> {
         let len = bytes.len();
-        let cell = Arc::new(Cell { data: RwLock::new(Some(bytes)), len, error: Mutex::new(None), slot: Mutex::new(None), referenced: AtomicBool::new(true) });
+        let cell = Arc::new(Cell {
+            data: RwLock::new(Some(bytes)),
+            len,
+            error: Mutex::new(None),
+            slot: Mutex::new(None),
+            referenced: AtomicBool::new(true),
+            packed: Mutex::new(None),
+            incompressible: AtomicBool::new(false),
+        });
         M.live.fetch_add(1, Ordering::Relaxed);
         M.resident.fetch_add(len, Ordering::Relaxed);
         M.register(&cell);
@@ -130,6 +146,7 @@ impl Cell {
         if let Some((file, extent)) = self.slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
             file.free(extent);
         }
+        self.incompressible.store(false, Ordering::Relaxed);
         if loaded {
             // Evicting here could only pick other tiles (this one is locked), so it is safe, and
             // a long run of writes to spilled tiles must not outgrow the budget.
@@ -143,6 +160,30 @@ impl Cell {
         if w.is_some() {
             return Ok(());
         }
+        let mut packed = self.packed.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(p) = packed.as_deref() {
+            match unpack(p, self.len) {
+                Ok(bytes) => {
+                    M.packed.fetch_sub(p.len(), Ordering::Relaxed);
+                    M.packed_tiles.fetch_sub(1, Ordering::Relaxed);
+                    *packed = None;
+                    drop(packed);
+                    *w = Some(bytes);
+                    self.set_error(None);
+                    M.resident.fetch_add(self.len, Ordering::Relaxed);
+                    M.unpacks.fetch_add(1, Ordering::Relaxed);
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Only damaged memory gets here; keep the copy, as a failed disk read does.
+                    let error = format!("a compressed tile could not be expanded ({e}); editing and saving are blocked");
+                    self.set_error(Some(error.clone()));
+                    M.error(error.clone());
+                    return Err(error);
+                }
+            }
+        }
+        drop(packed);
         let slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let bytes = match slot {
             Some((file, extent)) => {
@@ -171,10 +212,27 @@ impl Cell {
         Ok(())
     }
 
-    /// Move this tile to disk if nobody is using it. Returns the bytes freed.
+    /// Move this tile to disk if nobody is using it: its pixels, or its compressed copy
+    /// ([`Cell::pack`]). Returns the bytes of memory freed.
     fn evict(&self, file: &Arc<ScratchFile>) -> Result<usize, String> {
         let Ok(mut w) = self.data.try_write() else { return Ok(0) };
-        let Some(bytes) = w.as_ref() else { return Ok(0) };
+        let Some(bytes) = w.as_ref() else {
+            let mut packed = self.packed.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(p) = packed.as_deref() else { return Ok(0) };
+            let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if slot.is_none() {
+                // Already LZ4: written as is, so it reloads like any spilled tile.
+                let extent = file.write(p).map_err(|e| format!("scratch write to {} failed: {e}", file.path().display()))?;
+                M.written.fetch_add(p.len() as u64, Ordering::Relaxed);
+                *slot = Some((file.clone(), extent));
+            }
+            let n = p.len();
+            *packed = None;
+            M.packed.fetch_sub(n, Ordering::Relaxed);
+            M.packed_tiles.fetch_sub(1, Ordering::Relaxed);
+            M.evictions.fetch_add(1, Ordering::Relaxed);
+            return Ok(n);
+        };
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             let packed = lz4_flex::block::compress(bytes);
@@ -188,6 +246,187 @@ impl Cell {
         M.evictions.fetch_add(1, Ordering::Relaxed);
         Ok(self.len)
     }
+
+    /// Compress this tile in memory if nobody is using it and it shrinks to [`PACK_RATIO`] or
+    /// less. Returns the bytes of memory freed (0 when it stays as it is).
+    fn pack(&self) -> usize {
+        if self.incompressible.load(Ordering::Relaxed) {
+            return 0;
+        }
+        let Ok(mut w) = self.data.try_write() else { return 0 };
+        let Some(bytes) = w.as_ref() else { return 0 };
+        let Some(packed) = compress(bytes) else {
+            self.incompressible.store(true, Ordering::Relaxed);
+            return 0;
+        };
+        let n = packed.len();
+        *self.packed.lock().unwrap_or_else(PoisonError::into_inner) = Some(packed);
+        M.packed.fetch_add(n, Ordering::Relaxed);
+        M.packed_tiles.fetch_add(1, Ordering::Relaxed);
+        M.packs.fetch_add(1, Ordering::Relaxed);
+        // Freed, not pooled: the point is to give the memory back.
+        *w = None;
+        M.resident.fetch_sub(self.len, Ordering::Relaxed);
+        self.len.saturating_sub(n)
+    }
+
+    /// What the compressed copy says about the tile repeating one short byte pattern (a tile of
+    /// one pixel value), without expanding it: `Some(Some(pattern))` it does (the shortest
+    /// pattern), `Some(None)` it holds more than that, `None` don't know (resident, on disk, or
+    /// an unusual block): look at the pixels. LZ4 codes a run as one match whose length takes a
+    /// byte per 255, so one value compresses to about `len / 255` bytes; a larger copy holds at
+    /// least two values, and a small one is read sequence by sequence.
+    pub(crate) fn packed_repeat(&self) -> Option<Option<Vec<u8>>> {
+        let d = self.data.try_read().ok()?;
+        if d.is_some() {
+            return None;
+        }
+        let packed = self.packed.lock().unwrap_or_else(PoisonError::into_inner);
+        let p = packed.as_deref()?;
+        if p.len() > self.len / 192 + 64 {
+            return Some(None);
+        }
+        lz4_repeat(p, self.len).map(Some)
+    }
+
+    /// The one `bpp`-byte pixel value a compressed tile holds throughout (`Some(Some(pixel))`),
+    /// or `Some(None)` when it holds more; answered from the compressed copy, which stays as it
+    /// is (a small copy the sequence reader can't settle is expanded into a scratch buffer, not
+    /// back into the tile). `None` while the tile is not compressed in memory: read its pixels.
+    pub(crate) fn packed_uniform(&self, bpp: usize) -> Option<Option<Vec<u8>>> {
+        if bpp == 0 {
+            return None;
+        }
+        if let Some(known) = self.packed_repeat() {
+            // A pattern that doesn't divide the pixel (two alternating pixels) is not one value.
+            return Some(known.and_then(|pattern| (!pattern.is_empty() && bpp.is_multiple_of(pattern.len())).then(|| pattern.repeat(bpp / pattern.len()))));
+        }
+        // Resident, on disk, or a small copy the sequence reader couldn't settle.
+        let d = self.data.try_read().ok()?;
+        if d.is_some() {
+            return None;
+        }
+        let packed = self.packed.lock().unwrap_or_else(PoisonError::into_inner);
+        let p = packed.as_deref()?;
+        PACK_BUF.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            buf.resize(self.len, 0);
+            let n = lz4_flex::block::decompress_into(p, &mut buf).ok()?;
+            let bytes = buf.get(..n).filter(|_| n == self.len)?;
+            let mut px = bytes.chunks_exact(bpp);
+            let p0 = px.next()?;
+            Some(px.all(|q| q == p0).then(|| p0.to_vec()))
+        })
+    }
+
+    /// The tile is compressed in memory and holds more than one repeated pattern.
+    #[cfg(test)]
+    fn surely_mixed(&self) -> bool {
+        self.packed_repeat() == Some(None)
+    }
+
+    /// Whether the clock may take this cell: resident pixels it can compress or spill, or a
+    /// compressed copy it can spill.
+    fn evictable(&self, packing: bool, spilling: bool) -> bool {
+        match self.data.try_read() {
+            Ok(d) if d.is_some() => spilling || (packing && !self.incompressible.load(Ordering::Relaxed)),
+            Ok(_) => spilling && self.packed.try_lock().is_ok_and(|p| p.is_some()),
+            Err(_) => false,
+        }
+    }
+}
+
+/// When the LZ4 block `block` decodes to `len` bytes that repeat one pattern throughout, the
+/// shortest such pattern; read from its sequences without expanding it. `None` when it doesn't,
+/// or when the block is shaped in a way this doesn't follow (a caller then expands it).
+fn lz4_repeat(block: &[u8], len: usize) -> Option<Vec<u8>> {
+    /// A length nibble of 15 continues in bytes until one is below 255.
+    fn extend(block: &[u8], i: &mut usize, mut n: usize) -> Option<usize> {
+        if n == 15 {
+            loop {
+                let b = *block.get(*i)?;
+                *i += 1;
+                n = n.checked_add(usize::from(b))?;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+        Some(n)
+    }
+    // The output before the first match (at most 64 bytes), then the period it repeats with.
+    let mut head: Vec<u8> = Vec::new();
+    let mut period = 0usize;
+    let mut out = 0usize;
+    let mut i = 0usize;
+    loop {
+        let token = *block.get(i)?;
+        i += 1;
+        let lit = extend(block, &mut i, usize::from(token >> 4))?;
+        for &b in block.get(i..i.checked_add(lit)?)? {
+            if period == 0 {
+                if head.len() >= 64 {
+                    return None;
+                }
+                head.push(b);
+            } else if head.get(out % period) != Some(&b) {
+                return None;
+            }
+            out += 1;
+        }
+        i += lit;
+        if i == block.len() {
+            break;
+        }
+        let offset = usize::from(u16::from_le_bytes([*block.get(i)?, *block.get(i + 1)?]));
+        i += 2;
+        if offset == 0 || offset > out {
+            return None;
+        }
+        let matched = extend(block, &mut i, usize::from(token & 15))?.checked_add(4)?;
+        if period == 0 {
+            // The match repeats the last `offset` bytes: the output so far must already repeat them.
+            if (offset..head.len()).any(|k| head.get(k) != head.get(k - offset)) {
+                return None;
+            }
+            period = offset;
+            head.truncate(period);
+        } else if !offset.is_multiple_of(period) {
+            return None;
+        }
+        out = out.checked_add(matched)?;
+        if out > len {
+            return None;
+        }
+    }
+    if out != len || period == 0 {
+        return None;
+    }
+    // Shortest period: a uniform 4-byte pixel may have been matched 8 bytes back.
+    let q = (1..=period).find(|&q| period.is_multiple_of(q) && (q..period).all(|k| head.get(k) == head.get(k - q)))?;
+    head.truncate(q);
+    Some(head)
+}
+
+/// A tile is kept compressed in memory only when LZ4 shrinks it to this fraction (3/4) or less:
+/// beyond it the saving does not pay for expanding it on every touch.
+const PACK_RATIO: (usize, usize) = (3, 4);
+
+thread_local! {
+    /// LZ4 output buffer reused by [`compress`], so packing allocates only the bytes it keeps.
+    static PACK_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `bytes` LZ4-compressed into an exact-size buffer, or `None` when that is more than
+/// [`PACK_RATIO`] of them.
+fn compress(bytes: &[u8]) -> Option<Box<[u8]>> {
+    PACK_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        buf.resize(lz4_flex::block::get_maximum_output_size(bytes.len()), 0);
+        let n = lz4_flex::block::compress_into(bytes, &mut buf).ok()?;
+        let packed = buf.get(..n)?;
+        (n.saturating_mul(PACK_RATIO.1) <= bytes.len().saturating_mul(PACK_RATIO.0)).then(|| packed.into())
+    })
 }
 
 impl Drop for Cell {
@@ -200,6 +439,10 @@ impl Drop for Cell {
             M.resident.fetch_sub(self.len, Ordering::Relaxed);
             // The next tile of this size reuses the buffer, as main's pool expects.
             crate::scratch::give(bytes);
+        }
+        if let Some(p) = self.packed.get_mut().unwrap_or_else(PoisonError::into_inner).take() {
+            M.packed.fetch_sub(p.len(), Ordering::Relaxed);
+            M.packed_tiles.fetch_sub(1, Ordering::Relaxed);
         }
         if let Some((file, extent)) = self.slot.get_mut().unwrap_or_else(PoisonError::into_inner).take() {
             file.free(extent);
@@ -231,6 +474,14 @@ struct Manager {
     live: AtomicUsize,
     /// Pixel bytes to keep resident; 0 = spilling off or paused.
     budget: AtomicUsize,
+    /// Bytes of the compressed copies of idle tiles ([`Cell::pack`]), and how many there are.
+    packed: AtomicUsize,
+    packed_tiles: AtomicUsize,
+    /// Tile memory (resident + compressed) above which idle tiles are compressed; 0 = off.
+    compress_budget: AtomicUsize,
+    /// After a sweep that freed nothing, the next one waits until tile memory grows past this,
+    /// so every new tile doesn't rescan a document of tiles that won't compress.
+    stall: AtomicUsize,
     /// Spilling is paused after a write, create or free-space failure ([`Config::paused`]).
     paused: AtomicBool,
     /// Changes whenever spilling turns on or off, so owners of memory caps re-apply them.
@@ -248,6 +499,8 @@ struct Manager {
     evictions: AtomicU64,
     reloads: AtomicU64,
     written: AtomicU64,
+    packs: AtomicU64,
+    unpacks: AtomicU64,
 }
 
 struct Registry {
@@ -334,6 +587,10 @@ static M: Manager = Manager {
     resident: AtomicUsize::new(0),
     live: AtomicUsize::new(0),
     budget: AtomicUsize::new(0),
+    packed: AtomicUsize::new(0),
+    packed_tiles: AtomicUsize::new(0),
+    compress_budget: AtomicUsize::new(0),
+    stall: AtomicUsize::new(0),
     paused: AtomicBool::new(false),
     epoch: AtomicU64::new(0),
     space_limit: AtomicU64::new(u64::MAX),
@@ -345,6 +602,8 @@ static M: Manager = Manager {
     evictions: AtomicU64::new(0),
     reloads: AtomicU64::new(0),
     written: AtomicU64::new(0),
+    packs: AtomicU64::new(0),
+    unpacks: AtomicU64::new(0),
 };
 
 impl Manager {
@@ -546,10 +805,17 @@ impl Manager {
     /// Evict until resident memory is at most `target` or `max_scan` cells were looked at.
     /// Returns the bytes freed.
     fn sweep(&self, target: usize, max_scan: usize) -> usize {
-        let Some(file) = self.file() else { return 0 };
+        let file = self.file();
+        let packing = self.compress_budget.load(Ordering::Relaxed) > 0;
+        if file.is_none() && !packing {
+            return 0;
+        }
         let mut freed = 0;
+        let mut spilled = 0;
         let mut scanned = 0;
-        while self.resident.load(Ordering::Relaxed) > target && scanned < max_scan {
+        let mut fruitless = 0usize;
+        let mut batch;
+        while self.used() > target && scanned < max_scan {
             // Pick victims under the registry lock (cheap), evict them after releasing it.
             let mut victims = Vec::with_capacity(64);
             {
@@ -571,23 +837,41 @@ impl Manager {
                             if cell.referenced.swap(false, Ordering::Relaxed) {
                                 continue;
                             }
-                            if cell.data.try_read().is_ok_and(|d| d.is_some()) {
+                            if cell.evictable(packing, file.is_some()) {
                                 victims.push(cell);
                             }
                         }
                     }
                 }
                 scanned += i;
-                if i == 0 {
+                // Two laps that freed nothing (the first clears touched marks): nothing left to
+                // take. Without this, tiles that won't compress (or stay in use) keep an unbounded
+                // sweep (`settle`) going forever.
+                if i == 0 || fruitless > r.cells.len().saturating_mul(2) {
                     break;
                 }
+                batch = i;
             }
+            let before = freed;
             for cell in victims {
-                if !self.has_room(&file) {
+                // Compress in memory first; what doesn't compress, and compressed copies the
+                // clock comes back to, go to the scratch disk when there is one.
+                if packing {
+                    let n = cell.pack();
+                    if n > 0 {
+                        freed += n;
+                        continue;
+                    }
+                }
+                let Some(file) = &file else { continue };
+                if !self.has_room(file) {
                     return freed;
                 }
-                match cell.evict(&file) {
-                    Ok(n) => freed += n,
+                match cell.evict(file) {
+                    Ok(n) => {
+                        freed += n;
+                        spilled += n;
+                    }
                     Err(e) => {
                         // Disk full or gone: keep tiles in memory until a retry succeeds.
                         let mut c = self.config();
@@ -598,11 +882,31 @@ impl Manager {
                     }
                 }
             }
+            // Cells passed without freeing anything (none fit, or every one was in use).
+            fruitless = if freed == before { fruitless.saturating_add(batch) } else { 0 };
         }
-        if freed > 0 && self.recovering.swap(false, Ordering::Relaxed) {
+        if spilled > 0 && self.recovering.swap(false, Ordering::Relaxed) {
             self.config().backoff = RETRY_FIRST;
         }
+        let used = self.used();
+        // Nothing left to take: hold off until tile memory grows by a sixteenth of the target.
+        let stall = if freed == 0 && used > target { used.saturating_add((target / 16).max(16 << 20)) } else { 0 };
+        self.stall.store(stall, Ordering::Relaxed);
         freed
+    }
+
+    /// Tile memory: resident pixels plus compressed copies.
+    fn used(&self) -> usize {
+        self.resident.load(Ordering::Relaxed).saturating_add(self.packed.load(Ordering::Relaxed))
+    }
+
+    /// Tile memory to stay under: the scratch disk's budget while it spills, else the
+    /// compression budget; 0 = neither is on.
+    fn limit(&self) -> usize {
+        match self.budget.load(Ordering::Relaxed) {
+            0 => self.compress_budget.load(Ordering::Relaxed),
+            b => b,
+        }
     }
 }
 
@@ -832,22 +1136,22 @@ fn free_space(_dir: &Path) -> Option<(u64, u64)> {
 
 /// Called after resident memory grew.
 fn maybe_evict() {
-    let budget = M.budget.load(Ordering::Relaxed);
+    // The supervisor retries when there is one; this can be any thread, the UI's too, and a
+    // retry waits for the folder.
+    if M.budget.load(Ordering::Relaxed) == 0 && MAINTENANCE.load(Ordering::Acquire) == 0 {
+        M.retry();
+    }
+    let budget = M.limit();
     if budget == 0 {
-        // The supervisor retries when there is one; this can be any thread, the UI's too, and a
-        // retry waits for the folder.
-        if MAINTENANCE.load(Ordering::Acquire) == 0 {
-            M.retry();
-        }
         return;
     }
-    let resident = M.resident.load(Ordering::Relaxed);
-    if resident <= budget {
+    let used = M.used();
+    if used <= budget || used < M.stall.load(Ordering::Relaxed) {
         return;
     }
     let worker = MAINTENANCE.load(Ordering::Acquire) > 0;
     // Far over budget (or no worker thread): this thread helps.
-    if !worker || resident > budget.saturating_add(budget / 4) {
+    if !worker || used > budget.saturating_add(budget / 4) {
         M.sweep(low_water(budget), 1 << 16);
     }
 }
@@ -878,11 +1182,41 @@ impl Drop for Maintenance {
 /// scheduling and shutdown.
 pub fn maintain_budget() -> usize {
     M.retry();
-    let budget = M.budget.load(Ordering::Relaxed);
-    if budget == 0 || M.resident.load(Ordering::Relaxed) <= budget {
+    let budget = M.limit();
+    if budget == 0 || M.used() <= budget {
         return 0;
     }
     M.sweep(low_water(budget), 4096)
+}
+
+/// Keep idle tiles LZ4-compressed in memory once tile memory (pixels in use plus compressed
+/// copies) passes `budget_bytes`; 0 turns it off (the default) and leaves compressed tiles as
+/// they are until touched. Unlike the scratch disk this needs no folder and works on the web;
+/// with both on, the clock compresses a tile first and spills the compressed copy if it comes
+/// round to it again while memory is still over budget. Tiles that don't shrink to 3/4 stay as
+/// they are (or spill). Pixels read the same whatever form they are kept in.
+pub fn set_compression(budget_bytes: usize) {
+    M.compress_budget.store(budget_bytes, Ordering::Relaxed);
+    M.stall.store(0, Ordering::Relaxed);
+    if budget_bytes > 0 {
+        maybe_evict();
+    }
+}
+
+/// Move a compression budget that is on (the memory limit moved); does nothing while it is off.
+pub fn update_compression_budget(budget_bytes: usize) {
+    let mut on = M.compress_budget.load(Ordering::Relaxed);
+    while on > 0 {
+        match M.compress_budget.compare_exchange_weak(on, budget_bytes.max(1), Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(now) => on = now,
+        }
+    }
+}
+
+/// The compression budget ([`set_compression`]); 0 = off.
+pub fn compression_budget() -> usize {
+    M.compress_budget.load(Ordering::Relaxed)
 }
 
 /// Change the memory budget of a configured scratch disk (the memory limit moved). A paused
@@ -996,6 +1330,14 @@ pub struct SpillStats {
     pub reloads: u64,
     /// Compressed bytes written to scratch so far.
     pub written_bytes: u64,
+    /// Memory held by the compressed copies of idle tiles ([`set_compression`]), and their count.
+    pub packed_bytes: usize,
+    pub packed_tiles: usize,
+    /// Tiles compressed in memory and expanded again, so far.
+    pub packs: u64,
+    pub unpacks: u64,
+    /// The compression budget; 0 = off.
+    pub compress_budget_bytes: usize,
     pub last_error: Option<String>,
     /// Spilling is paused after a scratch disk failure and will be retried.
     pub paused: bool,
@@ -1016,6 +1358,11 @@ pub fn stats() -> SpillStats {
         evictions: M.evictions.load(Ordering::Relaxed),
         reloads: M.reloads.load(Ordering::Relaxed),
         written_bytes: M.written.load(Ordering::Relaxed),
+        packed_bytes: M.packed.load(Ordering::Relaxed),
+        packed_tiles: M.packed_tiles.load(Ordering::Relaxed),
+        packs: M.packs.load(Ordering::Relaxed),
+        unpacks: M.unpacks.load(Ordering::Relaxed),
+        compress_budget_bytes: M.compress_budget.load(Ordering::Relaxed),
         last_error: c.last_error.clone(),
         paused: c.paused.is_some(),
         size_cap_bytes: c.size_cap,
@@ -1136,9 +1483,9 @@ pub fn query_threads_for_tests() -> usize {
 
 /// Evict down to the budget now, on this thread (tests, and before a measurement).
 pub fn settle() {
-    let budget = M.budget.load(Ordering::Relaxed);
+    let budget = M.limit();
     // Stops when nothing more can be evicted (every remaining tile is in use).
-    while budget > 0 && M.resident.load(Ordering::Relaxed) > budget {
+    while budget > 0 && M.used() > budget {
         if M.sweep(budget, usize::MAX) == 0 {
             break;
         }
@@ -1321,6 +1668,10 @@ mod tests {
             resident: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
             budget: AtomicUsize::new(1),
+            packed: AtomicUsize::new(0),
+            packed_tiles: AtomicUsize::new(0),
+            compress_budget: AtomicUsize::new(0),
+            stall: AtomicUsize::new(0),
             paused: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
             space_limit: AtomicU64::new(u64::MAX),
@@ -1341,6 +1692,8 @@ mod tests {
             evictions: AtomicU64::new(0),
             reloads: AtomicU64::new(0),
             written: AtomicU64::new(0),
+            packs: AtomicU64::new(0),
+            unpacks: AtomicU64::new(0),
         };
         let allowed = manager.has_room(&file);
         let next_check = manager.next_space_check.load(Ordering::Relaxed);
@@ -1358,6 +1711,111 @@ mod tests {
         assert!(unmeasured, "a rejected growth query must not report the old measurement as current");
         drop(file);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn lz4_repeat_finds_tiles_of_one_value_and_nothing_else() {
+        let len = 256 * 256 * 4;
+        for pixel in [vec![7u8], vec![1, 2], vec![200, 10, 30, 255], vec![0, 0, 0, 0], vec![1, 2, 3], (0..8).collect(), (0..16).collect(), (0..20).collect()] {
+            let n = len / pixel.len() * pixel.len();
+            let tile: Vec<u8> = pixel.iter().copied().cycle().take(n).collect();
+            let block = lz4_flex::block::compress(&tile);
+            let got = lz4_repeat(&block, n).unwrap_or_else(|| panic!("{} bpp: a uniform tile must be recognised", pixel.len()));
+            // The shortest pattern: [0,0,0,0] is one zero byte.
+            let shortest = (1..=pixel.len()).find(|&q| pixel.len() % q == 0 && (q..pixel.len()).all(|k| pixel[k] == pixel[k - q])).unwrap();
+            assert_eq!(got, pixel[..shortest], "{pixel:?}");
+            assert_eq!(lz4_repeat(&block, n + 1), None, "the length must match");
+        }
+        // One byte off anywhere, a second colour, a gradient: never reported as one value.
+        let flat = vec![200u8; len];
+        for at in [0, 1, 3, 4, 5, 1000, len / 2, len - 6, len - 5, len - 1] {
+            let mut t = flat.clone();
+            t[at] = 201;
+            assert_eq!(lz4_repeat(&lz4_flex::block::compress(&t), len), None, "byte {at}");
+        }
+        let mut two = flat.clone();
+        two[len / 2..].fill(9);
+        assert_eq!(lz4_repeat(&lz4_flex::block::compress(&two), len), None);
+        let ramp: Vec<u8> = (0..len).map(|i| (i / 1024) as u8).collect();
+        assert_eq!(lz4_repeat(&lz4_flex::block::compress(&ramp), len), None);
+        // Damaged blocks are "don't know", never a panic.
+        let block = lz4_flex::block::compress(&flat);
+        for cut in 0..block.len() {
+            assert_eq!(lz4_repeat(&block[..cut], len), None);
+        }
+        assert_eq!(lz4_repeat(&[0xff, 0xff, 0xff], len), None);
+        assert_eq!(lz4_repeat(&[], len), None);
+    }
+
+    #[test]
+    fn a_compressed_tile_spills_its_compressed_copy_and_reads_back() {
+        let dir = std::env::temp_dir().join(format!("photocraft-packed-spill-{}", std::process::id()));
+        let file = Arc::new(ScratchFile::create(&dir).unwrap());
+        let pixels: Vec<u8> = (0..64 * 1024).map(|i| if i % 4096 < 8 { 9 } else { 200 }).collect();
+        let mut tile = crate::Tile { cell: Cell::new(pixels.clone()) };
+
+        // In memory: the pixels go, a small LZ4 copy stays.
+        let freed = tile.cell.pack();
+        let packed = tile.cell.packed.lock().unwrap().as_ref().map(|p| p.len()).unwrap();
+        assert_eq!(freed, pixels.len() - packed);
+        assert!(packed < pixels.len() / 20, "{packed}");
+        assert!(tile.cell.data.read().unwrap().is_none());
+        let busy: Vec<u8> = (0..64 * 1024).map(|i| if i % 64 == 0 { (i / 64) as u8 } else { 200 }).collect();
+        let busy = crate::Tile { cell: Cell::new(busy) };
+        assert!(busy.cell.pack() > 0);
+        assert!(busy.cell.surely_mixed(), "{:?} bytes can't be one value", busy.cell.packed.lock().unwrap().as_ref().map(|p| p.len()));
+        assert!(!tile.cell.surely_mixed() || packed > tile.len() / 192, "small copies are looked at");
+        // Whole tiles of one pixel value at 8, 16 and 32 bits (RGBA) and in gray: always looked at.
+        for pixel in [vec![200u8, 10, 30, 255], vec![1, 2, 3, 4, 5, 6, 7, 8], (0..16).collect(), vec![77]] {
+            let len = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize * pixel.len();
+            let flat = crate::Tile { cell: Cell::new(pixel.iter().copied().cycle().take(len).collect()) };
+            assert!(flat.cell.pack() > 0);
+            assert!(!flat.cell.surely_mixed(), "one value compresses small: it must be looked at ({} bpp)", pixel.len());
+        }
+        assert!(!crate::Tile { cell: Cell::new(pixels.clone()) }.cell.surely_mixed(), "resident tiles are looked at");
+
+        // To disk: the compressed copy is written as is and the memory freed.
+        let written = file.used();
+        assert_eq!(tile.cell.evict(&file).unwrap(), packed);
+        assert!(tile.cell.packed.lock().unwrap().is_none());
+        assert!(tile.cell.slot.lock().unwrap().is_some());
+        assert!(file.used() - written < pixels.len() as u64 / 10);
+        assert_eq!(&*tile.try_bytes().unwrap(), &pixels[..]);
+
+        // Still clean: packing again keeps the disk copy, so a second spill writes nothing.
+        assert!(tile.cell.pack() > 0);
+        let used = file.used();
+        tile.cell.evict(&file).unwrap();
+        assert_eq!(file.used(), used);
+        assert_eq!(&*tile.try_bytes().unwrap(), &pixels[..]);
+
+        // A change drops the disk copy, and the changed pixels survive the next round trip.
+        tile.bytes_mut()[0] = 1;
+        assert!(tile.cell.slot.lock().unwrap().is_none());
+        assert!(tile.cell.pack() > 0);
+        assert_eq!(tile.try_bytes().unwrap()[0], 1);
+
+        // Pixels that don't compress are left alone and remembered as such until they change.
+        let mut state = 12345u32;
+        let noise: Vec<u8> = (0..64 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        let mut noisy = crate::Tile { cell: Cell::new(noise.clone()) };
+        assert_eq!(noisy.cell.pack(), 0);
+        assert!(noisy.cell.incompressible.load(Ordering::Relaxed));
+        assert!(!noisy.cell.evictable(true, false), "nothing to do without a disk");
+        assert!(noisy.cell.evictable(true, true), "it can still spill");
+        noisy.bytes_mut().fill(0);
+        assert!(!noisy.cell.incompressible.load(Ordering::Relaxed));
+        assert!(noisy.cell.pack() > 0);
+        assert!(noisy.try_bytes().unwrap().iter().all(|&b| b == 0));
+        drop((tile, noisy, file));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -661,10 +661,10 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
     // the brush changes before ↩.
     let b = &app.session.tools.brush;
     let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
-    let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
+    let brush = || photocraft_engine::retouch_cmds::remove_brush(b.size);
     app.remove_running_doc = None;
     let trail = app.remove_trail.get_or_insert_with(|| remove_trail_new(size, sel.as_ref()));
-    trail.feed_stroke_reach(points, brush);
+    trail.feed_stroke_hole(points, brush);
     trail.fill_enclosed();
     app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
@@ -687,7 +687,8 @@ fn remove_trail_new(size: [u32; 2], sel: Option<&photocraft_raster::Surface>) ->
 fn remove_running_show(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
     let Some(st) = app.session.active() else { return };
     let mut trail = remove_trail_new([st.doc.size.width, st.doc.size.height], st.doc.selection.as_ref());
-    trail.feed_reach(points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
+    let size = app.session.tools.brush.size;
+    trail.feed_hole(points, || photocraft_engine::retouch_cmds::remove_brush(size));
     trail.fill_enclosed();
     app.remove_running_doc = Some(st.doc.id);
     app.remove_pending.clear();
@@ -760,10 +761,10 @@ pub fn draw_remove_pending(app: &mut PhotocraftApp, painter: &egui::Painter, xf:
         return;
     }
     let Some(bounds) = app.session.active().map(|st| st.doc.bounds()) else { return };
-    let doc_rect = xf.doc_rect(bounds);
+    let quad = xf.doc_quad(bounds);
     let col = Tokens::get(painter.ctx()).danger.gamma_multiply(0.45);
     if let Some(trail) = app.remove_trail.as_mut() {
-        trail.draw(painter, doc_rect, xf.flip, col);
+        trail.draw(painter, quad, col);
     }
 }
 
@@ -1266,6 +1267,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    let recent = if tool == Tool::Remove { crate::dialog_memory::recent_prompts(app) } else { Vec::new() };
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -1293,7 +1295,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 if matches!(o.remove_model.as_str(), "diffusion" | "nanoBanana") {
                     let model = remove_model(o);
                     let prompt = &mut remove_options_mut(o, model).prompt;
-                    crate::widgets::text_field_ex(ui, egui::Id::unique(("remove-prompt", model)), prompt, tl!("Prompt (optional)"), 180.0, false, Some(500))
+                    // It widens with a long prompt, and ▾ offers the prompts last used (user request).
+                    use crate::widgets::prompt_field::{Grow, prompt_field};
+                    let max = (ui.available_width() - 320.0).clamp(180.0, 560.0);
+                    prompt_field(ui, egui::Id::unique(("remove-prompt", model)), prompt, tl!("Prompt (optional)"), 180.0, Grow::Wide { max }, &recent)
                         .on_hover_text(tl!("What should be there. Empty: the model's own guess."));
                     if o.remove_model == "nanoBanana" {
                         // How the model is shown the area: a mask image, or painted red.

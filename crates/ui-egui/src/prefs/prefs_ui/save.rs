@@ -27,7 +27,11 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         gpu.set_style(style);
         app.prefs_rt.gpu_style = Some(style);
     }
-    autosave(app);
+    // Frames only run on input or a requested repaint: without this wake-up an idle window never
+    // reaches the due time, and a crash loses everything since the last edit session.
+    if let Some(wait) = autosave(app) {
+        ctx.request_repaint_after(wait);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     link_updates(app, ctx);
     history_log(app);
@@ -231,8 +235,30 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(wait));
 }
 
+/// How often a background autosave still being written is checked for its result.
+const AUTOSAVE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).
-fn autosave(app: &mut PhotocraftApp) {
+/// Returns when the next tick is needed: the due time while a document has changes not yet in
+/// crash recovery, or soon while a background write is pending; `None` when nothing is waiting.
+pub(super) fn autosave(app: &mut PhotocraftApp) -> Option<std::time::Duration> {
+    autosave_run(app);
+    app.services.autosave.as_ref()?;
+    if !app.prefs_rt.autosave_pending.is_empty() {
+        return Some(AUTOSAVE_POLL);
+    }
+    if !app.session.prefs().file_handling.autosave {
+        return None;
+    }
+    let waiting = app.session.documents().iter().any(|d| d.is_dirty() && app.prefs_rt.autosaved.get(&d.doc.id) != Some(&d.revision));
+    if !waiting {
+        return None;
+    }
+    let ms = (app.prefs_rt.next_autosave_ms - crate::gpu_canvas::now_ms()).max(0.0);
+    Some(std::time::Duration::try_from_secs_f64(ms / 1000.0).unwrap_or_default())
+}
+
+fn autosave_run(app: &mut PhotocraftApp) {
     let fh = &app.session.prefs().file_handling;
     let (on, minutes) = (fh.autosave, fh.autosave_minutes.max(1));
     if app.services.autosave.is_none() {

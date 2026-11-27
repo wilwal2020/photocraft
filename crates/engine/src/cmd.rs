@@ -1296,6 +1296,12 @@ fn build() -> Vec<CommandSpec> {
             "Lighting…",
             r##"{"lift":0..100=35,"saturation":0..100=20,"saturationCurve":-100..100=0,"highlightFade":0..100=40,"hueShift":0..90=15,"lightHue":0..360=108,"protectNeutrals":0..100=50,"light":"#rrggbb"="#ffd999","lightAmount":0..100=25,"glow":"#rrggbb"="#ffe6b3","glowAmount":0..100=0,"protectDarks":0..100=90,"steps":0..8=0,"gloss":0..100=0,"glossSize":2..50=15,"metallic":bool=false,"saturationPoints":[[x,y],…] -127.5..382.5=[[0,255],[255,0]] (Advanced Curve: the path on the colour picker, base colour top-left, full light bottom-right, half a box past it toward the picker's edges; drawn points lock saturationCurve),"huePoints":[[amount,turn],…] amount 0..255, turn -127.5..382.5=[[0,255],[255,0]] (Hue Curve: how far the hue has turned, base hue top, full light's bottom; below turns further, above turns back),"literalCurve":bool=false (the Advanced Curve keeps its drawn shape, sized to each colour's own path, instead of stretching to each colour's box)} (the layer mask is the light amount; percentages except hueShift and lightHue in degrees; steps 0 = smooth; saturationCurve bows saturation through the half-light tones, + richer, - greyer)"##,
         ),
+        // PhotoCraft's own: red and blue shifted against green, like a lens's colour fringes.
+        (
+            "chromaticAberration",
+            "Chromatic Aberration…",
+            r##"{"redShift":-50..50=3,"blueShift":-50..50=-3,"offsetX":-50..50=0,"offsetY":-50..50=0,"centerX":0..100=50,"centerY":0..100=50,"falloff":0..100=0,"softness":0..10=0} (redShift/blueShift: how far red/blue move outward from the centre at the farthest canvas corner, in pixels, growing from nothing at the centre (below 0 inward); offsetX/offsetY: a fixed shift of red in pixels, blue moving the opposite way; centerX/centerY: the centre in percent of the canvas; falloff: how much of the centre stays clean, in percent of the centre-to-corner distance (it scales the offset too); softness: blur of the shifted fringes in pixels. Samples neighbouring pixels; green and alpha are kept; no effect in Grayscale, Bitmap and Duotone)"##,
+        ),
     ];
     for &(kind, label, params) in ADJ {
         let layer_id: &'static str = Box::leak(format!("layer.newAdjustmentLayer.{kind}").into_boxed_str());
@@ -1320,7 +1326,8 @@ fn build() -> Vec<CommandSpec> {
         });
         // Grain is an adjustment layer only in Photoshop (no Image › Adjustments entry).
         // Shading and Lighting are adjustment layers only: the mask is what they paint.
-        if matches!(kind, "grain" | "shading" | "shading2" | "lighting") {
+        // Chromatic Aberration too: a PhotoCraft lens look, kept editable on its own layer.
+        if matches!(kind, "grain" | "shading" | "shading2" | "lighting" | "chromaticAberration") {
             continue;
         }
         v.push(CommandSpec {

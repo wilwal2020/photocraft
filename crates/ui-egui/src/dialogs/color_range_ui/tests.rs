@@ -524,7 +524,7 @@ fn preview_mode_is_view_state_and_cancel_preserves_selection() {
         let painter = h.ctx.layer_painter(egui::LayerId::background());
         let doc = h.state().session.active().unwrap().doc.id;
         let ctx = h.ctx.clone();
-        paint_selection_preview(h.state_mut(), &ctx, &painter, doc, Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0)), false);
+        paint_selection_preview(h.state_mut(), &ctx, &painter, doc, &view(0.0));
         let st = h.state().session.active().unwrap();
         assert_eq!((st.revision, st.history.past_len()), (revision, past));
         assert_eq!(coverage(h.state(), 2, 22), 1.0);
@@ -533,7 +533,7 @@ fn preview_mode_is_view_state_and_cancel_preserves_selection() {
     let painter = h.ctx.layer_painter(egui::LayerId::background());
     let ctx = h.ctx.clone();
     let doc = h.state().session.active().unwrap().doc.id;
-    paint_selection_preview(h.state_mut(), &ctx, &painter, doc, Rect::EVERYTHING, false);
+    paint_selection_preview(h.state_mut(), &ctx, &painter, doc, &view(0.0));
     assert_eq!(coverage(h.state(), 2, 22), 1.0);
 }
 
@@ -742,4 +742,36 @@ fn the_selection_preview_is_sharp_zoomed_in() {
     let id = h.state().color_range.as_ref().and_then(|p| p.overlay.as_ref()).map(|t| t.id()).expect("the canvas overlay");
     let options = h.ctx.tex_manager().read().meta(id).map(|m| m.options);
     assert_eq!(options.map(|o| o.magnification), Some(egui::TextureFilter::Nearest));
+}
+
+/// A 400 × 300 point view of the document at 100 %, turned `rotation` degrees.
+fn view(rotation: f32) -> crate::canvas::ViewXform {
+    crate::canvas::ViewXform {
+        rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0)),
+        zoom: 1.0,
+        center: [20.0, 15.0],
+        flip: false,
+        rotation,
+        aspect: 1.0,
+    }
+}
+
+/// User report: with the canvas rotated, Color Range's Selection Preview was drawn into the
+/// turned image's upright bounds, stretched and out of place. It goes on the image's own
+/// corners, turned with it.
+#[test]
+fn the_selection_preview_turns_with_a_rotated_view() {
+    let bounds = photocraft_geom::Rect::new(0, 0, 40, 30);
+    for rotation in [0.0f32, 30.0, 90.0] {
+        let xf = view(rotation);
+        let mesh = overlay_mesh(egui::TextureId::default(), &xf, bounds).unwrap();
+        let corners = [(0.0, 0.0), (40.0, 0.0), (40.0, 30.0), (0.0, 30.0)];
+        for (v, (x, y)) in mesh.vertices.iter().zip(corners) {
+            let want = xf.to_screen(x, y);
+            assert!((v.pos - want).length() < 1e-3, "{rotation}°: corner ({x}, {y}) at {:?}, not {want:?}", v.pos);
+        }
+        // Texture corner (0, 0) is the image's top-left, wherever the view puts it.
+        assert_eq!(mesh.vertices[0].uv, pos2(0.0, 0.0));
+        assert_eq!(mesh.vertices[2].uv, pos2(1.0, 1.0));
+    }
 }

@@ -3751,3 +3751,55 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }
+
+/// Chromatic Aberration on the GPU matches the CPU at every depth (user request, 2026-11-21:
+/// "Chromatic Aberration is also using the CPU"): each chunk is drawn grown by the layers'
+/// reach, so it holds the pixels its samples need. Plain, with softness, masked at part opacity
+/// with a blend mode, clipped, nested in groups and stacked; on whole textures and on 256-px
+/// pages (`check` renders both), the document larger than a page so chunks cross cells.
+#[test]
+fn chromatic_aberration_matches_cpu_at_every_depth() {
+    use photocraft_doc::adjust::ChromaticAberration;
+    let layer = |c: ChromaticAberration| Layer::new("ca", LayerContent::Adjustment(Adjustment::ChromaticAberration(c)));
+    let strong = ChromaticAberration { red_shift: 9.0, blue_shift: -6.5, offset_x: 2.25, offset_y: -1.5, ..Default::default() };
+    // One that changes nothing plans no passes of its own and needs no apron.
+    let mut d = base_doc(40, 30);
+    d.layers.push(layer(ChromaticAberration { red_shift: 0.0, blue_shift: 0.0, softness: 4.0, ..Default::default() }));
+    assert_eq!(photocraft_compose::adjust::chromatic::stack_reach(&d.layers), 0);
+    let Some(mut g) = gpu() else { return };
+    check(&mut g, &d, "still chromatic aberration");
+    for (depth, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+        let (w, h) = (300u32, 280u32);
+        let mut d = Document::new("t", Size::new(w, h), ColorMode::Rgb, depth);
+        d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, w, h), 1, 0.3));
+        d.layers.push(noise_layer("mid", fmt, Rect::new(30, 20, 270, 250), 3, 0.0));
+        d.layers.push(layer(strong.clone()));
+        check(&mut g, &d, &format!("chromatic aberration {depth:?}"));
+        // Softness, a clean centre off-centre.
+        d.layers.pop();
+        d.layers.push(layer(ChromaticAberration { softness: 3.0, falloff: 0.4, center: [0.3, 0.6], ..strong.clone() }));
+        check(&mut g, &d, &format!("soft chromatic aberration {depth:?}"));
+        // Masked at part opacity in Screen.
+        let last = d.layers.last_mut().unwrap();
+        last.mask = Some(mask(Rect::new(0, 0, w as i32, 200), 4, 0.2));
+        last.opacity = 0.7;
+        last.blend = BlendMode::Screen;
+        check(&mut g, &d, &format!("masked chromatic aberration {depth:?}"));
+        // Clipped to the middle layer, with a layer above.
+        let mut d = Document::new("t", Size::new(w, h), ColorMode::Rgb, depth);
+        d.layers.push(noise_layer("bg", fmt, Rect::from_xywh(0, 0, w, h), 1, 0.3));
+        d.layers.push(noise_layer("mid", fmt, Rect::new(30, 20, 270, 250), 3, 0.0));
+        let mut clipped = layer(ChromaticAberration { softness: 1.5, ..strong.clone() });
+        clipped.clipped = true;
+        d.layers.push(clipped);
+        d.layers.push(noise_layer("top", fmt, Rect::new(200, 200, 290, 270), 9, 0.4));
+        check(&mut g, &d, &format!("clipped chromatic aberration {depth:?}"));
+        // Inside a pass-through group, with another one over everything.
+        let inner = d.layers.drain(1..).collect::<Vec<_>>();
+        let mut group = Layer::group("group", inner);
+        group.blend = BlendMode::PassThrough;
+        d.layers.push(group);
+        d.layers.push(layer(ChromaticAberration { red_shift: -4.0, blue_shift: 5.0, softness: 2.0, ..Default::default() }));
+        check(&mut g, &d, &format!("stacked chromatic aberration {depth:?}"));
+    }
+}

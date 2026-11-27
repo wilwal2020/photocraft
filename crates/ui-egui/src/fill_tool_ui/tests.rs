@@ -318,3 +318,36 @@ fn with_the_mask_shown_alone_the_fill_sees_the_mask() {
         }
     }
 }
+
+/// User report: the Magic Wand (with the Fill tool's options) "sometimes goes outside of lines".
+/// A pen tap that slid a few pixels across a thin line was a drag, and the drag added the area on
+/// the other side. The drag fills on only once it has gone a clear way across the screen.
+#[test]
+fn a_tap_that_slides_across_a_line_fills_only_where_it_landed() {
+    for wand in [false, true] {
+        let (mut app, colour) = inked();
+        if wand {
+            app.ui.tool = Tool::MagicWand;
+            app.ui.tool_options.wand_fill.close_gap = 4.0;
+            app.ui.tool_options.wand_fill.reference = "reference".into();
+        }
+        let zoom = f64::from(app.point_zoom());
+        let none = egui::Modifiers::NONE;
+        // Three pixels inside the left line (x = 5), sliding out over it by under the distance.
+        let slide = 6.0 / zoom;
+        tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 20.0, pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Move { x: 8.0 - slide, y: 20.0, pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Up { x: 8.0 - slide, y: 20.0 }, none);
+        let outside = |app: &PhotocraftApp| {
+            if wand { app.session.active().unwrap().doc.selection.as_ref().is_some_and(|s| s.sample_channel(1, 20, 0) > 0.5) } else { alpha(app, colour, 1, 20) > 0.5 }
+        };
+        assert!(!outside(&app), "wand {wand}: a slide of {slide:.1} px took the outside");
+        // A real drag out across the line still takes it.
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, none);
+        for x in [16.0, 10.0, 5.0, 2.0] {
+            tool_event(&mut app, ToolEvent::Move { x, y: 20.0, pressure: 1.0 }, none);
+        }
+        tool_event(&mut app, ToolEvent::Up { x: 2.0, y: 20.0 }, none);
+        assert!(outside(&app), "wand {wand}: the drag reached the outside");
+    }
+}

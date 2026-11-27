@@ -190,6 +190,19 @@ fn quick_mask_mode_names_the_quick_mask_in_the_tab() {
     assert_eq!(pro_tab_title(h.state(), 0), "ch1-p01.png @ 100% (Layer 1, RGB/8)*");
 }
 
+/// Show Less Detail (the tab menu): the tab shows just the file name and the unsaved mark.
+#[test]
+fn compact_tab_titles_show_just_the_file_name() {
+    let mut h = harness(1, ThemeKind::Pro);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.state_mut().run("prefs.set", json!({"values": {"workspace.compactTabTitles": true}})).unwrap();
+    assert_eq!(pro_tab_title(h.state(), 0), "ch1-p01.png*");
+    h.run();
+    assert!(h.query_by_label("ch1-p01.png*").is_some(), "the strip shows the short title");
+    h.state_mut().run("prefs.set", json!({"values": {"workspace.compactTabTitles": false}})).unwrap();
+    assert_eq!(pro_tab_title(h.state(), 0), "ch1-p01.png @ 100% (Layer 1, RGB/8)*");
+}
+
 /// Whether any title painted on the strip was cut with '…'.
 fn elided_on_strip(h: &Harness<'_, PhotocraftApp>) -> bool {
     fn elided(shape: &egui::Shape, strip: egui::Rect) -> bool {

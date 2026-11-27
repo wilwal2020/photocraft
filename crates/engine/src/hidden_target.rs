@@ -38,7 +38,7 @@ const GATED: &[&str] = &[
 ];
 
 /// Is the layer shown: it and every group around it visible.
-fn shown(doc: &Document, id: LayerId) -> bool {
+pub(crate) fn shown(doc: &Document, id: LayerId) -> bool {
     doc.path_of(id).is_some_and(|path| (1..=path.len()).all(|n| path.get(..n).and_then(|p| doc.layer_at(p)).is_some_and(|l| l.visible)))
 }
 

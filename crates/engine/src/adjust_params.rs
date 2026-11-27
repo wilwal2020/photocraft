@@ -11,7 +11,9 @@
 
 use photocraft_color::ColorMode;
 use photocraft_doc::Adjustment;
-use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, Lighting, Shading, ToneSpace, curve_map, curve_map_outputs};
+use photocraft_doc::adjust::{
+    CURVE_MAP_LEN, ChromaticAberration, CurvePoint, HueRange, LevelsChannel, Lighting, Shading, ToneSpace, curve_map, curve_map_outputs,
+};
 use serde_json::{Map, Value, json};
 
 use crate::{EngineError, Result};
@@ -359,6 +361,24 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
                 literal_curve: r.boolean("literalCurve", b.literal_curve)?,
             })
         }
+        "chromaticAberration" => {
+            let b = match base {
+                Some(Adjustment::ChromaticAberration(c)) => c.sanitized(),
+                _ => ChromaticAberration::default(),
+            };
+            // Shifts in pixels; the centre and falloff in percent.
+            let m = ChromaticAberration::MAX_SHIFT;
+            let pct = |key: &str, v: f32| r.num(key, v * 100.0, 0.0, 100.0).map(|x| x / 100.0);
+            Adjustment::ChromaticAberration(ChromaticAberration {
+                red_shift: r.num("redShift", b.red_shift, -m, m)?,
+                blue_shift: r.num("blueShift", b.blue_shift, -m, m)?,
+                offset_x: r.num("offsetX", b.offset_x, -m, m)?,
+                offset_y: r.num("offsetY", b.offset_y, -m, m)?,
+                center: [pct("centerX", b.center[0])?, pct("centerY", b.center[1])?],
+                falloff: pct("falloff", b.falloff)?,
+                softness: r.num("softness", b.softness, 0.0, ChromaticAberration::MAX_SOFTNESS)?,
+            })
+        }
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
 }
@@ -501,6 +521,19 @@ pub fn to_params(adj: &Adjustment) -> Value {
                 "saturationPoints": saturation_points_arr(&s.saturation_points),
                 "huePoints": saturation_points_arr(&s.hue_points),
                 "literalCurve": s.literal_curve,
+            })
+        }
+        Adjustment::ChromaticAberration(c) => {
+            let pct = |v: f32| (v * 10000.0).round() / 100.0;
+            json!({
+                "redShift": c.red_shift,
+                "blueShift": c.blue_shift,
+                "offsetX": c.offset_x,
+                "offsetY": c.offset_y,
+                "centerX": pct(c.center[0]),
+                "centerY": pct(c.center[1]),
+                "falloff": pct(c.falloff),
+                "softness": c.softness,
             })
         }
         Adjustment::Lighting(s) => {

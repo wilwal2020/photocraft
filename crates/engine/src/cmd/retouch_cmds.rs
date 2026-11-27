@@ -131,6 +131,16 @@ fn point(p: &Value, k: &str) -> Option<(f64, f64)> {
     Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }
 
+/// The Remove Tool's brush: always a plain hard round tip `size` px across, whatever brush is
+/// chosen (user request: "make it always just a hard brush"; with the tool's brush a sampled or
+/// soft tip, pressure, jitter or smoothing made the removal differ from its tint). No pressure,
+/// dynamics or smoothing: the points are taken as drawn, by the tint and the removal alike. The
+/// hole is every pixel its dabs cover at least half: the brush's own footprint, nothing past it.
+pub fn remove_brush(size: f32) -> BrushSettings {
+    let size = if size.is_finite() { size.clamp(1.0, 5000.0) } else { 1.0 };
+    BrushSettings { size, smoothing: photocraft_paint::Smoothing { enabled: false, ..Default::default() }, ..BrushSettings::default() }
+}
+
 /// The brush a retouching stroke paints with: the tool's brush (`base`, its tip, hardness and
 /// shape dynamics) with the shared params of `p` applied. UI previews of a stroke (the Spot Healing
 /// Brush's trail) render their coverage with it, so they match what the command changes.

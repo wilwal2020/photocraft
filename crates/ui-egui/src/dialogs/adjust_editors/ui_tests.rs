@@ -11,8 +11,9 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-const ALL_KINDS: [&str; 20] = [
+const ALL_KINDS: [&str; 21] = [
     "grain",
+    "chromaticAberration",
     "shading",
     "shading2",
     "lighting",
@@ -138,6 +139,7 @@ fn every_adjustment_layer_edits_through_properties() {
                 "shading" => Some("Depth"),
                 "shading2" => Some("Brightness"),
                 "lighting" => Some("Brightness"),
+                "chromaticAberration" => Some("Red/Cyan"),
                 _ => None,
             };
             match kind {
@@ -1538,4 +1540,27 @@ fn selective_color_properties_method_radios_commit() {
     radio(&mut h, "Relative");
     assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
     assert_eq!(steps(&h), start + 2);
+}
+
+/// Save… in the Properties panel's Preset row stores the current settings under the typed name
+/// (user report, 2026-11-14: saving a Shading 2 preset did nothing).
+#[test]
+fn saving_a_preset_from_properties_stores_it() {
+    for kind in ["lighting", "shading", "shading2"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        h.get_by_label("Save…").click();
+        h.run_steps(3);
+        let field = || egui_kittest::kittest::by().label("Name:").role(egui::accesskit::Role::TextInput);
+        h.get(field()).click();
+        h.run_steps(1);
+        h.get(field()).type_text("Mine");
+        h.run_steps(2);
+        h.get_by_label("Save").click();
+        h.run_steps(4);
+        let saved = crate::dialog_memory::adjust_presets(h.state(), kind);
+        assert_eq!(saved.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["Mine"], "{kind}: the preset was saved");
+        assert!(h.query(field()).is_none(), "{kind}: the name field closed");
+        // The row now shows the saved preset: Delete is offered only for one.
+        assert!(h.query_by_label("Delete").is_some(), "{kind}: the row shows the saved preset");
+    }
 }

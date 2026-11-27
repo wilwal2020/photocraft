@@ -90,6 +90,9 @@ pub(crate) struct Ctx<'a> {
     pub pre_masks: std::collections::HashMap<usize, (Option<LayerMask>, DecodeIssues)>,
     /// Progress the build starts from and spans (after a prefetch, the decoding is done).
     pub progress: (f32, f32),
+    /// Interleaved bytes a layer band aims at ([`band_rows`]): [`BAND_BYTES`], less while every
+    /// layer decodes at once on a machine short of memory ([`Ctx::prefetch`]).
+    pub band_bytes: usize,
 }
 
 /// Bytes of interleaved pixels a band decoded into tiles at once aims at: whole layers up to this
@@ -98,11 +101,21 @@ const BAND_BYTES: usize = 32 << 20;
 
 /// Row ranges (`0..h`, relative to a layer whose first row is at document row `top`) to decode a
 /// layer in: each ends on a tile row boundary, so no tile is written by two bands, and holds
-/// about [`BAND_BYTES`] of `row_bytes`-byte rows.
-fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
+/// about `band_bytes` of `row_bytes`-byte rows (at least one tile row).
+fn band_rows(top: i32, h: usize, row_bytes: usize, band_bytes: usize) -> Vec<(usize, usize)> {
     let tile = TILE_SIZE as usize;
-    let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
+    let rows = (band_bytes / row_bytes.max(1)).max(tile) / tile * tile;
     row_bands(top, h, rows)
+}
+
+/// Band size for `workers` layers decoding at once: each holds a band of decoded planes, its
+/// interleaved copy and the band's tiles, about three bands, and all of them together should
+/// fit the memory policy's allowance for working buffers. Never below a tile row, never above
+/// [`BAND_BYTES`]. With 4 GiB free and 24 cores that is one tile row per band (about 0.3 GiB in
+/// all) instead of 32 MiB bands (2.3 GiB).
+fn parallel_band_bytes(workers: usize) -> usize {
+    let transient = usize::try_from(photocraft_raster::memory::stats().1.transient_bytes).unwrap_or(usize::MAX);
+    (transient / workers.max(1) / 3).min(BAND_BYTES)
 }
 
 // `rows` is a positive multiple of TILE_SIZE. Mask decoding uses one tile row at a
@@ -404,7 +417,7 @@ impl Ctx<'_> {
         let mut invert = vec![self.cmyk; self.cc];
         invert.push(false);
         let mut surf = Surface::new(self.fmt);
-        for (b0, b1) in band_rows(r.top, h, w * (self.cc + 1) * s.bytes()) {
+        for (b0, b1) in band_rows(r.top, h, w * (self.cc + 1) * s.bytes(), self.band_bytes) {
             let rows = |d: &Option<photocraft_psd::Result<photocraft_psd::RowDecoder<'_>>>| d.as_ref().and_then(|d| d.as_ref().ok()).map(|d| d.rows(b0, b1));
             let planes: Vec<Option<photocraft_psd::Result<Vec<u8>>>> =
                 if parallel { crate::pixels::par_map(decoders.iter().collect(), rows) } else { decoders.iter().map(rows).collect() };
@@ -429,10 +442,15 @@ impl Ctx<'_> {
             if self.fmt.mode == ColorMode::Lab && s == SampleType::U16 {
                 crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, true);
             }
-            if let Err(error) = surf.try_write_interleaved(Rect::new(r.left, r.top + b0 as i32, r.right, r.top + b1 as i32), &bytes) {
+            let band = Rect::new(r.left, r.top + b0 as i32, r.right, r.top + b1 as i32);
+            if let Err(error) = surf.try_write_interleaved(band, &bytes) {
                 issues.allocation_failed(format!("layer \"{name}\": {error}"));
                 return (Surface::new(self.fmt), issues);
             }
+            // No other band writes these tiles: drop the empty ones now, while they are in
+            // memory, rather than holding the whole layer and reading it all again at the end
+            // (by then the idle tiles of a large file are compressed).
+            surf.prune_rect(band);
             // The interleaved band goes back to the scratch pool for the next band (and the next
             // import): it is a fresh page-faulted mmap otherwise. The decoded planes don't: the
             // decoder allocates its own, so pooled ones would only sit there.
@@ -440,7 +458,6 @@ impl Ctx<'_> {
             photocraft_raster::scratch::give(bytes);
             drop(planes);
         }
-        surf.prune();
         (surf, issues)
     }
 
@@ -554,6 +571,7 @@ impl Ctx<'_> {
             .collect();
         jobs.sort_by_key(|j| std::cmp::Reverse(j.0));
         let workers = std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32);
+        self.band_bytes = parallel_band_bytes(workers);
         let mut shares: Vec<Vec<(usize, bool)>> = vec![Vec::new(); workers];
         for (k, (_, i, pixels)) in jobs.into_iter().enumerate() {
             if let Some(s) = shares.get_mut(k % workers) {
@@ -1553,6 +1571,7 @@ fn psd_to_document_global(
         pre_surfaces: Default::default(),
         pre_masks: Default::default(),
         progress: (0.1, 0.85),
+        band_bytes: BAND_BYTES,
         done: 0,
         uniform: Default::default(),
         total: file.layers().len(),

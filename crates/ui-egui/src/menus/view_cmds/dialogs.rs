@@ -222,6 +222,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                         ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
                                     }
                                 });
+                            } else if k == "prompt" && f.get("__command").and_then(Value::as_str) == Some("edit.generativeFill") {
+                                // Wraps and grows with a long prompt; ▾ offers the ones last used
+                                // (user request, 2026-11-25).
+                                use crate::widgets::prompt_field::{Grow, prompt_field};
+                                let recent: Vec<String> =
+                                    f.get(RECENT_PROMPTS).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                                prompt_field(ui, ui.scope_id().with(("form-prompt", &k)), &mut s, "", 320.0, Grow::Tall, &recent).accessible_name(label(&k));
                             } else {
                                 ui.horizontal(|ui| {
                                     ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
@@ -259,6 +266,8 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// Batch's inactive Custom quality (#3956): shell state, never a command parameter.
 const BATCH_QUALITY: &str = "__batchQuality";
+/// Generative Fill's recent prompts, for the prompt field's ▾ (a shell field, never a parameter).
+const RECENT_PROMPTS: &str = "__recentPrompts";
 /// An export-to-files dialog's Custom checkbox and its quality (#11481), kept while the format
 /// is not JPEG or Custom is off: shell state, never command parameters.
 const JPEG_CUSTOM: &str = "__jpegCustom";
@@ -544,7 +553,9 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         // the prompt as typed.
         "edit.generativeFill" => {
             let model = crate::dialog_memory::generative_model(app);
-            dialog(app, json!({"prompt": "", "model": model}), json!({"model": crate::dialog_memory::generative_models()}))
+            let mut fields = json!({"prompt": "", "model": model});
+            fields[RECENT_PROMPTS] = json!(crate::dialog_memory::recent_prompts(app));
+            dialog(app, fields, json!({"model": crate::dialog_memory::generative_models()}))
         }
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app)}))),
         // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).

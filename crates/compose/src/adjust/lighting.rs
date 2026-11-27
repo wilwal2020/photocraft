@@ -3,7 +3,8 @@
 //! in OKLab.
 //!
 //! Per pixel, at light amount `a` (the layer's opacity × mask, 1 without a mask):
-//! - lightness rises toward white by `lift · a` (`L + (1 − L) · lift · a`, so whites can't clip);
+//! - lightness rises toward white by `lift · a` of the way (more for colours lighter than
+//!   mid-tone, which have little way left; see [`lifted`]), so whites can't clip;
 //! - hue turns toward `light_hue` the shorter way round, by up to `hue_shift · a` degrees, easing
 //!   off near the light hue (already there) and near its opposite (no tear between neighbours
 //!   turning opposite ways);
@@ -33,6 +34,26 @@ use crate::Buffer;
 /// How much of its place against the gamut edge a colour keeps as it gets lighter (0: keeps its
 /// chroma, 1: keeps its saturation relative to the edge).
 const KEEP: f32 = 0.5;
+
+/// OKLab lightness `l` lifted toward white by `t` (lift × light amount, 0..=1).
+///
+/// Up to mid-tone (L ≤ 0.5) a colour covers `t` of its distance to white, as Lighting always did.
+/// Lighter colours have little distance left, so on that rule alone they barely moved
+/// (2026-11-24: "if a color is quite bright, then it barely touches it"). They now take the lift
+/// as if applied `k = √(0.5 / (1 − L))` times over (`1 − (1 − t)^k` of the distance): at the default
+/// Brightness L 0.9 takes 62% of its way to white rather than 35%, and still never reaches
+/// white below full lift. Monotonic in `l`, so lit tones keep their order.
+pub fn lifted(l: f32, t: f32) -> f32 {
+    let room = 1.0 - l;
+    if !(room.is_finite() && t.is_finite()) || room <= 0.0 || t <= 0.0 {
+        return l;
+    }
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let k = (0.5 / room).max(1.0).sqrt();
+    l + room * (1.0 - (1.0 - t).powf(k))
+}
 
 /// Lighting settings checked once per render, with the light colour's direction in OKLab.
 pub struct Prepared {
@@ -139,7 +160,7 @@ impl Prepared {
         let taper = smoothstep(0.0, 30.0, d.abs()) * smoothstep(0.0, 70.0, to_light);
         let cm0 = max_chroma(l, hue).max(1e-4);
         let rel = (chroma / cm0).min(1.0);
-        let l2 = l + (1.0 - l).max(0.0) * s.lift * ae;
+        let l2 = lifted(l, s.lift * ae);
         // Hue: toward the light hue, the shorter way round (away from its opposite).
         let turned = (s.hue_shift * ae * w * taper).min(to_light);
         let h2 = hue + d.signum() * turned;
@@ -286,6 +307,38 @@ mod tests {
         assert!(w.iter().all(|v| (0.95..=1.0).contains(v)), "{w:?}");
     }
 
+    /// Bright colours get a visible lift too (2026-11-24: "if a color is quite bright, then it
+    /// barely touches it"); mid-tones and darks lift exactly as before; nothing reaches white
+    /// short of full lift, and lit tones keep their order.
+    #[test]
+    fn bright_colours_lift_visibly_and_never_clip() {
+        for l in [0.05, 0.2, 0.35, 0.5] {
+            for t in [0.1, 0.35, 0.8] {
+                assert!((lifted(l, t) - (l + (1.0 - l) * t)).abs() < 1e-6, "{l} {t}: {}", lifted(l, t));
+            }
+        }
+        for t in [0.1, 0.35, 0.7, 0.99] {
+            let ls: Vec<f32> = (0..=100).map(|i| lifted(i as f32 / 100.0, t)).collect();
+            assert!(ls.windows(2).all(|w| w[1] >= w[0]), "{t}: {ls:?}");
+            // (Near full lift everything is meant to come close to white; f32 rounds it there.)
+            if t <= 0.7 {
+                assert!(ls[..=95].iter().all(|&v| v < 1.0), "{t}: {ls:?}");
+            }
+        }
+        // At the default Brightness, L 0.9 rises by more than half of what's left (it took 35%).
+        let rise = lifted(0.9, 0.35) - 0.9;
+        assert!(rise > 0.055, "{rise}");
+        assert_eq!(lifted(0.5, 0.0), 0.5);
+        assert_eq!(lifted(1.0, 0.5), 1.0);
+        assert_eq!(lifted(0.7, 1.0), 1.0);
+        // Through the whole adjustment: a pale cream lightens by more than half its way to white.
+        let s = Lighting::default();
+        for pale in [[0.92, 0.88, 0.80], [0.85, 0.90, 0.95], [0.95, 0.80, 0.85]] {
+            let (before, after) = (lch(pale), lch(light(pale, 1.0, &s)));
+            assert!(after[0] - before[0] > 0.5 * (1.0 - before[0]), "{pale:?}: {before:?} → {after:?}");
+        }
+    }
+
     #[test]
     fn vivid_colours_stay_in_gamut() {
         let s = Lighting { saturation: 1.0, hue_shift: 90.0, lift: 1.0, light_amount: 1.0, glow_amount: 1.0, ..Lighting::default() };
@@ -377,7 +430,8 @@ mod tests {
         assert_eq!(light(red, 0.8, &g), light(red, 0.8, &s), "below the shine: untouched");
         let (plain, shine, metal) = (lch(light(red, 1.0, &s)), lch(light(red, 1.0, &g)), lch(light(red, 1.0, &m)));
         assert!(shine[0] > plain[0] + 0.05 && shine[1] < plain[1], "{plain:?} → {shine:?}");
-        assert!(metal[1] > shine[1] + 0.02 && hue_turn(plain[2], metal[2]).abs() < 10.0, "{shine:?} vs {metal:?}");
+        // (Lit red, lighter since 2026-11-24, is paler, so the light's tint turns it ~10°.)
+        assert!(metal[1] > shine[1] + 0.02 && hue_turn(plain[2], metal[2]).abs() < 12.0, "{plain:?} {shine:?} vs {metal:?}");
         // Silver (grey metal) shines neutral, not in a stray hue.
         let silver = lch(light([0.6; 3], 1.0, &Lighting { light_amount: 0.0, ..m.clone() }));
         assert!(silver[1] < 0.01, "{silver:?}");

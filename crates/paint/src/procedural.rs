@@ -371,6 +371,43 @@ pub fn dry_wash_edged_tip(n: u32, seed: u32, side_fade: f32) -> GrayTile {
     })
 }
 
+/// [`dry_wash_edged_tip`] with one soft side (user request: "one of the edges soft, maybe a
+/// little textured soft"): the side at +y (one side of the stroke for a tip turned with it) fades
+/// evenly over `crisp` of the half-width as before; the paint gives out towards the side at -y
+/// over `soft` of the half-width (up to 2: above 1 the fade starts past the middle), slowly and
+/// evenly (a smoothstep, so neither end of the fade shows as a line), and the fade is streaky:
+/// towards the edge only the hairs holding the most paint still reach, in fine streaks along the
+/// stroke, the way a half-dry brush feathers out on one side.
+pub fn dry_wash_soft_side_tip(n: u32, seed: u32, crisp: f32, soft: f32) -> GrayTile {
+    let (crisp, soft) = (crisp.clamp(0.01, 1.0), soft.clamp(0.01, 2.0));
+    let base = dry_wash_edged_tip(n, seed, crisp);
+    let salt = u64::from(seed) + 1717;
+    let c = n as f32 / 2.0;
+    GrayTile::from_fn(n, n, |x, y| {
+        let held = base.get(x, y);
+        // Across the brush: 1 at the soft edge, -1 at the crisp one.
+        let s = (c - y as f32 - 0.5) / c;
+        // How far into the soft band (0 at the edge, 1 where the full wash starts).
+        let r = ((1.0 - s) / soft).clamp(0.0, 1.0);
+        if r >= 1.0 {
+            return held;
+        }
+        // The crisp fade the base tip has at the soft edge, taken back out.
+        let crisp_side = if s > 0.0 { smooth(((1.0 - s) / crisp).clamp(0.0, 1.0)) } else { 1.0 };
+        if crisp_side <= 0.0 {
+            return 0.0;
+        }
+        let t = (s + 1.0) / 2.0;
+        // Streaks across the brush (fine and finer), so the soft side breaks into hairs.
+        let streak = 0.55 * value_noise(t * 60.0, 0.5, 1 << 12, salt ^ 0x51) + 0.45 * value_noise(t * 140.0, 0.5, 1 << 12, salt ^ 0x52);
+        // Near the edge only the strongest streaks hold paint; inward, all of them. The stroke's
+        // grain texture breaks the fade up further where it is partial.
+        let reach = smooth(((streak - (1.0 - r) * 0.6 + 0.2) / 0.5).clamp(0.0, 1.0));
+        let fade = smooth(r) * (0.65 + 0.35 * reach);
+        (held / crisp_side * fade).clamp(0.0, 1.0)
+    })
+}
+
 /// A seamless watercolour granulation pattern (`n` × `n`, a texture tile): pigment settled in
 /// blotches of a few sizes across the paper plus a fine speckle, with a steep enough contrast that
 /// a wash shows mottling inside a flat shape. Paper-white (1) where the paint holds, darker where
@@ -557,6 +594,32 @@ mod tests {
 
     /// Granulation mottles in blotches (neighbours alike, far pixels not), with enough dark
     /// patches to show inside a wash but mostly paper-white.
+    /// Dry Wash Grain Soft Edge (user request): one side as crisp as Dry Wash Grain's, the
+    /// other fading slowly over a wide band, in streaks.
+    #[test]
+    fn dry_wash_soft_side_tip_has_one_soft_streaky_side() {
+        let (crisp, soft) = (dry_wash_edged_tip(96, 5, 0.06), dry_wash_soft_side_tip(96, 5, 0.06, 1.4));
+        assert!(soft.is_valid());
+        // Across the tile (x = 40, the body): the +y side is unchanged beyond the soft band.
+        let col = |t: &GrayTile| -> Vec<f32> { (0..96).map(|y| t.get(40, y)).collect() };
+        let (a, b) = (col(&crisp), col(&soft));
+        assert_eq!(a[68..], b[68..], "the crisp side is as before");
+        // Averaged over the body, bands of 12 rows in from the soft edge, against the same rows of
+        // the crisp tip: less paint the nearer the edge, given up gradually, a little in each.
+        let band = |t: &GrayTile, ys: std::ops::Range<u32>| -> f32 { ys.flat_map(|y| (20..60).map(move |x| (x, y))).map(|(x, y)| t.get(x, y)).sum::<f32>() };
+        let soft_bands: Vec<f32> = (0..4u32).map(|k| band(&soft, 2 + 12 * k..14 + 12 * k) / band(&crisp, 2 + 12 * k..14 + 12 * k)).collect();
+        assert!(soft_bands[0] > 0.02 && soft_bands[0] < 0.2, "outer band holds a little paint: {soft_bands:?}");
+        for w in soft_bands.windows(2) {
+            assert!(w[1] > w[0] + 0.1, "each band inward holds more: {soft_bands:?}");
+        }
+        assert!(soft_bands[3] < 0.95, "still fading at the middle: {soft_bands:?}");
+        // Streaky: the fade alone keeps a growing share of the crisp tip's paint row by row
+        // inward; streaks break that, a row keeping less than the one nearer the edge.
+        let share: Vec<f32> = b.iter().zip(&a).map(|(s, c)| if *c > 0.0 { s / c } else { 0.0 }).collect();
+        let jumps = (6..44).filter(|&y| share[y + 1] < share[y] - 0.01).count();
+        assert!(jumps >= 3, "{jumps} jumps between rows in the soft band");
+    }
+
     #[test]
     fn granulation_tile_mottles_in_blotches() {
         let t = granulation_tile(256, 4);

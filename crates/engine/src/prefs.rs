@@ -458,6 +458,9 @@ pub struct Workspace {
     pub open_documents_as_tabs: bool,
     pub enable_floating_document_window_docking: bool,
     pub large_tabs: bool,
+    /// Document tabs show just the file name ("photo.psd*"), without the zoom, layer and colour
+    /// mode of the full title ("photo.psd @ 50% (Layer 1, RGB/8)*").
+    pub compact_tab_titles: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
     /// A floated panel opens in its own OS window, which can leave the app window (off: it
@@ -473,6 +476,7 @@ impl Default for Workspace {
             open_documents_as_tabs: true,
             enable_floating_document_window_docking: true,
             large_tabs: false,
+            compact_tab_titles: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
             float_panels_in_own_windows: false,
@@ -523,7 +527,17 @@ pub struct Tools {
     /// The longest pause, in milliseconds, between two nudges that still bundle into one state.
     /// Longer than a key's auto-repeat delay (about half a second), so a held key is one state.
     pub nudge_bundle_pause_ms: u32,
+    /// How far (screen points) a pen pressed on a panel, list or other control off the canvas
+    /// must move before it drags anything (user report: "even just touching something barely
+    /// will move it"). The canvas takes every movement of the pen, whatever this says.
+    pub pen_drag_distance: u32,
+    /// Lists and panels let go of while moving keep gliding (kinetic scrolling); off, they stop
+    /// where the drag stops (user request: "so they stop when you stop the pen").
+    pub glide_after_drag: bool,
 }
+
+/// Most [`Tools::pen_drag_distance`] may be, in screen points.
+pub const MAX_PEN_DRAG_DISTANCE: u32 = 48;
 
 impl Default for Tools {
     fn default() -> Self {
@@ -544,6 +558,8 @@ impl Default for Tools {
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
+            pen_drag_distance: 10,
+            glide_after_drag: false,
         }
     }
 }
