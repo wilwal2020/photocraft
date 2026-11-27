@@ -41,78 +41,349 @@
 
 ## About this fork
 
-This is a personal fork of [storytold/photocraft](https://github.com/storytold/photocraft), currently
-based on **PhotoCraft 0.14.0** (branch `photoshop-parity-0.14`). It adds features and fixes aimed at
-making PhotoCraft work the way Photoshop does, mostly found in day-to-day use on Windows. It is
-not affiliated with or reviewed by the PhotoCraft maintainers. Everything below this section is
-the upstream README.
+This is a personal fork of [storytold/photocraft](https://github.com/storytold/photocraft), based on
+**PhotoCraft 0.23.0**. It makes PhotoCraft work the way Photoshop does for everyday painting and
+manga colouring on Windows with a pen tablet, and adds a few tools of its own. Almost every change
+comes from using it day to day next to Photoshop.
 
-### Additions
+It is not affiliated with or reviewed by the PhotoCraft maintainers. Everything below the line
+further down is the upstream README.
 
-- **Remove tool with AI models.** A Generative AI mode with three models: LaMa, running locally
-  (ONNX Runtime, DirectML on Windows); Stable Diffusion XL inpainting, also local; and Google's
-  Nano Banana 2.1, online, using your own paid Google API key (kept in the system's credential
-  store). Each model keeps its own settings. **AI Remove** removes the selection with Nano Banana.
-  The model files aren't included.
-- **Generative Fill** on the local SDXL inpainting model.
-- **Grain adjustment layer** (Photoshop 2026's): Amount, Size and Roughness, on the CPU and the
-  GPU, saved in `.pcraft` and PSD.
-- **Icons for each adjustment type** in the Layers, Properties and Adjustments panels.
-- **Fill tool**, like Clip Studio Paint's: drag across areas to fill them, Close Gap, reference
-  layers, layer blocks and sub tools.
-- **Second layer mask** per layer, and **Lock Selection**.
-- **Actions panel like Photoshop's**:
-  - sets, New Action…, and Photoshop's recording rules with Allow Tool Recording;
-  - Insert Menu Item, Insert Stop and Insert Conditional;
-  - Record Again, Playback Options, Button Mode, and an action on any key;
-  - recorded steps name layers, not internal ids, so actions work on other documents;
-  - Color Range steps record the sampled colours, not where they were clicked;
-  - a whole Photoshop Actions palette (`.psp`, `.atn`) imports at once.
-- **Topaz Gigapixel AI** in File › Automate, with one-click presets and two-preset runs.
-- **Built-in timelapse recorder** with its own panel.
-- **Brushes panel like Photoshop's**:
-  - groups and folders, multi-select, and drag between groups;
-  - a tile size slider;
-  - a group can be pinned above the list.
-  - Each painting tool remembers its own brush.
-- **Screen eyedropper** in the Color Picker, and Pick From in the options bar.
+**On this page:** [1. New features](#1-new-features) ·
+[2. Smaller features and changes](#2-smaller-features-and-changes) ·
+[3. Performance and fixes](#3-performance-and-fixes) · [Branches](#branches)
 
-### Changes and fixes
+### 1. New features
 
-- **Speed.**
-  - Opening, first display and saving of big files.
-  - Smooth panning at high refresh rates.
-  - Large selections and their marching ants.
-  - Channels, Curves after mask strokes, Fill tool clicks, and Color Range's Fuzziness slider.
-- **Brushes** measured against Photoshop 2026: Dual Brush, Texture, Wet Edges, spacing and
-  scatter. Brush size keys wait while a stroke is painted.
-- **Adjustment layers** preview live on the GPU, with background histograms.
-- **Layers panel.**
-  - Photoshop's row sizes, folder icons for groups and Layer Bounds thumbnails.
-  - Group colours, and ⌘/Ctrl-click to pick a layer on the canvas.
-  - A layer row double-click counts with Windows' timing.
-- **Window and panels.**
-  - A status bar in the document window.
+Largest first.
+
+#### AI Remove and Generative Fill
+
+- **Three models in the Remove tool**, each with its own settings:
+  - **LaMa**, local and fast, with Standard and High quality. It keeps screentones and grain, and
+    matches the colour around the hole.
+  - **Stable Diffusion XL inpainting**, local. It starts from LaMa's fill and redraws it.
+  - **Google's Nano Banana 2.1**, online. It uses your own paid Google API key, kept in the
+    system's credential store.
+- **AI Remove** removes the selection, and **AI Outpaint** extends the picture into it.
+- **Nano Banana's result** goes on its own layer, with a mask showing only your selection. You can
+  paint the mask to reveal more of what the model drew.
+- **Nano Banana options:**
+  - **Close up** (sharper) or **Whole page** (more context).
+  - **Creative**, which keeps everything the model drew around the selection.
+  - Mask expand and feather.
+- **Edit › Generative Fill** runs SDXL or Nano Banana with your prompt alone.
+- **The prompt box** grows with long prompts, and a dropdown lists your last five.
+- **A funds button** in the title bar shows your remaining AI credit, and each generation shows
+  what it cost, in kroner.
+- The model files aren't included.
+
+#### Camera Raw filter, rebuilt and matched to Photoshop
+
+- **Calibrated against Photoshop's Camera Raw 27.11:** tone, curves, colour mixer, vibrance, colour
+  grading, white balance, calibration and vignette.
+- **Presets tab** that reads your Photoshop presets and Favorites, including Adobe's creative
+  profiles (Artistic, Modern).
+- **Preview on the GPU**, at full resolution while you drag a slider.
+- **Window:** it remembers its size, and has Photoshop's zoom and hand, and a compact panel.
+
+#### Shading and Lighting adjustment layers (PhotoCraft's own)
+
+Paint shadows or light on a coloured page, and the layer picks the colours the way a painter
+would: shadows shift hue and keep their richness instead of just going darker. It works on warm
+skin and cool cloth at once.
+
+- **Shading:** Chroma Retention, Self-bounce, Terminator band and Physical shadow colour.
+- **Shading 2** works along the colour picker's axes: brightness down, saturation sideways.
+- **Lighting:** Gloss, Metallic and Highlight Fade.
+- **Curves:**
+  - Saturation Curve.
+  - An Advanced Curve you draw as the colour's path on the picker, which can go outside the box.
+  - A Hue Curve.
+  - Literal Curve, which gives every colour the same drawn shape.
+- **Saved presets**, and both layers run on the GPU.
+
+#### Fill tool, like Clip Studio Paint's
+
+- **Fills on the press**, and keeps filling the areas you drag over.
+- **Close Gap** as five buttons. Raising it never fills more.
+- **Sub tools:** click, Enclose and Fill (lasso) and Paint Unfilled Area (brush).
+- **Refer to** the editing layer, all layers, selected layers, a folder or reference layers.
+- **Editing layer blocks the fill.** Lines you draw on the fill layer stop the fill, even at high
+  tolerance.
+- **Undo widens Close Gap**, so an undo and a re-click gets through a bigger gap.
+- **Ignore Thin Lines**, so a fill runs under hatching and speed lines.
+- **Built for scanned manga pages:** fills run through screentone dots, fill the pockets between
+  hatching and the islands inside cross-hatching, and leave no specks past a line or seams where
+  two fills meet.
+- **The Magic Wand** uses the same Refer options.
+
+#### Actions panel, like Photoshop's
+
+- **Imports your whole Photoshop Actions palette** (`.psp`, `.atn`); 96 % of steps map.
+- **Sets, recording rules and Insert:**
+  - Sets, and Photoshop's recording rules, with Allow Tool Recording.
+  - Insert Menu Item, Insert Stop and Insert Conditional.
+  - Record Again, Playback Options and Button Mode.
+- **Any key**, with any modifiers, can play an action.
+- **New options:**
+  - Continue on Error, for a whole action or for one step.
+  - Stop If Successful.
+  - Play once for each selected layer.
+  - Relative Layer Recording ("2 layers down" instead of a name).
+- **Steps record layers by name, not internal id,** so actions work on other documents.
+  - Color Range steps keep the sampled colours.
+  - Saves keep the folder, not the file name.
+  - One Add Mask step adds whichever mask is missing.
+- **A busy cursor** shows while an action runs.
+
+#### Second masks, effect masks and Lock Selection
+
+- **Second layer mask:** a second mask on any layer, multiplied with the first.
+- **Effect masks:** a mask for one layer style, for example a stroke along only part of a layer.
+- **Lock Selection:** the layer can't be picked from the canvas (⌘/Ctrl-click, Move tool, Ctrl+Space),
+  but a click on its row still works.
+- **All three survive a save through Photoshop.** They travel as hidden helper layers and document
+  metadata, and come back when the PSD is opened here again.
+
+#### Brushes panel and brush engine, like Photoshop's
+
+- **Brushes panel:**
+  - Groups and folders, multi-select, and drag between groups.
+  - A tile-size slider, a group pinned above the list, and an always-visible scroll bar.
+  - It remembers its layout after a restart.
+- **Each painting tool remembers its own brush,** and brush and eraser presets stay with their
+  tool.
+- **Measured against Photoshop 2026:** Dual Brush, Texture, Wet Edges, spacing, scatter and
+  preset sizes.
+- **Large brushes paint on every core,** and strokes paint only on the canvas.
+
+#### Timelapse recorder
+
+A port of the Photoshop Timelapse Recorder plug-in, sharing its recordings.
+
+- **A dockable panel** with Record, Library and Settings.
+- **Export** to MP4 (needs ffmpeg) or a JPEG sequence, with reference layers.
+- **Title-bar buttons:** record, pause, export, reference layer and export progress.
+- **It waits while you paint**, and saves the current frame before exporting.
+
+#### Libraries panel
+
+Like Photoshop's, but local. It keeps layers (with masks, effects and children), images, layer
+styles and colours, ready to use in any document after a restart.
+
+#### Topaz Gigapixel AI
+
+- **File › Automate › Topaz Gigapixel AI** opens the image in Gigapixel and brings the result back.
+- **One-click presets**, including a preset saved from your last upscale.
+- **Run Two Presets**, one after the other or side by side, and saved pairs.
+
+#### Custom theme editor
+
+Preferences › Interface › Custom Theme. Start from any theme, change its colours live, and keep
+colours that start out the same linked (unlink any one).
+
+#### New adjustment layers
+
+- **Grain**, Photoshop 2026's: matched to Photoshop's look, and it round-trips through PSD.
+- **Chromatic Aberration:** red/blue shift, softness and presets, on the CPU and the GPU.
+
+#### New brush presets
+
+- **Wet Media:**
+  - Color Ink Glaze and Cloud Wash.
+  - Dry Wash, with Square, Fringe, Grain and Grain Soft Edge variants.
+  - Gouache Highlight and Bristle Highlight.
+- **Special Effects:** Fine Spatter and Pressure Dashes.
+- **An `.abr` exporter** (`crates/io/examples/export_brushes_abr.rs`) turns built-in presets into a
+  file Photoshop or PhotoCraft can import.
+
+### 2. Smaller features and changes
+
+Grouped by area, largest areas first.
+
+#### Layers panel
+
+- **Photoshop's look:** row sizes, smaller group rows, Layer Bounds thumbnails and folder icons.
+  Groups with a mask get a taller row.
+- **A glyph for each adjustment type**, and a mark for layers with Blend If.
+- **Greyed-out eyes** for layers that can't show: in a hidden group, or clipped to a hidden base.
+- **Blend mode lists** show every mode at once, in Photoshop's groups.
+- **Masks:**
+  - Drag a mask onto another layer to move it; hold Alt to copy it.
+  - Clicking a disabled mask enables it.
+  - Invert Second Mask.
+  - Alt-click shows the second mask or an effect mask, too.
+- **Number fields:**
+  - Opacity and Fill drag in whole percents.
+  - Dragging past 0 % or 100 % starts back from there.
+  - Blend If reacts on the press and shows a split handle as two halves.
+- **Showing a layer** inside a hidden group shows the group.
+
+#### Selections
+
+- **Ctrl+Space (Load Visible Pixels):**
+  - Click a layer, a mask or the canvas to select only what is actually visible there.
+  - Lock Selection layers count as invisible.
+  - A canvas click picks the layer that shows most at that spot.
+- **Color Range:**
+  - Remembers its colour and Selection Preview.
+  - The preview is sharp, smooth while you drag Fuzziness, and works on a rotated canvas.
+- **Move tool Pick From %:** how opaque a pixel must be to count for ⌘/Ctrl-click and Auto-Select.
+- **Transform Selection and Free Transform** grab a side anywhere along it.
+
+#### Painting
+
+- **Shift-line preview** shows both edges of the stroke, so you see exactly what it covers.
+- **Turn Tip with View** (Brush options): the tip can stay upright on a rotated canvas.
+- **Brush size keys:** settings for the hold delay and repeat speed, and they wait while a stroke is
+  painted.
+- **Eyedropper:**
+  - Sample on Alt picks instantly and flashes the colour.
+  - It can sample anywhere on screen.
+  - On a targeted mask, it samples the mask.
+- **Direction-controlled brushes** follow the stroke smoothly. Initial Direction settles after the
+  first few pixels.
+- **The Remove tool** is always a hard brush that removes exactly what its preview shows.
+
+#### Masks and colours
+
+- **On a mask:**
+  - The tool colours are greys.
+  - The Color panel can also show the other colour pair (Show Other Colors).
+- **Brushing a Solid Color layer** goes to its mask automatically, with no rasterize prompt.
+  Optionally, the colours then snap to black or white.
+- **Alt/Ctrl+Delete** fills a Solid Color layer with the foreground or background colour.
+
+#### Transform
+
+- **Free Transform of several layers** in one box.
+- **Masks on fill and adjustment layers** transform with a live preview of what they show.
+
+#### Gradients
+
+- **Photoshop gradients keep their stops** when imported.
+- **Gradient Editor:** a popup that closes on a click outside, with Import.
+- **Photoshop-style Properties** for Gradient Fill and Gradient Map, with presets one click away.
+- **Space while dragging** an end point moves the whole gradient.
+- **A gradient on an empty layer** takes the layer's place.
+
+#### Canvas and view
+
+- **Zooming out centres the canvas** when it fits, and you can still pan afterwards.
+- **C on a rotated view** resets the rotation.
+- **Sharper canvas** when zoomed out.
+- **Selection autoscroll** shows a little of the pasteboard at an edge.
+- **Photoshop's sampling ring**, and tool cursors drawn as real system cursors (different for Alt
+  and Ctrl).
+
+#### Window and panels
+
+- **Workspace:**
+  - The status bar sits inside the document window.
   - The Tools panel docks between panel columns.
-  - F10 opens the menu bar.
-  - The Color field fills its panel.
-- **Behaviour that now matches Photoshop.**
+  - Window › Panel Icons toggles the icon rail.
+- **Panels:** a panel strip drags by its empty part too. A pen drag doesn't flick panels, and the
+  divider line shows only while dragging.
+- **The same UI layout in every theme,** at Photoshop's heights.
+- **Document tabs:** Show Less Detail.
+- **Home screen** remembers Grid/List and can hide recent files.
+- **The window:**
+  - Reopens on the monitor it was on.
+  - Follows the pen across screens with different scaling.
+  - Lets an auto-hiding taskbar show.
+- **Menus:** Alt no longer opens the menu bar (F10 does), and the update prompt is off at launch.
+
+#### Behaviour that now matches Photoshop
+
+- **New layers and fill layers:**
   - A new layer goes inside an open, selected group.
+  - Adjustment and fill layers made on a clipped layer are clipped, unless it is the top of the
+    chain.
+  - Solid Color or a gradient on an empty layer takes its place.
+- **Copy and paste:**
   - Making a mask from the selection deselects.
-  - Paste with a mask only targeted makes a new layer; Copy keeps masks.
-  - Show Only in an action acts on the current layer.
-  - Color Range remembers its Selection Preview.
-  - The Color Picker picks on the press.
-  - An adjustment layer made on a clipped layer is clipped.
-  - Solid Color on an empty layer takes its place.
-  - C on a rotated view resets the rotation.
-- **GPU driver loss** saves unsaved work to crash recovery and restarts PhotoCraft.
+  - Paste with a mask targeted makes a new layer.
+  - Copy takes the whole layer, with its mask.
+- **⌘J with a selection** duplicates several layers, or a group, whole.
+- **Layer styles** remember the last settings used.
+- **Merge Layers** matches what the canvas shows.
+- **The Color Picker, colour field and hue strip** pick on the press. The picker's field is
+  Photoshop's size.
+- **Curves:**
+  - Photoshop's layout.
+  - A guide line from a moved input slider.
+  - The eyedropper cursor for Set Point.
+- **Color Lookup** lists every LUT in its folder.
+
+### 3. Performance and fixes
+
+#### Performance
+
+Biggest gains first.
+
+- **Large PSDs fit in memory.** Idle tiles are kept compressed in RAM, so a 924 MB, 445-layer PSD
+  that was refused now opens. Saving huge documents no longer runs out of memory.
+- **Adjustment layers are live:**
+  - Dragging Hue/Saturation went from 217 ms to 4.6 ms, and Curves from 231 ms to 6.3 ms.
+  - Toggling visibility with Curves selected went from 590 ms to 16 ms.
+  - Histograms are counted in the background.
+- **Opening and saving:**
+  - Opening a file went from 2.3 s to 0.6 s, and the first display from 3.0 s to 0.3 s.
+  - PSD save went from 4.2 s to 2.2 s.
+  - Launch is faster.
+- **Smooth panning at 240 Hz:**
+  - The Brushes panel no longer redraws off-screen brushes.
+  - A gaming mouse's raw input no longer starves frames.
+  - A document no longer stays stuck on CPU rendering.
+- **Big selections:** the marching ants move as a texture when panning and rotating.
+- **Brushes:** large brushes use every core, and plain strokes take a faster composite path.
+- **Faster everyday operations:**
+  - Fill tool clicks.
+  - ⌘/Ctrl-click on channels, masks and thumbnails.
+  - Ctrl+Space.
+  - Merge Layers and the duplicate-and-merge action.
+  - Gaussian Blur and the Camera Raw sliders.
+- **GPU:**
+  - A bigger layer budget.
+  - A watch that warns when graphics memory runs short.
+  - The compositor starts in about 5 s instead of 14 s with Microsoft's DXC compiler beside the
+    exe.
+
+#### Reliability
+
+- **GPU driver resets** save unsaved work to crash recovery and restart PhotoCraft instead of
+  crashing.
+- **Autosave** runs while the window is idle or minimized.
+- **One alert,** not three, when a tool refuses a hidden layer.
+
+#### Notable fixes
+
+- **Ctrl-click:**
+  - It no longer selects layers clipped to a hidden base.
+  - Faint mask leftovers no longer steal a Ctrl+Space click.
+- **On a rotated canvas, the brush cursor is the brush's true size,** so the Shift line matches it.
+- **Strokes are no longer jagged** when zoomed out.
+- **Fill acts like Fill** (not Opacity) on clipped layers.
+- **Lighting** now visibly lifts bright colours.
+- **Solid Color:**
+  - Double-click opens it reliably, with a pen too.
+  - Its mask transforms correctly.
+  - A PSD fill layer no longer keeps a square after its mask is deleted.
+- **Camera Raw:**
+  - Smart filters survive a visibility toggle.
+  - Creative profiles no longer dim bright colours.
+- **Magic Wand** no longer leaks outside lines.
+- **Shading and Lighting presets** save.
 
 ### Branches
 
 | Branch | Based on |
 |---|---|
-| `photoshop-parity-0.14` | PhotoCraft 0.14.0 (current) |
+| `main` | PhotoCraft 0.23.0 (current; same as `photoshop-parity-0.23`) |
+| `photoshop-parity-0.23` | PhotoCraft 0.23.0 |
+| `photoshop-parity-0.18` | PhotoCraft 0.18.0 |
+| `photoshop-parity-0.14` | PhotoCraft 0.14.0 |
 | `photoshop-parity-0.12` | PhotoCraft 0.12.0 |
 | `photoshop-parity-0.11` | PhotoCraft 0.11.1 |
 | `photoshop-parity-0.10` | PhotoCraft 0.10.0 |
