@@ -720,3 +720,75 @@ fn layer_thumbnail_context_menu_selects_the_clicked_layers_pixels() {
     assert!(h.query_by_label("Select Pixels").is_none(), "the Background has no pixels to load");
     h.get_by_label("Blending Options…");
 }
+
+/// Select Blend If Pixels sits at the top of the layer menu and the thumbnail menu of a layer with
+/// Blend If (user request, 2026-11-27), and selects the pixels Blend If leaves; layers without
+/// Blend If don't offer it.
+#[test]
+fn blend_if_layers_offer_select_blend_if_pixels_at_the_top() {
+    use crate::PhotocraftApp;
+    use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
+        h.hover_at(at);
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    }
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 60})).unwrap();
+    // Dark on the left half, the white Background showing on the right.
+    s.execute("layer.new.layer", json!({"name": "Dark"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 60})).unwrap();
+    s.execute("edit.fill", json!({"color": "#202020"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let plain = s.active().unwrap().active_layer.unwrap();
+    // A full-canvas red layer that Blend If hides over the white.
+    s.execute("layer.new.layer", json!({"name": "Blended"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c03020"})).unwrap();
+    let blended = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": blended.0, "blendIf": {"channel": "gray", "underlying": [0, 200]}})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    let row = |h: &Harness<'_, PhotocraftApp>, layer: photocraft_doc::LayerId| {
+        let r = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer.0).expect("row drawn");
+        let name = r.name.expect("name drawn");
+        egui::pos2(name.right() + 20.0, r.row.center().y)
+    };
+
+    let at = row(&h, plain);
+    click(&mut h, at, PointerButton::Secondary);
+    h.get_by_label("Blending Options…");
+    assert!(h.query_by_label("Select Blend If Pixels").is_none(), "no Blend If, no item");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+
+    for on_thumb in [false, true] {
+        let at = if on_thumb {
+            crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == blended.0).and_then(|r| r.thumbnail).expect("thumbnail").center()
+        } else {
+            row(&h, blended)
+        };
+        click(&mut h, at, PointerButton::Secondary);
+        let item = h.get_by_label("Select Blend If Pixels").rect();
+        let first = if on_thumb { h.get_by_label("Select Pixels").rect() } else { h.get_by_label("Blending Options…").rect() };
+        assert!(item.top() < first.top(), "at the top of the menu (thumbnail: {on_thumb})");
+        click(&mut h, item.center(), PointerButton::Primary);
+        let st = h.state().session.active().unwrap();
+        let sel = st.doc.selection.as_ref().expect("a selection");
+        assert!(sel.sample_channel(20, 30, 0) > 0.99, "shown over the dark half");
+        assert!(sel.sample_channel(80, 30, 0) < 0.01, "hidden over the white");
+        h.state_mut().run("select.deselect", json!({})).unwrap();
+    }
+}

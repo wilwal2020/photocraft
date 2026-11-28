@@ -152,6 +152,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         ui.set_min_width(220.0);
         let mut rename = false;
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
+        blend_if_item(ui, l, actions);
         items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
         ui.separator();
         if ui.button(tl!("Rename Layer…")).clicked() {
@@ -161,6 +162,20 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         color_menu(app, ui, l, on_set, actions);
         rename
     })
+}
+
+/// Select Blend If Pixels, at the top of the menus of a layer with Blend If (user request,
+/// 2026-11-27): the layer's pixels as its Blend If leaves them, which a ⌘-click on the thumbnail
+/// doesn't give.
+pub(crate) fn blend_if_item(ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {
+    if l.blend_if.is_default() {
+        return;
+    }
+    if ui.button(tl!("Select Blend If Pixels")).clicked() {
+        actions.push((photocraft_engine::visible_cmds::BLEND_IF_ID.into(), json!({"layer": l.id.0, "operation": "new"})));
+        ui.close();
+    }
+    ui.separator();
 }
 
 /// The menu of `l`'s layer-mask thumbnail (#4575), in Photoshop's order. It acts on `l`, which it

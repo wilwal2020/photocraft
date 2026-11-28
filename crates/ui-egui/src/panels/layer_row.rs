@@ -790,6 +790,7 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
                 return;
             }
             if ui.ctx().data(|d| d.get_temp::<bool>(on_thumb_id)).unwrap_or(false) {
+                crate::layer_menu_ui::blend_if_item(ui, l, actions);
                 super::layers_empty_menu::show_thumbnail(app, ui, l.id.0, actions);
                 return;
             }

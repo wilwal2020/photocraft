@@ -132,3 +132,31 @@ fn a_clipped_layer_shows_only_inside_its_base() {
     load(&mut s, json!({"layer": a.0}));
     assert_eq!((at(&s, 2, 2), at(&s, 7, 7)), (1.0, 0.0));
 }
+
+/// Select Blend If Pixels: Top's pixels as its Blend If leaves them over what is below it.
+#[test]
+fn blend_if_pixels_follow_the_underlying_layer() {
+    let (mut s, _, top) = covered();
+    // Hide Top where what is below it is lighter than 200: over the white Background, not over A's
+    // green (gray 150).
+    let opts = json!({"layer": top.0, "blendIf": {"channel": "gray", "underlying": [0, 200]}});
+    s.execute("layer.layerStyle.blendingOptions", opts).unwrap();
+    let r = s.execute(BLEND_IF_ID, json!({"layer": top.0})).unwrap();
+    assert_eq!(r["selected"], true);
+    assert_eq!((at(&s, 7, 7), at(&s, 12, 12), at(&s, 2, 2)), (1.0, 0.0, 0.0));
+}
+
+/// Layers above don't cover it, its This Layer range counts, and the active layer is the default.
+#[test]
+fn blend_if_pixels_ignore_layers_above_and_read_the_layers_own_colour() {
+    let (mut s, a, _) = covered();
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": a.0, "blendIf": {"channel": "green", "thisLayer": [100, 255]}})).unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute(BLEND_IF_ID, json!({})).unwrap();
+    assert_eq!((at(&s, 2, 2), at(&s, 7, 7)), (1.0, 1.0), "A's green passes, and Top doesn't cover it");
+    // Green 255 fails a This Layer range that ends at 200.
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": a.0, "blendIf": {"channel": "green", "thisLayer": [0, 200]}})).unwrap();
+    assert_eq!(s.execute(BLEND_IF_ID, json!({"layer": a.0})).unwrap()["selected"], false);
+    assert!(s.execute(BLEND_IF_ID, json!({"layer": 9999})).is_err());
+    assert!(s.execute(BLEND_IF_ID, json!({"layer": a.0, "operation": "nope"})).is_err());
+}

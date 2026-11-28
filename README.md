@@ -174,6 +174,8 @@ Red/blue shift, softness and presets, on the CPU and the GPU.
   - **Show Other Colors:** on a mask, the Color panel can also show the other colour pair.
   - **Brushing a Solid Color layer** goes to its mask automatically, with no rasterize prompt.
     Optionally, the colours then snap to black or white.
+- **Select Blend If Pixels** (layer right-click menu, on layers with Blend If): selects the layer's
+  pixels as its Blend If leaves them.
 - **Move tool Pick From %:** how opaque a pixel must be to count for ⌘/Ctrl-click and Auto-Select.
 - **Canvas and view:**
   - **Zooming out centres the canvas** when it fits, and you can still pan afterwards.

@@ -24,6 +24,10 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 pub const ID: &str = "select.loadVisible";
+/// Select Blend If Pixels (user request, 2026-11-27): the layer's pixels as its Blend If leaves
+/// them, from the layer menu of a layer with Blend If. A ⌘-click on the thumbnail loads the
+/// pixels Blend If hides too.
+pub const BLEND_IF_ID: &str = "select.loadBlendIf";
 
 /// What a click measures: the layer itself or one of its masks alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,20 +56,34 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: ID.into(), msg: msg.into() }
 }
 
+/// What else the measuring renders keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    /// Load Visible Pixels: what is above covers the layer; what is below is left out.
+    Composite,
+    /// Select Blend If Pixels: the layer alone over what is below it (Blend If's Underlying Layer
+    /// reads it, and it cancels out between the two renders); nothing above covers it.
+    Alone,
+}
+
 /// `doc` with layer `id` painted `shade` (0 black, 1 white) as [`Source`] says, and the layers
 /// that must not cover it hidden. `None` when the layer is gone or lacks the mask.
-fn probe(doc: &Document, id: LayerId, source: Source, shade: f32) -> Option<Document> {
+fn probe(doc: &Document, id: LayerId, source: Source, shade: f32, scope: Scope) -> Option<Document> {
     let mut d = doc.clone();
     let path = d.path_of(id)?;
     // The clicked layer and its groups show; Lock Selection layers and adjustments elsewhere don't,
-    // nor does anything below it but its clipping base.
+    // nor does anything below it but its clipping base. Alone, everything below shows as it is and
+    // nothing above does (the layer's own children are not above it).
     let ancestors: Vec<LayerId> = (1..path.len()).filter_map(|n| d.layer_at(&path[..n]).map(|l| l.id)).collect();
     let base = clip_base(&d, &path);
     let hide: Vec<LayerId> = d
         .walk()
         .iter()
         .filter(|(_, _, l)| l.id != id && !ancestors.contains(&l.id) && Some(l.id) != base)
-        .filter(|(p, _, l)| *p < path || matches!(l.content, LayerContent::Adjustment(_)) || doc.effective_locks(l.id).selection)
+        .filter(|(p, _, l)| match scope {
+            Scope::Composite => *p < path || matches!(l.content, LayerContent::Adjustment(_)) || doc.effective_locks(l.id).selection,
+            Scope::Alone => *p > path && !p.starts_with(&path),
+        })
         .map(|(_, _, l)| l.id)
         .collect();
     for h in hide.into_iter().chain(ancestors.iter().copied()) {
@@ -151,15 +169,26 @@ fn full_change(doc: &Document) -> f32 {
     let id = l.id;
     d.layers = vec![l];
     let px = Rect::new(0, 0, 1, 1);
-    let at = |shade: f32| probe(&d, id, Source::Layer, shade).map_or(0.0, |p| tone(&p, px).first().copied().unwrap_or(0.0));
+    let at = |shade: f32| probe(&d, id, Source::Layer, shade, Scope::Composite).map_or(0.0, |p| tone(&p, px).first().copied().unwrap_or(0.0));
     let k = at(1.0) - at(0.0);
     if k.is_finite() && k > 1e-3 { k } else { 1.0 }
 }
 
 /// How much of `source` of layer `id` shows at each pixel of the canvas (row-major, 0..1).
 pub fn visible_plane(doc: &Document, id: LayerId, source: Source) -> Option<Vec<f32>> {
+    measure(doc, id, source, Scope::Composite)
+}
+
+/// How much of layer `id` its Blend If leaves at each pixel of the canvas (row-major, 0..1): its
+/// pixels and masks as Blend If lets them through, over what is below it, with nothing above
+/// covering it.
+pub fn blend_if_plane(doc: &Document, id: LayerId) -> Option<Vec<f32>> {
+    measure(doc, id, Source::Layer, Scope::Alone)
+}
+
+fn measure(doc: &Document, id: LayerId, source: Source, scope: Scope) -> Option<Vec<f32>> {
     let canvas = doc.bounds();
-    let (white, black) = (probe(doc, id, source, 1.0)?, probe(doc, id, source, 0.0)?);
+    let (white, black) = (probe(doc, id, source, 1.0, scope)?, probe(doc, id, source, 0.0, scope)?);
     // A layer shows only inside its own extent; a mask anywhere on the canvas.
     let area = match source {
         Source::Layer => white.layer(id).map_or(canvas, |l| photocraft_compose::layer_bounds(l, canvas)).intersect(&canvas),
@@ -217,13 +246,7 @@ pub fn layer_at(doc: &Document, x: i32, y: i32) -> Option<LayerId> {
 }
 
 fn load_visible(s: &mut Session, p: &Value) -> Result<Value> {
-    let mode = match p.get("operation").and_then(Value::as_str).unwrap_or("new") {
-        "new" | "replace" => SelectionMode::Replace,
-        "add" => SelectionMode::Add,
-        "subtract" => SelectionMode::Subtract,
-        "intersect" => SelectionMode::Intersect,
-        other => return Err(bad(format!("unknown operation `{other}`"))),
-    };
+    let mode = operation(p, ID)?;
     let source = match p.get("source") {
         None | Some(Value::Null) => Source::Layer,
         Some(v) => v
@@ -249,8 +272,44 @@ fn load_visible(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": id.0, "selected": selected }))
 }
 
+fn operation(p: &Value, cmd: &str) -> Result<SelectionMode> {
+    Ok(match p.get("operation").and_then(Value::as_str).unwrap_or("new") {
+        "new" | "replace" => SelectionMode::Replace,
+        "add" => SelectionMode::Add,
+        "subtract" => SelectionMode::Subtract,
+        "intersect" => SelectionMode::Intersect,
+        other => return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown operation `{other}`") }),
+    })
+}
+
+fn load_blend_if(s: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: String| EngineError::BadParams { cmd: BLEND_IF_ID.into(), msg };
+    let mode = operation(p, BLEND_IF_ID)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = &st.doc;
+    let id = match p.get("layer").and_then(Value::as_u64) {
+        Some(id) => LayerId(id),
+        None => st.active_layer.ok_or_else(|| bad("no layer selected".into()))?,
+    };
+    let plane = blend_if_plane(doc, id).ok_or_else(|| bad(format!("no layer {}", id.0)))?;
+    let selected = s.edit("Select Blend If Pixels", |doc, _| {
+        doc.selection = sel::combine(doc.selection.as_ref(), &plane, doc.bounds(), mode);
+        Ok(doc.selection.is_some())
+    })?;
+    Ok(json!({ "layer": id.0, "selected": selected }))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
+        id: BLEND_IF_ID,
+        label: "Select Blend If Pixels",
+        menu: &[],
+        shortcut: None,
+        params: r##"{"layer":id? (default: the active layer),"operation":"new|add|subtract|intersect"="new"} → {layer,selected} (selects the layer's pixels as its Blend If leaves them over what is below it: its masks count, layers above don't cover it)"##,
+        enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
+        run: load_blend_if,
+        journal: true,
+    }, CommandSpec {
         id: ID,
         label: "Load Visible Pixels",
         menu: &[],
